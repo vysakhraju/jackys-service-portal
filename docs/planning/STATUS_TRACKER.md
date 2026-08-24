@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-24
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 3 commits on `master`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 5 commits on `master`)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -70,6 +70,37 @@ Did a real build + runtime test (not just a read-through) in an isolated sandbox
 - `POST /appointments` → creates an appointment, capacity check correctly reads `schedule.monday.maxJobsPerDay`
 
 All fixes are committed to git (`c4feeb7`, `880092d`) and written into `src/` on your machine already — nothing more to do here except run it yourself once Postgres is up (see "Your turn to test" below).
+
+---
+
+## Automated tests (Phase 1) — added this session
+
+Backfilled unit tests for the three Phase 1 modules using mocked repositories (no live DB needed to run these). Verified passing both in an isolated sandbox and for real on your machine (`npm test -- --coverage`).
+
+```
+Test Suites: 6 passed, 6 total
+Tests:       115 passed, 115 total
+```
+
+| File tested | Stmt % | Branch % |
+|---|---|---|
+| `auth/auth.service.ts` | 100% | 100% |
+| `auth/strategies/jwt.strategy.ts` | 100% | 75% |
+| `auth/strategies/refresh.strategy.ts` | 100% | 85.7% |
+| `auth/guards/refresh-auth.guard.ts` | 100% | 100% |
+| `appointments/appointments.service.ts` | 98.95% | 89.6% |
+| `master-data/master-data.service.ts` | 89.5% | 75% |
+
+New spec files: `src/auth/auth.service.spec.ts`, `src/auth/strategies/jwt.strategy.spec.ts`, `src/auth/strategies/refresh.strategy.spec.ts`, `src/auth/guards/refresh-auth.guard.spec.ts`, `src/master-data/master-data.service.spec.ts`, `src/appointments/appointments.service.spec.ts`. Committed as `8c1bdc9`.
+
+Not yet covered: controllers, modules, DTOs, `AuditInterceptor`, `RolesGuard`/`JwtAuthGuard` — these are thin wiring/decorator layers, lower priority than the service-layer business logic. Worth adding light coverage (mainly guard/interceptor unit tests) before Phase 2 sign-off if you want the 90% target applied repo-wide rather than just to the tested services.
+
+Run them yourself anytime with:
+```powershell
+cd "D:\Jackys\jackys service portal"
+npm test                    # just run the suite
+npm run test:cov            # with a coverage report
+```
 
 ---
 
