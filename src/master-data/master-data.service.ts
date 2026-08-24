@@ -254,9 +254,18 @@ export class MasterDataService {
   }
 
   async findWarrantyBySerial(serialNumber: string, brand?: string): Promise<WarrantyMaster[]> {
+    // serialNumberRange is stored as a single "START-END" string (e.g. "SN100000-SN199999").
+    // The original query compared `:serial BETWEEN warranty.serialNumberRange AND
+    // warranty.serialNumberRange` - a range of one value against itself - which only ever
+    // matched a serial equal to the literal range string, so warranty lookups always came
+    // back empty for any real serial number. Split the range and compare lexicographically
+    // against both bounds instead (fine as long as serials in a range share a common format).
     const query = this.warrantyMasterRepository.createQueryBuilder('warranty')
       .where('warranty.isActive = :isActive', { isActive: true })
-      .andWhere(':serial BETWEEN warranty.serialNumberRange AND warranty.serialNumberRange', { serial: serialNumber });
+      .andWhere(
+        ':serial BETWEEN split_part(warranty."serialNumberRange", \'-\', 1) AND split_part(warranty."serialNumberRange", \'-\', 2)',
+        { serial: serialNumber },
+      );
 
     if (brand) {
       query.andWhere('warranty.brand = :brand', { brand });
