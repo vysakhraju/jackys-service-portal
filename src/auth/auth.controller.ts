@@ -12,6 +12,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RefreshAuthGuard } from './guards/refresh-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
@@ -64,7 +65,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Password changed' })
   @ApiResponse({ status: 401, description: 'Current password incorrect' })
   async changePassword(
-    @Body() body: { oldPassword: string; newPassword: string },
+    @Body() body: ChangePasswordDto,
     @Request() req: any,
   ) {
     await this.authService.changePassword(req.user.id, body.oldPassword, body.newPassword, req);

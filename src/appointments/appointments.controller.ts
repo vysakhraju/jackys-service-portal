@@ -16,6 +16,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam }
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
+import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
+import { AssignTechnicianDto } from './dto/assign-technician.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -177,7 +179,7 @@ export class AppointmentsController {
   @ApiResponse({ status: 400, description: 'Cannot cancel completed/cancelled appointment' })
   async cancel(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { reason: string },
+    @Body() body: CancelAppointmentDto,
     @CurrentUser() user: User,
     @Request() req: any,
   ) {
@@ -199,7 +201,7 @@ export class AppointmentsController {
   @ApiResponse({ status: 409, description: 'Technician not available' })
   async assignTechnician(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { technicianId: string },
+    @Body() body: AssignTechnicianDto,
     @CurrentUser() user: User,
     @Request() req: any,
   ) {

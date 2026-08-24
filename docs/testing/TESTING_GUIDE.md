@@ -67,6 +67,24 @@ Tokens expire after **15 minutes**. If you start getting `401 Unauthorized` afte
 Try one more thing to prove it worked:
 - **`GET /auth/profile`** → Try it out → Execute (no body needed). You should get your own admin user details back, `200`.
 
+### 1a. Change password (optional — careful)
+
+**`POST /auth/change-password`**
+```json
+{
+  "oldPassword": "Admin123!",
+  "newPassword": "NewPassword456!"
+}
+```
+**Don't run this on your admin account unless you actually want to change it** — every
+other section in this guide logs in with `admin@jackys.com` / `Admin123!`, so changing it
+here means updating that everywhere else too. If you just want to see it work, log in as
+the technician test account from Section 4 first and change *that* password instead —
+lower stakes, and you can always re-run `npm run seed:technician` to reset it.
+
+If you do change the admin password for real, remember the new one — there's no "forgot
+password" flow yet.
+
 ---
 
 ## 2. Roles (one-time setup)
@@ -178,6 +196,18 @@ Status moves from `SCHEDULED` to `TECHNICIAN_ASSIGNED`.
 - **`GET /appointments/{id}`** — see the full record.
 - **`GET /appointments/dashboard/stats`** — today's/this-week's counts by status.
 - **`GET /appointments/technician/{technicianId}/schedule?date=2026-08-25`** — this technician's day.
+
+### 5d. Cancel an appointment (optional — this ends it)
+
+**`PUT /appointments/{id}/cancel`**
+```json
+{ "reason": "Customer requested reschedule to next week" }
+```
+Only useful on an appointment you don't need anymore — cancelling is final for that
+appointment (status → `CANCELLED`), so create a throwaway one via 5a first if you just want
+to see this work rather than cancelling the one you'll use for Sections 6–8 below.
+Try it again on the same appointment afterward → expect **`400`** ("Cannot cancel
+completed/cancelled appointment").
 
 ---
 
