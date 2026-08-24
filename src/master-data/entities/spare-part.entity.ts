@@ -56,7 +56,9 @@ export class SparePart {
 
   @ManyToMany(() => SparePartModel, (model) => model.spareParts)
   @JoinTable({
-    name: 'spare_part_models',
+    // Must NOT be 'spare_part_models' — that name is already the SparePartModel entity's
+    // own table (@Entity('spare_part_models')); reusing it corrupted that table on sync.
+    name: 'spare_part_model_links',
     joinColumn: { name: 'sparePartId', referencedColumnName: 'id' },
     inverseJoinColumn: { name: 'modelId', referencedColumnName: 'id' },
   })

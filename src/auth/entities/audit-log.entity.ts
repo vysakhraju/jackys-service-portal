@@ -16,6 +16,7 @@ export enum AuditAction {
   DELETE = 'DELETE',
   LOGIN = 'LOGIN',
   LOGOUT = 'LOGOUT',
+  CANCEL = 'CANCEL',
   PASSWORD_CHANGE = 'PASSWORD_CHANGE',
   ROLE_CHANGE = 'ROLE_CHANGE',
   STATUS_CHANGE = 'STATUS_CHANGE',
@@ -42,14 +43,14 @@ export class AuditLog {
   @Column({ length: 100 })
   entityType: string;
 
-  @Column({ length: 100, nullable: true })
-  entityId: string;
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  entityId: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  oldValues: Record<string, any>;
+  oldValues: Record<string, any> | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  newValues: Record<string, any>;
+  newValues: Record<string, any> | null;
 
   @Column({ type: 'text', nullable: true })
   description: string;

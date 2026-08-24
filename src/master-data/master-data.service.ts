@@ -151,7 +151,7 @@ export class MasterDataService {
   async findSparePartById(id: string): Promise<SparePart> {
     const spare = await this.sparePartRepository.findOne({
       where: { id },
-      relations: ['models'],
+      relations: { models: true },
     });
     if (!spare) {
       throw new NotFoundException(`Spare part not found`);
@@ -190,7 +190,7 @@ export class MasterDataService {
   }
 
   async findAllSparePartModels(): Promise<SparePartModel[]> {
-    return this.sparePartModelRepository.find({ relations: ['spareParts'] });
+    return this.sparePartModelRepository.find({ relations: { spareParts: true } });
   }
 
   // Service Price List
@@ -265,7 +265,7 @@ export class MasterDataService {
     return query.getMany();
   }
 
-  async checkWarranty(serialNumber: string, brand: string): Promise<{
+  async checkWarranty(serialNumber: string, brand?: string): Promise<{
     isUnderWarranty: boolean;
     warrantyPeriodMonths: number;
     supplier: string;

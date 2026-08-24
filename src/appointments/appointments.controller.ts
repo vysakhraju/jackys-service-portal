@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   Query,
+  Request,
   UseGuards,
   UseInterceptors,
   ParseUUIDPipe,
@@ -47,7 +48,7 @@ export class AppointmentsController {
   async create(
     @Body() createAppointmentDto: CreateAppointmentDto,
     @CurrentUser() user: User,
-    @Query() req: any,
+    @Request() req: any,
   ) {
     return this.appointmentsService.create(createAppointmentDto, user.id, req);
   }
@@ -153,7 +154,7 @@ export class AppointmentsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateAppointmentDto: UpdateAppointmentDto,
     @CurrentUser() user: User,
-    @Query() req: any,
+    @Request() req: any,
   ) {
     return this.appointmentsService.update(id, updateAppointmentDto, user.id, req);
   }
@@ -174,7 +175,7 @@ export class AppointmentsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { reason: string },
     @CurrentUser() user: User,
-    @Query() req: any,
+    @Request() req: any,
   ) {
     return this.appointmentsService.cancel(id, body.reason, user.id, req);
   }
@@ -196,7 +197,7 @@ export class AppointmentsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { technicianId: string },
     @CurrentUser() user: User,
-    @Query() req: any,
+    @Request() req: any,
   ) {
     return this.appointmentsService.assignTechnician(id, body.technicianId, user.id, req);
   }
@@ -216,7 +217,7 @@ export class AppointmentsController {
   async confirm(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: User,
-    @Query() req: any,
+    @Request() req: any,
   ) {
     return this.appointmentsService.confirmAppointment(id, user.id, req);
   }
@@ -236,7 +237,7 @@ export class AppointmentsController {
   async markOnSite(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: User,
-    @Query() req: any,
+    @Request() req: any,
   ) {
     return this.appointmentsService.markOnSite(id, user.id, req);
   }
@@ -256,7 +257,7 @@ export class AppointmentsController {
   async complete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: User,
-    @Query() req: any,
+    @Request() req: any,
   ) {
     return this.appointmentsService.completeAppointment(id, user.id, req);
   }

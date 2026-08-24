@@ -14,7 +14,7 @@ export enum RecoveryCategory {
 }
 
 @Entity('component_yield_matrix')
-@Index(['modelId', 'bomItemCode'])
+@Index(['modelId', 'originalBomItemCode'])
 export class ComponentYieldMatrix {
   @PrimaryGeneratedColumn('uuid')
   id: string;

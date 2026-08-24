@@ -39,7 +39,7 @@ import { AppointmentsModule } from './appointments/appointments.module';
     }),
     AuthModule,
     MasterDataModule,
-    // AppointmentsModule,
+    AppointmentsModule,
     // TechnicianModule,
     // JobCardsModule,
     // EstimatesModule,

@@ -13,8 +13,11 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RefreshAuthGuard } from './guards/refresh-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
+import { CurrentUser } from './decorators/current-user.decorator';
+import { User } from './entities/user.entity';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -31,12 +34,15 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @UseGuards(RefreshAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })
   @ApiResponse({ status: 200, description: 'Tokens refreshed' })
   @ApiResponse({ status: 401, description: 'Invalid refresh token' })
-  async refresh(@Body() refreshTokenDto: RefreshTokenDto, @Request() req: any) {
-    return this.authService.refreshTokens(refreshTokenDto, req);
+  async refresh(@Body() _refreshTokenDto: RefreshTokenDto, @CurrentUser() user: User, @Request() req: any) {
+    // RefreshAuthGuard (RefreshStrategy) already validated the token against the stored
+    // bcrypt hash and resolved the User; _refreshTokenDto is kept for request validation/Swagger only.
+    return this.authService.refreshTokens(user, req);
   }
 
   @Post('logout')

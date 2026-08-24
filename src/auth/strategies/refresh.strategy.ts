@@ -26,7 +26,7 @@ export class RefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh') {
       jwtFromRequest: ExtractJwt.fromBodyField('refreshToken'),
       ignoreExpiration: false,
       secretOrKey: configService.get('JWT_REFRESH_SECRET') || 'your-super-secret-refresh-key-change-in-production',
-      algorithms: ['RS256'],
+      algorithms: ['HS256'],
       passReqToCallback: true,
     });
   }

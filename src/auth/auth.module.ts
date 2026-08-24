@@ -23,7 +23,10 @@ import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
         secret: configService.get('JWT_SECRET') || 'your-super-secret-jwt-key-change-in-production',
         signOptions: {
           expiresIn: configService.get('JWT_ACCESS_EXPIRES_IN') || '15m',
-          algorithm: 'RS256',
+          // HS256 matches the plain-string secrets in .env (JWT_SECRET/JWT_REFRESH_SECRET).
+          // Upgrading to RS256 requires generating and configuring an RSA key pair — tracked
+          // as a production-hardening follow-up, not needed for MVP correctness.
+          algorithm: 'HS256',
         },
       }),
       inject: [ConfigService],

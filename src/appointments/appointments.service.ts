@@ -188,7 +188,7 @@ export class AppointmentsService {
   async findById(id: string): Promise<Appointment> {
     const appointment = await this.appointmentRepository.findOne({
       where: { id },
-      relations: ['serviceCentre', 'technician', 'createdBy', 'jobCards'],
+      relations: { serviceCentre: true, technician: true, createdBy: true },
     });
     if (!appointment) {
       throw new NotFoundException(`Appointment ${id} not found`);
@@ -199,7 +199,7 @@ export class AppointmentsService {
   async findByAppointmentNumber(appointmentNumber: string): Promise<Appointment> {
     const appointment = await this.appointmentRepository.findOne({
       where: { appointmentNumber },
-      relations: ['serviceCentre', 'technician', 'createdBy', 'jobCards'],
+      relations: { serviceCentre: true, technician: true, createdBy: true },
     });
     if (!appointment) {
       throw new NotFoundException(`Appointment ${appointmentNumber} not found`);
@@ -359,8 +359,13 @@ export class AppointmentsService {
       .andWhere('apt.scheduledAt BETWEEN :start AND :end', { start, end })
       .getCount();
 
-    const maxCapacity = serviceCentre.dailyCapacity || 10; // default 10 per day
-    const available = currentBookings < maxCapacity;
+    // Capacity is defined per weekday in ServiceCentre.schedule (jsonb); fall back to 10/day if unset.
+    const dayKey = new Date(scheduledAt)
+      .toLocaleDateString('en-US', { weekday: 'long' })
+      .toLowerCase();
+    const daySchedule = serviceCentre.schedule?.[dayKey];
+    const maxCapacity = daySchedule?.maxJobsPerDay ?? 10;
+    const available = daySchedule?.isOpen === false ? false : currentBookings < maxCapacity;
 
     return {
       available,
@@ -404,7 +409,7 @@ export class AppointmentsService {
         scheduledAt: Between(start, end),
         status: In([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED, AppointmentStatus.ON_SITE]),
       },
-      relations: ['serviceCentre'],
+      relations: { serviceCentre: true },
       order: { scheduledAt: 'ASC' },
     });
   }
@@ -421,7 +426,7 @@ export class AppointmentsService {
         scheduledAt: Between(start, end),
         status: In([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED, AppointmentStatus.ON_SITE]),
       },
-      relations: ['technician'],
+      relations: { technician: true },
       order: { scheduledAt: 'ASC' },
     });
   }

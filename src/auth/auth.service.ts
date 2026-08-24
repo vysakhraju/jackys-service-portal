@@ -16,7 +16,6 @@ import { Role } from './entities/role.entity';
 import { AuditLog } from './entities/audit-log.entity';
 import { AuditAction } from './entities/audit-log.entity';
 import { LoginDto } from './dto/login.dto';
-import { RefreshTokenDto } from './dto/refresh-token.dto';
 
 export interface TokenPair {
   accessToken: string;
@@ -93,16 +92,12 @@ export class AuthService {
     };
   }
 
-  async refreshTokens(refreshTokenDto: RefreshTokenDto, req: any): Promise<TokenPair> {
-    const user = await this.userRepository.findOne({
-      where: { refreshTokenHash: refreshTokenDto.refreshToken },
-      relations: { role: true },
-    });
-
-    if (!user) {
-      throw new UnauthorizedException('Invalid refresh token');
-    }
-
+  /**
+   * `user` here is the User already resolved and validated by RefreshAuthGuard/RefreshStrategy,
+   * which compares the presented refresh token against the stored bcrypt hash. We do not
+   * re-look-up by hash here since refreshTokenHash is a salted bcrypt digest, not a lookup key.
+   */
+  async refreshTokens(user: User, req: any): Promise<TokenPair> {
     const tokens = await this.generateTokens(user);
     await this.updateRefreshToken(user.id, tokens.refreshToken);
 
@@ -230,14 +225,15 @@ export class AuthService {
 
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: this.configService.get('JWT_ACCESS_EXPIRES_IN') || '15m',
-      algorithm: 'RS256',
+      algorithm: 'HS256',
     });
 
     const refreshToken = this.jwtService.sign(
       { ...payload, type: 'refresh' },
       {
+        secret: this.configService.get('JWT_REFRESH_SECRET') || 'your-super-secret-refresh-key-change-in-production',
         expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN') || '7d',
-        algorithm: 'RS256',
+        algorithm: 'HS256',
       },
     );
 

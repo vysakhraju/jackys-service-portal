@@ -11,6 +11,7 @@ import { TechnicianKpiRule } from './entities/technician-kpi-rule.entity';
 import { NotificationTemplate } from './entities/notification-template.entity';
 import { WarrantyMaster } from './entities/warranty-master.entity';
 import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
@@ -25,6 +26,9 @@ import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
       WarrantyMaster,
       ComponentYieldMatrix,
     ]),
+    // Needed because MasterDataController's @UseInterceptors(AuditInterceptor) resolves
+    // AuditInterceptor -> AuthService, which AuthModule provides/exports.
+    AuthModule,
   ],
   controllers: [MasterDataController],
   providers: [MasterDataService],
