@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-24
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 5 commits on `master`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 8 commits on `master`)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -14,7 +14,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 |---|-------|--------|
 | 0 | Dev environment setup | ✅ Done — Postgres installed, DB created, app running on your machine |
 | 1 | Verify & test Auth + Master Data (already coded) | ✅ Done — 9 real bugs found & fixed, confirmed working on your machine |
-| 2 | Appointments + Technician Mobile API | 🟡 Appointments done (was coded but not wired in — fixed); Technician Mobile API not started |
+| 2 | Appointments + Technician Mobile API | ✅ Done — Appointments (fixed & wired in) + Technician Mobile API (new, this session) |
 | 3 | Job Cards + Warranty Check | ⬜ Not started |
 | 4 | Estimates + Notifications | ⬜ Not started |
 | 5 | Workshop + Inventory (Reserve) | ⬜ Not started |
@@ -78,8 +78,8 @@ All fixes are committed to git (`c4feeb7`, `880092d`) and written into `src/` on
 Backfilled unit tests for the three Phase 1 modules using mocked repositories (no live DB needed to run these). Verified passing both in an isolated sandbox and for real on your machine (`npm test -- --coverage`).
 
 ```
-Test Suites: 6 passed, 6 total
-Tests:       115 passed, 115 total
+Test Suites: 7 passed, 7 total
+Tests:       137 passed, 137 total
 ```
 
 | File tested | Stmt % | Branch % |
@@ -90,8 +90,9 @@ Tests:       115 passed, 115 total
 | `auth/guards/refresh-auth.guard.ts` | 100% | 100% |
 | `appointments/appointments.service.ts` | 98.95% | 89.6% |
 | `master-data/master-data.service.ts` | 89.5% | 75% |
+| `technician/technician.service.ts` | 100% | 93.75% |
 
-New spec files: `src/auth/auth.service.spec.ts`, `src/auth/strategies/jwt.strategy.spec.ts`, `src/auth/strategies/refresh.strategy.spec.ts`, `src/auth/guards/refresh-auth.guard.spec.ts`, `src/master-data/master-data.service.spec.ts`, `src/appointments/appointments.service.spec.ts`. Committed as `8c1bdc9`.
+New spec files: `src/auth/auth.service.spec.ts`, `src/auth/strategies/jwt.strategy.spec.ts`, `src/auth/strategies/refresh.strategy.spec.ts`, `src/auth/guards/refresh-auth.guard.spec.ts`, `src/master-data/master-data.service.spec.ts`, `src/appointments/appointments.service.spec.ts` (committed as `8c1bdc9`), `src/technician/technician.service.spec.ts` (committed as `705e914`, alongside the Technician Mobile API itself).
 
 Not yet covered: controllers, modules, DTOs, `AuditInterceptor`, `RolesGuard`/`JwtAuthGuard` — these are thin wiring/decorator layers, lower priority than the service-layer business logic. Worth adding light coverage (mainly guard/interceptor unit tests) before Phase 2 sign-off if you want the 90% target applied repo-wide rather than just to the tested services.
 
@@ -104,10 +105,24 @@ npm run test:cov            # with a coverage report
 
 ---
 
-## Phase 2: Appointments + Technician Mobile API
+## Phase 2: Appointments + Technician Mobile API — done this session
 
-- **Appointments**: fully implemented — create (with capacity + technician-availability checks), list/filter, dashboard stats, service-centre & technician schedules, assign technician, confirm, mark on-site, complete, cancel. Now correctly wired into the app (see bug #2 above).
-- **Technician Mobile API** (GPS capture on visit start, S/N capture, warranty check, fault/symptom codes): **not started**. This is the next real coding work.
+- **Appointments**: fully implemented — create (with capacity + technician-availability checks), list/filter, dashboard stats, service-centre & technician schedules, assign technician, confirm, mark on-site, complete, cancel. Correctly wired into the app (see Phase 1 bug #2).
+
+- **Technician Mobile API** (new): a `technician` module implementing the three technician-facing requirements from the plan (FR-02/03/04). One `TechnicianVisit` row per appointment, created/updated as the technician progresses:
+  - `POST /technician/visits/:appointmentId/start` — captures GPS lat/lng + timestamp (FR-02). Transitions the appointment `CONFIRMED`/`TECHNICIAN_ASSIGNED` → `ON_SITE` via the existing `AppointmentsService.markOnSite`, so that status rule lives in one place. Calling it again while already `ON_SITE` (e.g. the technician reopened the app) just refreshes the GPS capture without re-transitioning.
+  - `POST /technician/visits/:appointmentId/serial-number` — captures the Serial Number and checks it against Warranty Master, returning an `IW`/`OOW` badge (FR-03).
+  - `POST /technician/visits/:appointmentId/fault-symptom` — records Fault Code + Symptom Code, but only once a Serial Number has been captured and validated (FR-04); both codes are checked against master data.
+  - `GET /technician/visits/:appointmentId` — fetch the visit record.
+  - `GET /technician/schedule` — the calling technician's own day schedule (defaults to today).
+  - **Ownership rule**: a `TECHNICIAN_FIELD` caller can only act on appointments assigned to them (403 otherwise); `SUPER_ADMIN`/`SERVICE_HEAD`/`TECHNICAL_TEAM_LEADER` can act on any appointment, matching the role set already used on the Appointments on-site/complete endpoints.
+  - Job Cards (Phase 3) will read this table to decide IW/OOW routing and to enforce FR-05 (block Job Card creation when no S/N was ever captured).
+
+- **Bug found and fixed while testing this feature**: `MasterDataService.findWarrantyBySerial()`'s range check compared `:serial BETWEEN warranty.serialNumberRange AND warranty.serialNumberRange` — a range of one value against itself, which only ever matched a serial equal to the literal stored range string (e.g. `"SN100000-SN199999"`), so a warranty lookup for a *real* serial number like `SN150000` always came back empty/Unknown. Fixed to split the stored `"START-END"` string and compare the serial lexicographically against both bounds. Found and confirmed via a live end-to-end test against a real Postgres instance (an appliance seeded with a warranty range, then checked with a serial inside vs. outside it) — this directly blocked the Technician Mobile API's core promise (FR-03), so it wasn't safe to leave for later.
+
+- **Verified end-to-end** (real local Postgres, not just unit tests): assigned a technician to an appointment → started a visit (GPS captured, status → `ON_SITE`) → captured a serial number inside a seeded warranty range (`IW` badge returned correctly) → recorded a valid fault/symptom pair. Also verified the negative paths: a technician acting on someone else's appointment → 403; fault/symptom before a serial number → 400; an unknown fault code → 404; fetching a visit that was never started → 404.
+
+- Committed as `705e914`.
 
 ---
 
@@ -138,6 +153,16 @@ $resp = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/auth/login" -Method
 $resp.accessToken   # your JWT
 Invoke-RestMethod -Uri "http://localhost:3000/api/v1/auth/profile" -Headers @{ Authorization = "Bearer $($resp.accessToken)" }
 ```
+
+To try the new Technician Mobile API, you'll need: a `TECHNICIAN_FIELD` user (there's no public registration endpoint yet — easiest is a direct SQL insert like `seed-admin.ts` does, or reuse a technician you already created for testing Appointments), an appointment with that technician assigned (`PUT /appointments/:id/assign-technician`), a fault/symptom pair and a warranty-master range in Master Data, then as that technician:
+```
+POST /technician/visits/:appointmentId/start            { "gpsLat": 25.2048, "gpsLng": 55.2708 }
+POST /technician/visits/:appointmentId/serial-number     { "serialNumber": "...", "brand": "..." }
+POST /technician/visits/:appointmentId/fault-symptom     { "faultCode": "...", "symptomCode": "..." }
+GET  /technician/visits/:appointmentId
+GET  /technician/schedule
+```
+All five show up in Swagger under the `technician` tag too.
 
 ---
 
