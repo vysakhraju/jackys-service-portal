@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-24
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 9 commits on `master`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master` — see `git log` for the exact count)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -15,7 +15,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 0 | Dev environment setup | ✅ Done — Postgres installed, DB created, app running on your machine |
 | 1 | Verify & test Auth + Master Data (already coded) | ✅ Done — 9 real bugs found & fixed, confirmed working on your machine |
 | 2 | Appointments + Technician Mobile API | ✅ Done — Appointments (fixed & wired in) + Technician Mobile API (new, this session) |
-| 3 | Job Cards + Warranty Check | ⬜ Not started |
+| 3 | Job Cards + Warranty Check | ✅ Done — S/N validation, section assignment, warranty override with TL approval + audit trail (new, this session) |
 | 4 | Estimates + Notifications | ⬜ Not started |
 | 5 | Workshop + Inventory (Reserve) | ⬜ Not started |
 | 6 | QC + Inventory auto-deduct | ⬜ Not started |
@@ -126,15 +126,56 @@ npm run test:cov            # with a coverage report
 
 ---
 
+## Phase 3: Job Cards + Warranty Check — done this session
+
+A `job-cards` module implementing FR-05 (block Job Card creation without S/N verification), FR-06 (OOW customer approval before work starts — stopgap, see below), and FR-17/AC-18 (Warranty Override with TL approval + audit trail).
+
+**Design (four gates, in order):**
+1. **`POST /job-cards`** `{ appointmentId }` — creation is blocked (`400`) unless the appointment already has an `invoiceNumber` on file **and** the technician's field visit (Phase 2) has a captured serial number, warranty check, and fault/symptom codes. This is the "no Job Card without invoice verification" rule (FR-05, AC-05). Blocked with `409` if a Job Card already exists for the appointment. On success, the visit's data (S/N, brand, fault/symptom, warranty status) is **snapshotted** onto the Job Card — deliberately not re-read live afterwards, so a later change to the visit can't silently drift what the Job Card recorded.
+2. **`POST /job-cards/:id/validate-sn`** `{ matches, notes? }` — a human (CCE) step confirming the captured S/N actually matches the physical invoice. Only allowed while the Job Card is still `OPEN`, so it can't be quietly redone after work has started to paper over a mismatch. A match advances status to `SN_VALIDATED`; a non-match records the flag/notes but leaves the Job Card blocked from proceeding.
+3. **`POST /job-cards/:id/assign-section`** `{ section: ON_SITE_REPAIR | WORKSHOP }` — the point work actually starts, so it's the real enforcement point: requires `SN_VALIDATED` status, and for an out-of-warranty (OOW) job, also requires customer approval (gate 4) to already be in place.
+4. **`POST /job-cards/:id/approve-customer`** `{ notes? }` — a **temporary manual stand-in** for FR-06 (the real "customer approves via a shareable link" flow is the Estimates phase, not built yet). Restricted to the same office-side roles as the rest of the module; a real auditor would want this replaced with the actual link-based approval before go-live — tracked as a known gap, not hidden.
+5. **`POST /job-cards/:id/warranty-override`** `{ newStatus, reason }` — corrects the warranty badge. Restricted to **Technical Team Leader / Service Head / Super Admin only** (not the general Job Card roles). Requires a `reason` (min 5 chars), writes a `WARRANTY_OVERRIDE` audit log row (who, when, old→new, reason), and tracks `overrideCount` since it can be called more than once. If an override flips an already section-assigned job to OOW, any existing customer approval is automatically reset — an approval obtained under the old (e.g. IW) terms can't silently cover the new (OOW) ones.
+
+Other endpoints: `GET /job-cards/:id`, `GET /job-cards/by-appointment/:appointmentId`.
+
+**Bug found and fixed while building this (TypeORM footgun, not specific to Job Cards):** when an entity is loaded with an eager `@ManyToOne` relation populated (e.g. `warrantyOverrideByUser`) and you then set the raw FK column directly (`warrantyOverrideBy = userId`) without also updating the relation object, `repository.save()` writes the correct value to the database — but the in-memory object it *returns* gets that FK column reset back to match the stale relation, so the API response looked wrong (`warrantyOverrideBy: null`) even though the database was correct. Fixed by adding a lean `findEntityById()` (no relations) for the service's internal mutation methods, keeping the relation-loaded `findById()` only for the read-only `GET` endpoints. Worth remembering if a similar "DB is right, but the response looks wrong" symptom shows up in a later phase.
+
+**Bigger bug found and fixed while verifying this (pre-existing, affects Phase 1 & 2 too, not something new in Job Cards):** `AuditInterceptor` used `context.getArgs()` to get the controller method's arguments for `getEntityId`/`getOldValues` — but for an HTTP request, `ExecutionContext.getArgs()` actually returns the raw `[request, response, next]` platform handler args, **not** the `@Param`/`@Body`-resolved values the method was written against. Every `@Audit({ getEntityId: (args) => args[0] })` across the whole codebase (`master-data.controller.ts`, `technician.controller.ts`, `appointments.controller.ts`, and now `job-cards.controller.ts`) was silently reading the wrong thing:
+- Where the lambda did `args[0]?.someProp`, it always evaluated to `undefined` (Request has no such property) — harmless-looking but meant `entityId`/`oldValues` were **always blank** on every audit row ever written via this pattern (confirmed: `ServiceCentre`/`FaultSymptom`/`SparePart` audit rows in the database all have blank `entityId`).
+- Where the lambda did `args[0]` directly (assigning the *entire* Request object as the value), saving it threw `TypeError: Converting circular structure to JSON` inside `AuthService.logAudit`'s own try/catch — which silently swallowed the error, so **the audit row was never written at all**. This affected every `TechnicianVisit` audit call (Phase 2 — confirmed zero rows in `audit_logs` for `TechnicianVisit`, ever) and would have affected every `JobCard` mutation endpoint (`validate-sn`, `assign-section`, `approve-customer`, `warranty-override`) had it not been caught here. This one mattered enough to fix now rather than defer: FR-17 explicitly requires a Warranty Override audit trail, and it was silently not being written.
+
+  Fixed at the root: `AuditInterceptor` now builds `{ params, body, query, user }` from the real Express request instead of `context.getArgs()`, and every `@Audit` call site across all four controllers was updated to use named access (`args.params.id`, `args.body.code`, etc.) instead of the broken positional indexing. Verified live: Job Card creation, S/N validation, section assignment, and warranty override (twice, including the OOW-reset case) all now produce correct `audit_logs` rows with real `entityId`/`newValues`/`userId`. Re-ran the full existing test suite afterwards (161/161 passing) to confirm nothing else broke.
+
+  **Minor follow-up, not blocking:** `AppointmentsController` has the `@Audit` decorator on its endpoints *in addition to* `AppointmentsService` already calling `logAudit()` directly for the same actions — now that the interceptor actually works, Appointment mutations will produce two audit rows instead of one (redundant, not incorrect). Worth removing the redundant `@Audit`/`@UseInterceptors` from `AppointmentsController` in a later cleanup pass.
+
+**Verified end-to-end** (real local Postgres, live HTTP, not just unit tests): built two full scenarios —
+- An in-warranty (IW) job card: created → S/N validated → section assigned (no approval needed) → warranty overridden to OOW after the fact (audit trail confirmed, `overrideCount` incremented, `warrantyOverrideBy` correctly resolved).
+- An out-of-warranty (OOW) job card: created → S/N mismatch flagged then corrected (still `OPEN`, re-validatable) → section assignment blocked without approval → customer approved → section assignment succeeded → overridden back to IW, then to OOW again (no-op guard on a same-status override confirmed with `400`).
+
+Also verified the negative paths: no invoice number → `400`; incomplete field visit → `400`; duplicate Job Card → `409`; wrong role on every office-side and TL-only endpoint → `403`; re-validating S/N once past `OPEN` → `400`; override reason too short → `400`; override to the same status → `400`.
+
+**Automated tests**: `src/job-cards/job-cards.service.spec.ts`, 24 tests, 100% statements/functions/lines, 95.65% branches on `job-cards.service.ts`.
+
+```
+Test Suites: 8 passed, 8 total
+Tests:       161 passed, 161 total
+```
+
+---
+
 ## Known issue to fix later (not blocking)
 
-`User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
+- `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
+- `AppointmentsController` double-logs audit rows for its mutation endpoints (see Phase 3 above) — remove the redundant `@Audit`/`@UseInterceptors(AuditInterceptor)` decorators there since `AppointmentsService` already logs directly.
+- FR-06's customer approval is a manual `approve-customer` flag for now, not the real shareable-link/Estimate approval flow — replace when the Estimates phase (Phase 4) is built.
+- Once a Job Card exists for an appointment, the field visit's captured S/N/fault/symptom can technically still be re-captured on the `TechnicianVisit` record without the Job Card's snapshot updating to match (by design, to keep the Job Card's record immutable) — but there's no guard actively *preventing* the recapture, so it's a documentation-only safeguard right now, not an enforced one. Low risk in practice (recapture isn't a normal flow) but worth a proper lock if it comes up.
 
 ---
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. It covers starting the server, logging in, setting up master data, creating and assigning appointments, and running the full Technician Mobile API flow (start visit → capture serial number → capture fault/symptom), plus a troubleshooting table. Every step in it was verified against a live server before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. It covers starting the server, logging in, setting up master data, creating and assigning appointments, running the full Technician Mobile API flow (start visit → capture serial number → capture fault/symptom), and now the full Job Cards flow (create → validate S/N → assign section → warranty override, including the OOW customer-approval stopgap), plus a troubleshooting table. Every step in it was verified against a live server before being written down, so it should just work if you follow it in order.
 
 Also new this session: `npm run seed:technician` creates a test `TECHNICIAN_FIELD` login (same pattern as `npm run seed:admin`) so you can try the Technician Mobile API as "the technician" without touching SQL.
 
@@ -171,6 +212,18 @@ GET  /technician/visits/:appointmentId
 GET  /technician/schedule
 ```
 All five show up in Swagger under the `technician` tag too.
+
+To try Job Cards, you need a Technician Mobile API flow completed above (S/N + fault/symptom captured) on an appointment that also has an `invoiceNumber` set, then back as **admin/CCE**:
+```
+POST /job-cards                          { "appointmentId": "..." }
+POST /job-cards/:id/validate-sn          { "matches": true }
+POST /job-cards/:id/assign-section       { "section": "ON_SITE_REPAIR" }
+POST /job-cards/:id/approve-customer     { "notes": "..." }               (OOW jobs only, before assign-section)
+POST /job-cards/:id/warranty-override    { "newStatus": "OOW", "reason": "..." }   (Technical Team Leader+ only)
+GET  /job-cards/:id
+GET  /job-cards/by-appointment/:appointmentId
+```
+All seven show up in Swagger under the `job-cards` tag.
 
 ---
 

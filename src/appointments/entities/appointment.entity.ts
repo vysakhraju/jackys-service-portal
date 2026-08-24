@@ -5,13 +5,13 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  OneToOne,
   JoinColumn,
   Index,
 } from 'typeorm';
 import { ServiceCentre } from '../../master-data/entities/service-centre.entity';
 import { User } from '../../auth/entities/user.entity';
-// TODO(Phase 3 - Job Cards module): re-add JobCard relation once src/job-cards/entities/job-card.entity.ts exists.
-// import { JobCard } from '../../job-cards/entities/job-card.entity';
+import { JobCard } from '../../job-cards/entities/job-card.entity';
 
 export enum AppointmentStatus {
   SCHEDULED = 'SCHEDULED',
@@ -142,9 +142,8 @@ export class Appointment {
   @Column({ nullable: true })
   createdById: string;
 
-  // TODO(Phase 3 - Job Cards module): re-add once JobCard entity exists.
-  // @OneToMany(() => JobCard, (jobCard) => jobCard.appointment)
-  // jobCards: JobCard[];
+  @OneToOne(() => JobCard, (jobCard) => jobCard.appointment)
+  jobCard: JobCard;
 
   @CreateDateColumn()
   createdAt: Date;

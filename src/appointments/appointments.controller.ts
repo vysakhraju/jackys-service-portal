@@ -40,7 +40,11 @@ export class AppointmentsController {
   @Audit({
     action: AuditAction.CREATE,
     entityType: 'Appointment',
-    getEntityId: (args) => args[0]?.appointmentNumber,
+    // appointmentNumber is server-generated, not part of the request body - this interceptor
+    // pass is redundant with AppointmentsService's own direct logAudit() call anyway (which
+    // has the real created row and logs the correct id); left as-is to keep this fix
+    // minimal, tracked as a cleanup item in STATUS_TRACKER.
+    getEntityId: (args) => args.body?.appointmentNumber,
   })
   @ApiOperation({ summary: 'Create new appointment' })
   @ApiResponse({ status: 201, type: Appointment })
@@ -143,7 +147,7 @@ export class AppointmentsController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'Appointment',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.id,
   })
   @ApiOperation({ summary: 'Update appointment' })
   @ApiParam({ name: 'id', type: String })
@@ -165,7 +169,7 @@ export class AppointmentsController {
   @Audit({
     action: AuditAction.CANCEL,
     entityType: 'Appointment',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.id,
   })
   @ApiOperation({ summary: 'Cancel appointment' })
   @ApiParam({ name: 'id', type: String })
@@ -186,7 +190,7 @@ export class AppointmentsController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'Appointment',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.id,
   })
   @ApiOperation({ summary: 'Assign technician to appointment' })
   @ApiParam({ name: 'id', type: String })
@@ -208,7 +212,7 @@ export class AppointmentsController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'Appointment',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.id,
   })
   @ApiOperation({ summary: 'Confirm appointment' })
   @ApiParam({ name: 'id', type: String })
@@ -228,7 +232,7 @@ export class AppointmentsController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'Appointment',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.id,
   })
   @ApiOperation({ summary: 'Mark appointment as on-site (technician arrived)' })
   @ApiParam({ name: 'id', type: String })
@@ -248,7 +252,7 @@ export class AppointmentsController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'Appointment',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.id,
   })
   @ApiOperation({ summary: 'Complete appointment (on-site work done)' })
   @ApiParam({ name: 'id', type: String })

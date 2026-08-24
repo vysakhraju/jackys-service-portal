@@ -47,7 +47,7 @@ export class MasterDataController {
   @Audit({
     action: AuditAction.CREATE,
     entityType: 'ServiceCentre',
-    getEntityId: (args) => args[0]?.code,
+    getEntityId: (args) => args.body?.code,
   })
   @ApiOperation({ summary: 'Create service centre' })
   @ApiResponse({ status: 201, type: ServiceCentre })
@@ -76,7 +76,7 @@ export class MasterDataController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'ServiceCentre',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.id,
   })
   @ApiOperation({ summary: 'Update service centre' })
   @ApiResponse({ status: 200, type: ServiceCentre })
@@ -98,7 +98,7 @@ export class MasterDataController {
   @Audit({
     action: AuditAction.CREATE,
     entityType: 'FaultSymptom',
-    getEntityId: (args) => args[0]?.faultCode,
+    getEntityId: (args) => args.body?.faultCode,
   })
   @ApiOperation({ summary: 'Create fault/symptom' })
   @ApiResponse({ status: 201, type: FaultSymptom })
@@ -135,7 +135,7 @@ export class MasterDataController {
   @Audit({
     action: AuditAction.CREATE,
     entityType: 'SparePart',
-    getEntityId: (args) => args[0]?.code,
+    getEntityId: (args) => args.body?.code,
   })
   @ApiOperation({ summary: 'Create spare part' })
   @ApiResponse({ status: 201, type: SparePart })

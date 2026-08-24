@@ -5,7 +5,7 @@ import { AuthModule } from './auth/auth.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { TechnicianModule } from './technician/technician.module';
-// import { JobCardsModule } from './job-cards/job-cards.module';
+import { JobCardsModule } from './job-cards/job-cards.module';
 // import { EstimatesModule } from './estimates/estimates.module';
 // import { WorkshopModule } from './workshop/workshop.module';
 // import { InventoryModule } from './inventory/inventory.module';
@@ -41,7 +41,7 @@ import { TechnicianModule } from './technician/technician.module';
     MasterDataModule,
     AppointmentsModule,
     TechnicianModule,
-    // JobCardsModule,
+    JobCardsModule,
     // EstimatesModule,
     // WorkshopModule,
     // InventoryModule,

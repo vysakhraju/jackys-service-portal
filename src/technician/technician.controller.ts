@@ -32,7 +32,7 @@ export class TechnicianController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'TechnicianVisit',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.appointmentId,
   })
   @ApiOperation({ summary: 'Start an on-site visit: captures GPS + timestamp (FR-02)' })
   @ApiParam({ name: 'appointmentId', type: String })
@@ -54,7 +54,7 @@ export class TechnicianController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'TechnicianVisit',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.appointmentId,
   })
   @ApiOperation({ summary: 'Capture Serial Number and check warranty: returns IW/OOW badge (FR-03)' })
   @ApiParam({ name: 'appointmentId', type: String })
@@ -75,7 +75,7 @@ export class TechnicianController {
   @Audit({
     action: AuditAction.UPDATE,
     entityType: 'TechnicianVisit',
-    getEntityId: (args) => args[0],
+    getEntityId: (args) => args.params?.appointmentId,
   })
   @ApiOperation({ summary: 'Record Fault Code + Symptom Code, gated on a captured S/N (FR-04)' })
   @ApiParam({ name: 'appointmentId', type: String })

@@ -159,10 +159,13 @@ Still logged in as admin from Section 1.
   "scheduledAt": "2026-08-25T10:00:00Z",
   "serviceCentreId": "PASTE_YOUR_SERVICE_CENTRE_ID_HERE",
   "brand": "Samsung",
-  "modelNumber": "WA80J5710"
+  "modelNumber": "WA80J5710",
+  "invoiceNumber": "INV-1001"
 }
 ```
 Use a `scheduledAt` date that's today or in the near future (any day except the one you set `isOpen: false` for — Sunday, above). Copy the appointment's `id` from the response.
+
+`invoiceNumber` is optional on most appointments, but Section 8 (Job Cards) below won't let you create a Job Card without one — the invoice number on file is how the system knows there's something to verify the serial number against (FR-05). Include it now if you plan to try Section 8.
 
 ### 5b. Assign the technician
 **`PUT /appointments/{id}/assign-technician`** — `id` = the appointment id, body:
@@ -225,6 +228,94 @@ These are meant to fail — that's the correct behavior:
 
 ---
 
+## 8. Job Cards — S/N validation, section assignment, warranty override
+
+Built this session (Phase 3). A Job Card is the office-side record that turns a completed
+field visit into actual work: it exists to enforce two things before anyone touches the
+appliance — the serial number really was checked against the invoice, and if the job is
+out-of-warranty, the customer has agreed to pay before work starts. Switch back to being
+logged in as **admin** (Section 1) — a Job Card is created and managed office-side, not by
+the technician.
+
+You'll need an appointment where you've already completed Section 5 (with `invoiceNumber`
+set — see the note at the end of 5a) and all of Section 6 (visit started, S/N captured,
+fault/symptom captured). If any of those is missing, creation is blocked on purpose — that's
+the next step proving it.
+
+### 8a. Create the Job Card
+**`POST /job-cards`**
+```json
+{ "appointmentId": "PASTE_YOUR_APPOINTMENT_ID_HERE" }
+```
+Blocked (`400`) unless the appointment has an invoice number **and** the technician's visit
+has a captured serial number, warranty check, and fault/symptom codes (FR-05). Blocked
+(`409`) if a Job Card already exists for this appointment. On success you get back a
+`jobCardNumber` (e.g. `JC-0001`) and the visit's data snapshotted onto it — copy the
+response's `id`, you'll need it for every step below.
+
+### 8b. Validate the serial number against the invoice
+**`POST /job-cards/{id}/validate-sn`**
+```json
+{ "matches": true }
+```
+This is a human step — someone (a CCE) is confirming the S/N the technician captured
+actually matches the physical invoice. `"matches": false` is also valid (with an optional
+`"notes"` field) if it doesn't — the Job Card stays blocked from moving forward until you
+call this again with `true`. Only works while the Job Card's `status` is still `OPEN`
+(check the response of 8a).
+
+### 8c. Assign a section — the point work actually starts
+**`POST /job-cards/{id}/assign-section`**
+```json
+{ "section": "ON_SITE_REPAIR" }
+```
+(Or `"WORKSHOP"`.) Blocked (`400`) until 8b has been done with `matches: true`. If the
+job's warranty status is `OOW` (out of warranty), also blocked until 8d (below) is done
+first — this is the real enforcement point for "no work without a genuine check."
+
+### 8d. Customer approval (only needed for OOW jobs)
+**`POST /job-cards/{id}/approve-customer`**
+```json
+{ "notes": "Customer approved by phone, confirmed in CRM ticket #4521" }
+```
+Try creating a Job Card from an appointment whose serial number is **outside** the warranty
+range from Section 3c (e.g. capture `"SN999999999"` in Section 6b instead of `"SN150000"`)
+to get an OOW job, then try 8c on it — you'll get blocked until you call this endpoint.
+This is a **temporary manual stand-in** for FR-06 (the real "customer approves via a
+shareable link" flow is a later phase, not built yet) — it just records that someone
+obtained approval, however they obtained it.
+
+### 8e. Warranty Override (FR-17) — Technical Team Leader only
+**`POST /job-cards/{id}/warranty-override`**
+```json
+{ "newStatus": "OOW", "reason": "Physical inspection found the warranty sticker had been tampered with" }
+```
+For correcting a warranty badge that was wrong (e.g. the technician's S/N-range lookup said
+IW but a supervisor's on-site inspection says otherwise). Requires a `reason` of at least 5
+characters — it's written to the permanent audit trail along with who did it and when. Can
+be called more than once; each call is logged separately. If it flips an already
+section-assigned job to `OOW`, any prior customer approval is automatically cleared — you'd
+need to redo 8d before the job could (in a later phase) proceed further.
+
+Restricted to **Technical Team Leader, Service Head, or Super Admin** — try it while logged
+in as the technician from Section 6 to see the `403`.
+
+### 8f. Look around
+- **`GET /job-cards/{id}`** — the full record.
+- **`GET /job-cards/by-appointment/{appointmentId}`** — look one up by its appointment instead of its own id.
+
+### 8g. Prove the guardrails work
+- Try **8a** on an appointment with no `invoiceNumber` → expect **`400`**.
+- Try **8a** on an appointment where you haven't done Section 6 (no visit, or an incomplete one) → expect **`404`** or **`400`**.
+- Try **8a** twice on the same appointment → expect **`409`** the second time.
+- Try **8c** immediately after **8a** (skipping 8b) → expect **`400`**.
+- Try **8c** on an OOW job without doing 8d first → expect **`400`**.
+- Try **8e** while logged in as the technician → expect **`403`**.
+- Try **8e** with `"reason": "hi"` (too short) → expect **`400`**.
+- Try **8e** with `"newStatus"` equal to the job's current warranty status → expect **`400`** ("nothing to override").
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -244,4 +335,4 @@ These are meant to fail — that's the correct behavior:
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 2** (Auth, Master Data, Appointments, Technician Mobile API) is real, working code you can exercise exactly as above. Phases 3–8 (Job Cards, Estimates, Workshop, Inventory, Delivery, Finance, Customer Portal) aren't built yet — their Swagger sections don't exist until we build them, so there's nothing to click there yet. `docs/planning/STATUS_TRACKER.md` always reflects current status — check there first if you're unsure what's ready.
+Everything through **Phase 3** (Auth, Master Data, Appointments, Technician Mobile API, Job Cards) is real, working code you can exercise exactly as above. Phases 4–8 (Estimates, Workshop, Inventory, Delivery, Finance, Customer Portal) aren't built yet — their Swagger sections don't exist until we build them, so there's nothing to click there yet. `docs/planning/STATUS_TRACKER.md` always reflects current status — check there first if you're unsure what's ready.

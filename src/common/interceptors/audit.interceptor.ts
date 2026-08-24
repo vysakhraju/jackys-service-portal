@@ -32,7 +32,17 @@ export class AuditInterceptor implements NestInterceptor {
     }
 
     const req = context.switchToHttp().getRequest();
-    const args = context.getArgs();
+    // NOTE: context.getArgs() returns the raw platform handler args ([request, response,
+    // next] for Express/HTTP) - NOT the decorated controller method's resolved parameters
+    // (@Param/@Body/@CurrentUser etc). Passing that raw request object straight into a
+    // getEntityId/getOldValues lambda either silently returns undefined (if the lambda
+    // does `args[0]?.someProp`, since Request has no such prop) or, worse, assigns the
+    // entire circular Request object as the value (if the lambda does `args[0]`
+    // directly) - which then throws "Converting circular structure to JSON" when TypeORM
+    // tries to save it, silently dropping the whole audit row (caught by the try/catch
+    // below with no visible failure to the caller). Every @Audit call site in this
+    // codebase is written against these named fields instead.
+    const args = { params: req.params, body: req.body, query: req.query, user: req.user };
 
     return next.handle().pipe(
       tap(async (result) => {
