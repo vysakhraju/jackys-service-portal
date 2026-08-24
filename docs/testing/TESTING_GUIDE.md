@@ -303,17 +303,22 @@ call this again with `true`. Only works while the Job Card's `status` is still `
 job's warranty status is `OOW` (out of warranty), also blocked until 8d (below) is done
 first — this is the real enforcement point for "no work without a genuine check."
 
-### 8d. Customer approval (only needed for OOW jobs)
+### 8d. Customer approval (only needed for OOW jobs) — superseded, see Section 9
 **`POST /job-cards/{id}/approve-customer`**
 ```json
 { "notes": "Customer approved by phone, confirmed in CRM ticket #4521" }
 ```
 Try creating a Job Card from an appointment whose serial number is **outside** the warranty
 range from Section 3c (e.g. capture `"SN999999999"` in Section 6b instead of `"SN150000"`)
-to get an OOW job, then try 8c on it — you'll get blocked until you call this endpoint.
-This is a **temporary manual stand-in** for FR-06 (the real "customer approves via a
-shareable link" flow is a later phase, not built yet) — it just records that someone
-obtained approval, however they obtained it.
+to get an OOW job, then try 8c on it — you'll get blocked until an approval is recorded.
+
+**This endpoint still works but is no longer the intended path** — it was a temporary manual
+stand-in for FR-06 before the Estimates module existed. Now that Phase 4 is built, use
+**Section 9** instead: send a real Estimate and either let the customer respond via the
+link (9c) or have staff record a phone/WhatsApp/email approval (9d) — both of those set the
+same `customerApproved` flag this endpoint sets, so 8c unblocks either way. This endpoint is
+kept only as a manual fallback; skip straight to Section 9 unless you're specifically testing
+the old stopgap.
 
 ### 8e. Warranty Override (FR-17) — Technical Team Leader only
 **`POST /job-cards/{id}/warranty-override`**
