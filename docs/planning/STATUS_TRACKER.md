@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-24
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 15 commits on `master`, latest `5d4ecdf`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 18 commits on `master`, latest `4192ceb` — a docs-only commit for this write-up follows)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
@@ -17,7 +17,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 1 | Verify & test Auth + Master Data (already coded) | ✅ Done — 9 real bugs found & fixed, confirmed working on your machine |
 | 2 | Appointments + Technician Mobile API | ✅ Done — Appointments (fixed & wired in) + Technician Mobile API (new, this session) |
 | 3 | Job Cards + Warranty Check | ✅ Done — S/N validation, section assignment, warranty override with TL approval + audit trail (new, this session) |
-| 4 | Estimates + Notifications | ⬜ Not started |
+| 4 | Estimates + Notifications | ✅ Done — shareable-link + staff-assisted customer approval, RWR/revise flow, notification stubs (new, this session) |
 | 5 | Workshop + Inventory (Reserve) | ⬜ Not started |
 | 6 | QC + Inventory auto-deduct | ⬜ Not started |
 | 7 | Delivery + POD + OOW block | ⬜ Not started |
@@ -135,8 +135,8 @@ A `job-cards` module implementing FR-05 (block Job Card creation without S/N ver
 1. **`POST /job-cards`** `{ appointmentId }` — creation is blocked (`400`) unless the appointment already has an `invoiceNumber` on file **and** the technician's field visit (Phase 2) has a captured serial number, warranty check, and fault/symptom codes. This is the "no Job Card without invoice verification" rule (FR-05, AC-05). Blocked with `409` if a Job Card already exists for the appointment. On success, the visit's data (S/N, brand, fault/symptom, warranty status) is **snapshotted** onto the Job Card — deliberately not re-read live afterwards, so a later change to the visit can't silently drift what the Job Card recorded.
 2. **`POST /job-cards/:id/validate-sn`** `{ matches, notes? }` — a human (CCE) step confirming the captured S/N actually matches the physical invoice. Only allowed while the Job Card is still `OPEN`, so it can't be quietly redone after work has started to paper over a mismatch. A match advances status to `SN_VALIDATED`; a non-match records the flag/notes but leaves the Job Card blocked from proceeding.
 3. **`POST /job-cards/:id/assign-section`** `{ section: ON_SITE_REPAIR | WORKSHOP }` — the point work actually starts, so it's the real enforcement point: requires `SN_VALIDATED` status, and for an out-of-warranty (OOW) job, also requires customer approval (gate 4) to already be in place.
-4. **`POST /job-cards/:id/approve-customer`** `{ notes? }` — a **temporary manual stand-in** for FR-06 (the real "customer approves via a shareable link" flow is the Estimates phase, not built yet). Restricted to the same office-side roles as the rest of the module; a real auditor would want this replaced with the actual link-based approval before go-live — tracked as a known gap, not hidden.
-5. **`POST /job-cards/:id/warranty-override`** `{ newStatus, reason }` — corrects the warranty badge. Restricted to **Technical Team Leader / Service Head / Super Admin only** (not the general Job Card roles). Requires a `reason` (min 5 chars), writes a `WARRANTY_OVERRIDE` audit log row (who, when, old→new, reason), and tracks `overrideCount` since it can be called more than once. If an override flips an already section-assigned job to OOW, any existing customer approval is automatically reset — an approval obtained under the old (e.g. IW) terms can't silently cover the new (OOW) ones.
+4. **`POST /job-cards/:id/approve-customer`** `{ notes? }` — **superseded by Phase 4's Estimates flow (below)**, kept as a manual fallback for the same office-side roles. Originally the FR-06 stopgap before Estimates existed; now both Estimate response paths set the same `customerApproved` flag this endpoint sets, so it still works, but the Estimates flow is the intended path going forward.
+5. **`POST /job-cards/:id/warranty-override`** `{ newStatus, reason }` — corrects the warranty badge. Restricted to **Technical Team Leader / Service Head / Super Admin only** (not the general Job Card roles). Requires a `reason` (min 5 chars), writes a `WARRANTY_OVERRIDE` audit log row (who, when, old→new, reason), and tracks `overrideCount` since it can be called more than once. If an override flips an already section-assigned job to OOW, any existing customer approval is automatically reset — an approval obtained under the old (e.g. IW) terms can't silently cover the new (OOW) ones. **Updated in Phase 4**: also blocked while the Job Card is `RWR` or `CANCELLED`.
 
 Other endpoints: `GET /job-cards/:id`, `GET /job-cards/by-appointment/:appointmentId`.
 
@@ -156,12 +156,7 @@ Other endpoints: `GET /job-cards/:id`, `GET /job-cards/by-appointment/:appointme
 
 Also verified the negative paths: no invoice number → `400`; incomplete field visit → `400`; duplicate Job Card → `409`; wrong role on every office-side and TL-only endpoint → `403`; re-validating S/N once past `OPEN` → `400`; override reason too short → `400`; override to the same status → `400`.
 
-**Automated tests**: `src/job-cards/job-cards.service.spec.ts`, 24 tests, 100% statements/functions/lines, 95.65% branches on `job-cards.service.ts`.
-
-```
-Test Suites: 8 passed, 8 total
-Tests:       161 passed, 161 total
-```
+**Automated tests**: `src/job-cards/job-cards.service.spec.ts` — 41 tests as of Phase 4 (24 original + 17 added for the RWR/CANCELLED guard and the new `setToRwr`/`reviveFromRwr` methods), 100% statements/functions/lines on `job-cards.service.ts`.
 
 ---
 
@@ -171,28 +166,61 @@ Tests:       161 passed, 161 total
 
 **Root cause**: all 10 master-data create/update endpoints declared their body as `@Body() data: Partial<Entity>`. TypeScript utility types like `Partial<X>` erase to a plain `Object` at runtime, so `@nestjs/swagger` had no field-level metadata to build a request-body schema from — Swagger UI had nothing to render an input box for. It also meant these endpoints had effectively **zero input validation**, since `ValidationPipe` can't validate a type it has no decorated shape for.
 
-**Fix**: added a real DTO class (`@ApiProperty` + class-validator decorators) for every affected endpoint — service centres (create + update), fault/symptom, spare parts, spare part models, price lists, KPI rules, notification templates, warranty master, component yield matrix — matching the pattern already used in Appointments/Technician/Job Cards. New files under `src/master-data/dto/`.
+**Fix**: added a real DTO class (`@ApiProperty` + class-validator decorators) for every affected endpoint — service centres (create + update), fault/symptom, spare parts, spare part models, price lists, KPI rules, notification templates, warranty master, component yield matrix — matching the pattern already used in Appointments/Technician/Job Cards. New files under `src/master-data/dto/`. A follow-up pass found and fixed the same defect on 3 more endpoints that used inline TS object-literal types instead of DTO classes (same erasure bug): `PUT /appointments/:id/cancel`, `PUT /appointments/:id/assign-technician`, `POST /auth/change-password` — every POST/PUT endpoint in the app now has a real DTO and a working Swagger input box.
 
-**Verified live**: all 9 create endpoints plus the service-centre update endpoint now render a full example JSON body in Swagger and accept real requests (`201`/`200`); a missing required field now correctly returns `400` with field-level messages instead of silently creating an incomplete record. Full suite still 161/161 passing.
-
-Committed as `5d4ecdf`, pushed to GitHub (`main` + `master`).
-
-**What to do now**: your `npm run start:dev` watch process should already have picked this up automatically (it was live-tested against your running server). Just refresh the Swagger page at http://localhost:3000/api/docs and the master-data POST/PUT endpoints will now show a "Request body" section with an editable JSON box and a filled-in example.
+Committed as `5d4ecdf` and `2c84a99`, pushed to GitHub (`main` + `master`).
 
 ---
 
-## Known issue to fix later (not blocking)
+## Phase 4: Estimates + Notifications — done this session
+
+Implements FR-06 (OOW customer approval via shareable link before WIP starts), FR-07 (notification on estimate send), and FR-08 (reject → RWR, blocking further work) — replacing the Job Cards `approve-customer` manual stopgap with the real flow.
+
+**Design process**: before writing code, ran a `the-fool` pre-mortem on the draft design, which surfaced a requirement change mid-review — most customers never actually click an approval link; staff routinely get verbal approval by phone/WhatsApp/email instead, and the system needed a first-class way to record that, not just the self-service link. The finalized design (both paths below) went through a `test-master` test-plan pass before implementation, which caught one more gap (what the public link should show after it's already been responded to — decided: `410 Gone`, not a read-only replay) before any code was written.
+
+**Estimate entity**: `jobCardId` (FK), `lineItems` (jsonb), `subtotal`/`vatAmount`/`totalAmount` (server-computed from the service centre's VAT rate), `status` (`DRAFT → SENT → APPROVED | REJECTED | EXPIRED`), `accessToken`/`tokenExpiresAt` (7-day link), `respondedVia` (`CUSTOMER_LINK | STAFF_RECORDED`), staff-path fields (`recordedByUserId`, `contactMethod`, `contactValue`), `channelsAttempted`/`channelsDelivered` (kept as two distinct fields — see Notifications below), `previousEstimateId` (the revise chain).
+
+**Six endpoints (`estimates` module):**
+1. **`POST /estimates`** `{ jobCardId, lineItems }` — staff (CCE+). Blocked (`400`) unless the Job Card is OOW and already `SN_VALIDATED`. Blocked (`409`) if an active (`DRAFT`/`SENT`/`APPROVED`) Estimate already exists for it.
+2. **`POST /estimates/:id/send`** — staff. Only from `DRAFT`. Generates the shareable link's token + 7-day expiry, attempts a notification on every channel (FR-07), moves to `SENT`.
+3. **`GET /estimates/public/:token`** — **public, no JWT**. Customer-safe summary. `404` on an unknown token; `410` once expired or already responded to (a decided estimate isn't a live decision surface anymore).
+4. **`POST /estimates/public/:token/respond`** `{ approved, notes? }` — **public, no JWT**. The customer's own decision.
+5. **`POST /estimates/:id/record-response`** `{ approved, contactMethod, contactValue, notes }` — staff, role-gated via a separate `ESTIMATE_APPROVAL_ROLES` constant (deliberately distinct from the general `ESTIMATE_ROLES`, so who's allowed to take approval calls can be extended later without touching unrelated permissions). This is the realistic path — recording a decision obtained by phone/WhatsApp/email call. **`contactValue` must exactly match the phone or email already on file for the appointment** (case-insensitive for email, no phone-format normalization) or it's rejected `400` — an anti-consent-laundering guard so a staff member can't attest to a call with a contact that isn't actually on record.
+6. **`POST /estimates/:id/revise`** `{ lineItems? }` — staff, only on a `REJECTED` Estimate. Creates a new linked `DRAFT` (previous one stays `REJECTED` permanently) and moves the Job Card back to `SN_VALIDATED`. Line items are optional — omit to carry the rejected estimate's pricing forward unchanged, or supply new ones for a genuine re-quote.
+
+Both response paths (4 and 5) converge on **one shared, guarded service method** keyed on `status === 'SENT'` — a second response attempt after either path already succeeded gets `409` naming when/how the first one happened, instead of silently overwriting the customer's decision. This closes a real race: a customer clicking reject on the link at the same moment a CCE records an approval from a call, with neither aware of the other.
+
+**JobCard changes**: added a new `RWR` status (Ready for Return, FR-08). Not a dead end — `validate-sn`/`assign-section`/`warranty-override` are all blocked while `RWR`, but `Estimate.revise()` moves the Job Card back to `SN_VALIDATED` so the flow can continue, matching the discovery doc's own "Reject → RWR → Return" as a continuing process rather than case-closed. New service methods: `setToRwr()`, `reviveFromRwr()`.
+
+**Notifications module (new)**: `NotificationsService.send()`/`sendAll()` look up the active `NotificationTemplate` (trigger + channel) already in Master Data, render its placeholders, and hand off to a channel adapter. **No real WhatsApp/SMS/Email provider is wired up yet** (WhatsApp Business API account approval remains a known 2-4 week external blocker, still open) — each adapter logs the rendered message and returns `delivered: false`. `channelsAttempted` and `channelsDelivered` are tracked as two **separate** fields everywhere, specifically so a stubbed send can never look identical to a real delivery in the stored data — swapping in a real provider later only means replacing the body of the three adapter methods, nothing about the interface changes.
+
+**Verified live end-to-end** (real local Postgres, full flow via two PowerShell scripts saved to `scripts/phase4-e2e-test.ps1` and `scripts/phase4-notif-check.ps1`): create Estimate → send → customer rejects via the public link → public `GET` afterward correctly `410`s, a second `respond` correctly `409`s → Job Card moves to `RWR` → `warranty-override` correctly blocked while `RWR` → `revise` creates a new `DRAFT` and Job Card returns to `SN_VALIDATED` → sent again → staff `record-response` with a wrong `contactValue` correctly `400`s, then the real one succeeds and approves → Job Card's `customerApproved` flips true → `assign-section` finally unblocks. Separately confirmed `channelsAttempted` actually populates once a real `NotificationTemplate` exists (stays honestly distinct from `channelsDelivered`, which stays empty).
+
+**Automated tests**: `src/estimates/estimates.service.spec.ts` (24 tests) + `src/notifications/notifications.service.spec.ts` (10 tests) + 17 new tests in `job-cards.service.spec.ts` for the RWR/guard additions — 51 new tests this phase.
+
+```
+Test Suites: 10 passed, 10 total
+Tests:       215 passed, 215 total
+```
+
+Committed as `4192ceb`, pushed to GitHub (`main` + `master`).
+
+---
+
+## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
 - `AppointmentsController` double-logs audit rows for its mutation endpoints (see Phase 3 above) — remove the redundant `@Audit`/`@UseInterceptors(AuditInterceptor)` decorators there since `AppointmentsService` already logs directly.
-- FR-06's customer approval is a manual `approve-customer` flag for now, not the real shareable-link/Estimate approval flow — replace when the Estimates phase (Phase 4) is built.
 - Once a Job Card exists for an appointment, the field visit's captured S/N/fault/symptom can technically still be re-captured on the `TechnicianVisit` record without the Job Card's snapshot updating to match (by design, to keep the Job Card's record immutable) — but there's no guard actively *preventing* the recapture, so it's a documentation-only safeguard right now, not an enforced one. Low risk in practice (recapture isn't a normal flow) but worth a proper lock if it comes up.
+- **No real WhatsApp/SMS/Email provider wired up (Phase 4)** — `channelsDelivered` will stay empty for every Estimate until this is done. WhatsApp Business API approval is the known external blocker (2-4 weeks); email/SMS just need a provider chosen and credentials added. The `record-response` staff-assisted path is the practically-usable way to move an Estimate forward until then.
+- **`ESTIMATE_APPROVAL_ROLES` (who can record a customer approval on their behalf) is a plain TS constant, not admin-editable** — extending it to a new role means a code change + redeploy. Deliberately kept as a separate, narrowly-named constant from the general Estimates role list so this is a small, contained change when it's needed, but there's no UI for it yet.
+- **The staff-recorded-approval audit trail relies on the `notes` field and the `contactValue` match check, not independent verification** — this was the strongest risk flagged in the Phase 4 pre-mortem (a rubber-stamped "customer approved" with no real call). The `contactValue`-must-match guard prevents attesting to an unknown contact, but nothing stops a genuinely fabricated approval by someone with valid access. Worth a periodic audit-log review of `record-response` entries per staff member if this becomes a real usage pattern; a second-approval requirement above some order value is a reasonable future addition if disputes ever occur.
 
 ---
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. It covers starting the server, logging in, setting up master data, creating and assigning appointments, running the full Technician Mobile API flow (start visit → capture serial number → capture fault/symptom), and now the full Job Cards flow (create → validate S/N → assign section → warranty override, including the OOW customer-approval stopgap), plus a troubleshooting table. Every step in it was verified against a live server before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. It covers starting the server, logging in, setting up master data, creating and assigning appointments, running the full Technician Mobile API flow (start visit → capture serial number → capture fault/symptom), the full Job Cards flow, and now the full Estimates flow (create → send → customer link or staff-recorded response → reject/RWR/revise), plus a troubleshooting table. Every step in it was verified against a live server before being written down, so it should just work if you follow it in order.
 
 Also new this session: `npm run seed:technician` creates a test `TECHNICIAN_FIELD` login (same pattern as `npm run seed:admin`) so you can try the Technician Mobile API as "the technician" without touching SQL.
 
@@ -220,34 +248,37 @@ $resp.accessToken   # your JWT
 Invoke-RestMethod -Uri "http://localhost:3000/api/v1/auth/profile" -Headers @{ Authorization = "Bearer $($resp.accessToken)" }
 ```
 
-To try the new Technician Mobile API, you'll need: a `TECHNICIAN_FIELD` user (there's no public registration endpoint yet — easiest is a direct SQL insert like `seed-admin.ts` does, or reuse a technician you already created for testing Appointments), an appointment with that technician assigned (`PUT /appointments/:id/assign-technician`), a fault/symptom pair and a warranty-master range in Master Data, then as that technician:
-```
-POST /technician/visits/:appointmentId/start            { "gpsLat": 25.2048, "gpsLng": 55.2708 }
-POST /technician/visits/:appointmentId/serial-number     { "serialNumber": "...", "brand": "..." }
-POST /technician/visits/:appointmentId/fault-symptom     { "faultCode": "...", "symptomCode": "..." }
-GET  /technician/visits/:appointmentId
-GET  /technician/schedule
-```
-All five show up in Swagger under the `technician` tag too.
-
-To try Job Cards, you need a Technician Mobile API flow completed above (S/N + fault/symptom captured) on an appointment that also has an `invoiceNumber` set, then back as **admin/CCE**:
+To try Job Cards, you need a Technician Mobile API flow completed (S/N + fault/symptom captured) on an appointment that also has an `invoiceNumber` set, then back as **admin/CCE**:
 ```
 POST /job-cards                          { "appointmentId": "..." }
 POST /job-cards/:id/validate-sn          { "matches": true }
 POST /job-cards/:id/assign-section       { "section": "ON_SITE_REPAIR" }
-POST /job-cards/:id/approve-customer     { "notes": "..." }               (OOW jobs only, before assign-section)
 POST /job-cards/:id/warranty-override    { "newStatus": "OOW", "reason": "..." }   (Technical Team Leader+ only)
 GET  /job-cards/:id
 GET  /job-cards/by-appointment/:appointmentId
 ```
-All seven show up in Swagger under the `job-cards` tag.
+
+To try Estimates (needs an OOW Job Card that's `SN_VALIDATED`):
+```
+POST /estimates                          { "jobCardId": "...", "lineItems": [...] }
+POST /estimates/:id/send
+GET  /estimates/public/:token                                    (no login needed)
+POST /estimates/public/:token/respond    { "approved": true }    (no login needed)
+POST /estimates/:id/record-response      { "approved": true, "contactMethod": "PHONE_CALL", "contactValue": "...", "notes": "..." }
+POST /estimates/:id/revise               { "lineItems": [...] }  (only after a reject)
+GET  /estimates/:id
+GET  /estimates/by-job-card/:jobCardId
+```
+There's also two ready-made PowerShell smoke-test scripts if you'd rather run the whole flow at once instead of clicking through Swagger: `scripts/phase4-e2e-test.ps1` (full create → reject → revise → approve → assign-section chain) and `scripts/phase4-notif-check.ps1` (confirms notification attempts actually fire once a template exists). Run either with `powershell -ExecutionPolicy Bypass -File scripts\phase4-e2e-test.ps1` while the dev server is up.
+
+All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`).
 
 ---
 
 ## Open items / blockers (from planning docs, still unresolved)
 
 - Mobile framework decision: Flutter vs React Native
-- WhatsApp Business API account approval (2–4 weeks lead time)
+- WhatsApp Business API account approval (2–4 weeks lead time) — now also blocking real Estimate notification delivery (Phase 4)
 - External Warranty API access/documentation
 - Acceptance criteria not yet validated with stakeholders
 - `backend/`/`frontend/` folder layout vs. actual `src/` layout — decide whether to reconcile before the React frontend is scaffolded
