@@ -2,7 +2,8 @@
 
 **Last updated:** 2026-08-24
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 11 commits on `master`, latest `7daffed`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 15 commits on `master`, latest `5d4ecdf`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -161,6 +162,22 @@ Also verified the negative paths: no invoice number → `400`; incomplete field 
 Test Suites: 8 passed, 8 total
 Tests:       161 passed, 161 total
 ```
+
+---
+
+## Bug fix: Master Data Swagger request bodies — done this session
+
+**Reported by you**: the Swagger UI for `POST /master-data/service-centres` (and the rest of the master-data create/update endpoints) showed "No parameters" with nowhere to paste the JSON body described in the testing guide.
+
+**Root cause**: all 10 master-data create/update endpoints declared their body as `@Body() data: Partial<Entity>`. TypeScript utility types like `Partial<X>` erase to a plain `Object` at runtime, so `@nestjs/swagger` had no field-level metadata to build a request-body schema from — Swagger UI had nothing to render an input box for. It also meant these endpoints had effectively **zero input validation**, since `ValidationPipe` can't validate a type it has no decorated shape for.
+
+**Fix**: added a real DTO class (`@ApiProperty` + class-validator decorators) for every affected endpoint — service centres (create + update), fault/symptom, spare parts, spare part models, price lists, KPI rules, notification templates, warranty master, component yield matrix — matching the pattern already used in Appointments/Technician/Job Cards. New files under `src/master-data/dto/`.
+
+**Verified live**: all 9 create endpoints plus the service-centre update endpoint now render a full example JSON body in Swagger and accept real requests (`201`/`200`); a missing required field now correctly returns `400` with field-level messages instead of silently creating an incomplete record. Full suite still 161/161 passing.
+
+Committed as `5d4ecdf`, pushed to GitHub (`main` + `master`).
+
+**What to do now**: your `npm run start:dev` watch process should already have picked this up automatically (it was live-tested against your running server). Just refresh the Swagger page at http://localhost:3000/api/docs and the master-data POST/PUT endpoints will now show a "Request body" section with an editable JSON box and a filled-in example.
 
 ---
 
