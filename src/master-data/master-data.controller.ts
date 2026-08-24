@@ -10,8 +10,17 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { MasterDataService } from './master-data.service';
+import { CreateServiceCentreDto, UpdateServiceCentreDto } from './dto/create-service-centre.dto';
+import { CreateFaultSymptomDto } from './dto/create-fault-symptom.dto';
+import { CreateSparePartDto } from './dto/create-spare-part.dto';
+import { CreateSparePartModelDto } from './dto/create-spare-part-model.dto';
+import { CreatePriceListDto } from './dto/create-price-list.dto';
+import { CreateKpiRuleDto } from './dto/create-kpi-rule.dto';
+import { CreateNotificationTemplateDto } from './dto/create-notification-template.dto';
+import { CreateWarrantyMasterDto } from './dto/create-warranty-master.dto';
+import { CreateComponentYieldDto } from './dto/create-component-yield.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -50,8 +59,9 @@ export class MasterDataController {
     getEntityId: (args) => args.body?.code,
   })
   @ApiOperation({ summary: 'Create service centre' })
+  @ApiBody({ type: CreateServiceCentreDto })
   @ApiResponse({ status: 201, type: ServiceCentre })
-  createServiceCentre(@Body() data: Partial<ServiceCentre>) {
+  createServiceCentre(@Body() data: CreateServiceCentreDto) {
     return this.masterDataService.createServiceCentre(data);
   }
 
@@ -79,8 +89,9 @@ export class MasterDataController {
     getEntityId: (args) => args.params?.id,
   })
   @ApiOperation({ summary: 'Update service centre' })
+  @ApiBody({ type: UpdateServiceCentreDto })
   @ApiResponse({ status: 200, type: ServiceCentre })
-  updateServiceCentre(@Param('id') id: string, @Body() data: Partial<ServiceCentre>) {
+  updateServiceCentre(@Param('id') id: string, @Body() data: UpdateServiceCentreDto) {
     return this.masterDataService.updateServiceCentre(id, data);
   }
 
@@ -101,8 +112,9 @@ export class MasterDataController {
     getEntityId: (args) => args.body?.faultCode,
   })
   @ApiOperation({ summary: 'Create fault/symptom' })
+  @ApiBody({ type: CreateFaultSymptomDto })
   @ApiResponse({ status: 201, type: FaultSymptom })
-  createFaultSymptom(@Body() data: Partial<FaultSymptom>) {
+  createFaultSymptom(@Body() data: CreateFaultSymptomDto) {
     return this.masterDataService.createFaultSymptom(data);
   }
 
@@ -138,8 +150,9 @@ export class MasterDataController {
     getEntityId: (args) => args.body?.code,
   })
   @ApiOperation({ summary: 'Create spare part' })
+  @ApiBody({ type: CreateSparePartDto })
   @ApiResponse({ status: 201, type: SparePart })
-  createSparePart(@Body() data: Partial<SparePart>) {
+  createSparePart(@Body() data: CreateSparePartDto) {
     return this.masterDataService.createSparePart(data);
   }
 
@@ -179,8 +192,9 @@ export class MasterDataController {
   @Post('spare-part-models')
   @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK')
   @ApiOperation({ summary: 'Create spare part model' })
+  @ApiBody({ type: CreateSparePartModelDto })
   @ApiResponse({ status: 201, type: SparePartModel })
-  createSparePartModel(@Body() data: Partial<SparePartModel>) {
+  createSparePartModel(@Body() data: CreateSparePartModelDto) {
     return this.masterDataService.createSparePartModel(data);
   }
 
@@ -195,8 +209,9 @@ export class MasterDataController {
   @Post('price-lists')
   @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'FINANCE_MANAGER')
   @ApiOperation({ summary: 'Create service price list' })
+  @ApiBody({ type: CreatePriceListDto })
   @ApiResponse({ status: 201, type: ServicePriceList })
-  createPriceList(@Body() data: Partial<ServicePriceList>) {
+  createPriceList(@Body() data: CreatePriceListDto) {
     return this.masterDataService.createServicePriceList(data);
   }
 
@@ -216,8 +231,9 @@ export class MasterDataController {
   @Post('kpi-rules')
   @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
   @ApiOperation({ summary: 'Create technician KPI rule' })
+  @ApiBody({ type: CreateKpiRuleDto })
   @ApiResponse({ status: 201, type: TechnicianKpiRule })
-  createKpiRule(@Body() data: Partial<TechnicianKpiRule>) {
+  createKpiRule(@Body() data: CreateKpiRuleDto) {
     return this.masterDataService.createKpiRule(data);
   }
 
@@ -232,8 +248,9 @@ export class MasterDataController {
   @Post('notification-templates')
   @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
   @ApiOperation({ summary: 'Create notification template' })
+  @ApiBody({ type: CreateNotificationTemplateDto })
   @ApiResponse({ status: 201, type: NotificationTemplate })
-  createNotificationTemplate(@Body() data: Partial<NotificationTemplate>) {
+  createNotificationTemplate(@Body() data: CreateNotificationTemplateDto) {
     return this.masterDataService.createNotificationTemplate(data);
   }
 
@@ -258,9 +275,14 @@ export class MasterDataController {
   @Post('warranty-master')
   @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'WARRANTY_CLERK')
   @ApiOperation({ summary: 'Create warranty master entry' })
+  @ApiBody({ type: CreateWarrantyMasterDto })
   @ApiResponse({ status: 201, type: WarrantyMaster })
-  createWarrantyMaster(@Body() data: Partial<WarrantyMaster>) {
-    return this.masterDataService.createWarrantyMaster(data);
+  createWarrantyMaster(@Body() data: CreateWarrantyMasterDto) {
+    return this.masterDataService.createWarrantyMaster({
+      ...data,
+      effectiveFrom: data.effectiveFrom ? new Date(data.effectiveFrom) : undefined,
+      effectiveTo: data.effectiveTo ? new Date(data.effectiveTo) : undefined,
+    });
   }
 
   @Get('warranty-master/check/:serialNumber')
@@ -278,8 +300,9 @@ export class MasterDataController {
   @Post('component-yield')
   @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
   @ApiOperation({ summary: 'Create component yield matrix entry' })
+  @ApiBody({ type: CreateComponentYieldDto })
   @ApiResponse({ status: 201, type: ComponentYieldMatrix })
-  createComponentYield(@Body() data: Partial<ComponentYieldMatrix>) {
+  createComponentYield(@Body() data: CreateComponentYieldDto) {
     return this.masterDataService.createComponentYield(data);
   }
 
