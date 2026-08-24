@@ -6,14 +6,14 @@ import { MasterDataModule } from './master-data/master-data.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { TechnicianModule } from './technician/technician.module';
 import { JobCardsModule } from './job-cards/job-cards.module';
-// import { EstimatesModule } from './estimates/estimates.module';
+import { EstimatesModule } from './estimates/estimates.module';
+import { NotificationsModule } from './notifications/notifications.module';
 // import { WorkshopModule } from './workshop/workshop.module';
 // import { InventoryModule } from './inventory/inventory.module';
 // import { DeliveryModule } from './delivery/delivery.module';
 // import { FinanceModule } from './finance/finance.module';
 // import { AmcModule } from './amc/amc.module';
 // import { DismantlingModule } from './dismantling/dismantling.module';
-// import { NotificationsModule } from './notifications/notifications.module';
 // import { ReportsModule } from './reports/reports.module';
 // import { CustomerPortalModule } from './customer-portal/customer-portal.module';
 
@@ -42,14 +42,14 @@ import { JobCardsModule } from './job-cards/job-cards.module';
     AppointmentsModule,
     TechnicianModule,
     JobCardsModule,
-    // EstimatesModule,
+    EstimatesModule,
+    NotificationsModule,
     // WorkshopModule,
     // InventoryModule,
     // DeliveryModule,
     // FinanceModule,
     // AmcModule,
     // DismantlingModule,
-    // NotificationsModule,
     // ReportsModule,
     // CustomerPortalModule,
   ],

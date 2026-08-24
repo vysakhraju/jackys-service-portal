@@ -17,6 +17,10 @@ export enum JobCardStatus {
   OPEN = 'OPEN',
   SN_VALIDATED = 'SN_VALIDATED',
   SECTION_ASSIGNED = 'SECTION_ASSIGNED',
+  // FR-08: set when a customer rejects an OOW Estimate. Not a dead end - blocks
+  // validate-sn/assign-section/warranty-override until a revised Estimate is created
+  // (Estimate.revise()), which moves the Job Card back to SN_VALIDATED.
+  RWR = 'RWR',
   CANCELLED = 'CANCELLED',
 }
 

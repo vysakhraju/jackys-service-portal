@@ -302,6 +302,60 @@ describe('JobCardsService', () => {
         service.warrantyOverride('jc-1', { newStatus: WarrantyStatus.IN_WARRANTY, reason: 'no real change' }, 'tl-1'),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('blocks override while the Job Card is RWR (FR-08: further work blocked)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.RWR, warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY }));
+
+      await expect(
+        service.warrantyOverride('jc-1', { newStatus: WarrantyStatus.IN_WARRANTY, reason: 'irrelevant while RWR' }, 'tl-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('blocks override while the Job Card is CANCELLED', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.CANCELLED, warrantyStatus: WarrantyStatus.IN_WARRANTY }));
+
+      await expect(
+        service.warrantyOverride('jc-1', { newStatus: WarrantyStatus.OUT_OF_WARRANTY, reason: 'irrelevant while cancelled' }, 'tl-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('setToRwr', () => {
+    it('moves an SN_VALIDATED Job Card to RWR', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SN_VALIDATED }));
+
+      const result = await service.setToRwr('jc-1');
+
+      expect(result.status).toBe(JobCardStatus.RWR);
+    });
+
+    it('rejects moving to RWR from any other status', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.OPEN }));
+
+      await expect(service.setToRwr('jc-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws NotFoundException for an unknown Job Card', async () => {
+      jobCardRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.setToRwr('missing')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('reviveFromRwr', () => {
+    it('moves an RWR Job Card back to SN_VALIDATED', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.RWR }));
+
+      const result = await service.reviveFromRwr('jc-1');
+
+      expect(result.status).toBe(JobCardStatus.SN_VALIDATED);
+    });
+
+    it('rejects reviving a Job Card that is not RWR', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SECTION_ASSIGNED }));
+
+      await expect(service.reviveFromRwr('jc-1')).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe('findById / findByAppointmentId', () => {

@@ -198,6 +198,12 @@ export class JobCardsService {
   async warrantyOverride(id: string, dto: WarrantyOverrideDto, userId: string): Promise<{ jobCard: JobCard; previousStatus: WarrantyStatus }> {
     const jobCard = await this.findEntityById(id);
 
+    if (jobCard.status === JobCardStatus.RWR || jobCard.status === JobCardStatus.CANCELLED) {
+      throw new BadRequestException(
+        `Cannot override warranty while the Job Card is ${jobCard.status} (FR-08: further work is blocked until it's revived).`,
+      );
+    }
+
     if (jobCard.warrantyStatus === dto.newStatus) {
       throw new BadRequestException(`Job Card is already ${dto.newStatus} - nothing to override.`);
     }
@@ -218,5 +224,41 @@ export class JobCardsService {
 
     const saved = await this.jobCardRepository.save(jobCard);
     return { jobCard: saved, previousStatus };
+  }
+
+  /**
+   * FR-08: called by EstimatesService when a customer (or staff on their behalf) rejects
+   * an OOW Estimate. Only valid from SN_VALIDATED - that's the only status an active
+   * Estimate can exist against (Estimates.create() requires OOW + SN_VALIDATED), so this
+   * intentionally doesn't accept OPEN/SECTION_ASSIGNED/CANCELLED/already-RWR.
+   */
+  async setToRwr(id: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status !== JobCardStatus.SN_VALIDATED) {
+      throw new BadRequestException(
+        `Cannot move Job Card to RWR from status ${jobCard.status} (expected SN_VALIDATED).`,
+      );
+    }
+
+    jobCard.status = JobCardStatus.RWR;
+    return this.jobCardRepository.save(jobCard);
+  }
+
+  /**
+   * Called by EstimatesService.revise() once a new Estimate has been drafted to replace a
+   * rejected one - moves the Job Card back to SN_VALIDATED so assign-section can be
+   * reached again once the revised Estimate is approved. Not a generic "unblock" - only
+   * valid from RWR.
+   */
+  async reviveFromRwr(id: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status !== JobCardStatus.RWR) {
+      throw new BadRequestException(`Cannot revive Job Card from status ${jobCard.status} (expected RWR).`);
+    }
+
+    jobCard.status = JobCardStatus.SN_VALIDATED;
+    return this.jobCardRepository.save(jobCard);
   }
 }

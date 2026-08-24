@@ -346,6 +346,104 @@ in as the technician from Section 6 to see the `403`.
 
 ---
 
+## 9. Estimates — the real customer-approval flow (replaces the Job Cards stopgap)
+
+Built this session (Phase 4). This is what actually stands behind Section 8d
+(`approve-customer`) now: a priced Estimate, a shareable link the customer can approve or
+reject themselves, **and** a way for staff to record a decision obtained by phone/WhatsApp
+call — because in practice most customers never click the link. Both paths lead to the
+same place. You'll need a Job Card that's `SN_VALIDATED` and out-of-warranty (OOW) — do
+Sections 5–8a/8b first, using an `SN999999999`-style serial in 6b so the job comes out
+OOW, and stop after **8b** (don't do 8c/8d — Estimates replaces those for this flow).
+
+### 9a. Create a DRAFT Estimate
+**`POST /estimates`**
+```json
+{
+  "jobCardId": "PASTE_YOUR_JOB_CARD_ID_HERE",
+  "lineItems": [
+    { "description": "Drum Motor Assembly (Part)", "quantity": 1, "unitPrice": 350.00 },
+    { "description": "Labor - Workshop repair", "quantity": 1, "unitPrice": 120.00 }
+  ]
+}
+```
+Blocked (`400`) unless the Job Card is OOW and already `SN_VALIDATED`. Blocked (`409`) if
+an active Estimate already exists for it. Totals (`subtotal`/`vatAmount`/`totalAmount`) are
+computed server-side from the service centre's VAT rate — copy the response's `id`.
+
+### 9b. Send it
+**`POST /estimates/{id}/send`** (no body). Only works from `DRAFT`. Generates the
+shareable link's token (valid 7 days) and attempts a notification on every configured
+channel — copy the response's `accessToken`, you'll use it as `{token}` below. Nothing
+actually gets delivered yet (no WhatsApp/SMS/email provider is wired up — see
+`channelsAttempted` vs `channelsDelivered` in the response; the second one will be empty on
+purpose until a real provider exists), which is exactly why 9d exists.
+
+### 9c. The customer's side of the link (no login needed)
+Open a new browser tab/incognito window — these two don't need the "Authorize" step at all:
+- **`GET /estimates/public/{token}`** → the customer-safe summary (line items, total, expiry).
+- **`POST /estimates/public/{token}/respond`**
+  ```json
+  { "approved": true, "notes": "Please proceed" }
+  ```
+  Try `"approved": false` instead to see the rejection path (9e below). Try calling
+  **GET** again afterward → expect **`410 Gone`** (a decided estimate isn't a live page
+  anymore). Try **respond** a second time → expect **`409 Conflict`**.
+
+### 9d. Recording a decision staff obtained by phone (the realistic path)
+Back to being logged in as **admin/CCE**. **`POST /estimates/{id}/record-response`**
+```json
+{
+  "approved": true,
+  "contactMethod": "PHONE_CALL",
+  "contactValue": "PASTE_THE_APPOINTMENT_CUSTOMER_PHONE_HERE",
+  "notes": "Called customer, confirmed total AED 493.50, approved to proceed"
+}
+```
+`contactValue` must match the phone or email already on the appointment **exactly** — this
+is deliberate: it stops anyone from attesting to a call with a number that isn't actually
+on file. Try a made-up number first to see the **`400`** it produces before trying the
+real one. `contactMethod` is also `WHATSAPP`, `EMAIL_REPLY`, or `IN_PERSON`. Whichever path
+gets there first (this one or 9c) wins — the other gets a **`409`** if tried afterward, same
+as 9c's own double-response guard.
+
+Approving here does the same thing 8d used to: it sets `JobCard.customerApproved`, so
+**`POST /job-cards/{id}/assign-section`** (Section 8c) now unblocks.
+
+### 9e. Rejected → RWR → revise (not a dead end)
+Reject an Estimate (via 9c or 9d with `"approved": false`) and the Job Card moves to a new
+`RWR` status (Ready for Return) — `GET /job-cards/{id}` will show it. While `RWR`,
+`validate-sn`/`assign-section`/`warranty-override` are all blocked (try one, expect
+**`400`**). This isn't final, though — real customers often come back with "actually,
+lower the price and I'll approve it":
+
+**`POST /estimates/{id}/revise`** (on the *rejected* estimate's id)
+```json
+{
+  "lineItems": [
+    { "description": "Drum Motor Assembly (Part) - discounted", "quantity": 1, "unitPrice": 280.00 }
+  ]
+}
+```
+Body is optional — omit it (`{}`) to carry the same line items forward unchanged. Creates
+a new `DRAFT` Estimate linked to the rejected one and moves the Job Card back to
+`SN_VALIDATED`, so 9b onward can run again.
+
+### 9f. Look around
+- **`GET /estimates/{id}`** — full staff detail.
+- **`GET /estimates/by-job-card/{jobCardId}`** — every Estimate for a Job Card, newest
+  first, including the full reject→revise chain via each one's `previousEstimateId`.
+
+### 9g. Prove the guardrails work
+- Try **9a** on a Job Card that isn't OOW, or isn't `SN_VALIDATED` yet → expect **`400`**.
+- Try **9a** twice on the same Job Card → expect **`409`** the second time.
+- Try **9b** on an Estimate that isn't `DRAFT` → expect **`400`**.
+- Try **9c**'s `GET` on a made-up token → expect **`404`**.
+- Try **9d** with a `contactValue` that doesn't match the appointment → expect **`400`**.
+- Try **9e**'s `revise` on an Estimate that isn't `REJECTED` → expect **`400`**.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -365,4 +463,4 @@ in as the technician from Section 6 to see the `403`.
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 3** (Auth, Master Data, Appointments, Technician Mobile API, Job Cards) is real, working code you can exercise exactly as above. Phases 4–8 (Estimates, Workshop, Inventory, Delivery, Finance, Customer Portal) aren't built yet — their Swagger sections don't exist until we build them, so there's nothing to click there yet. `docs/planning/STATUS_TRACKER.md` always reflects current status — check there first if you're unsure what's ready.
+Everything through **Phase 4** (Auth, Master Data, Appointments, Technician Mobile API, Job Cards, Estimates + Notifications) is real, working code you can exercise exactly as above. Phases 5–8 (Workshop, Inventory, Delivery, Finance, Customer Portal) aren't built yet — their Swagger sections don't exist until we build them, so there's nothing to click there yet. Note that Notifications (WhatsApp/SMS/Email) only *attempts* sends right now — no real provider is wired up (a known blocker, see Section 9b) — so the record-response phone/call path (9d) is the actually-usable way to move an Estimate forward today. `docs/planning/STATUS_TRACKER.md` always reflects current status — check there first if you're unsure what's ready.
