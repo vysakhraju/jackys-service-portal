@@ -37,10 +37,15 @@ export class AuthService {
   ) {}
 
   async validateUser(email: string, password: string): Promise<User | null> {
-    const user = await this.userRepository.findOne({
-      where: { email },
-      relations: { role: true },
-    });
+    // passwordHash has `select: false` on the entity, so it must be explicitly
+    // re-selected here - plain findOne() silently omits it, which previously made
+    // every login attempt crash with "Illegal arguments: string, undefined" in bcrypt.
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.role', 'role')
+      .addSelect('user.passwordHash')
+      .where('user.email = :email', { email })
+      .getOne();
 
     if (!user) {
       return null;
@@ -125,7 +130,12 @@ export class AuthService {
   }
 
   async changePassword(userId: string, oldPassword: string, newPassword: string, req: any): Promise<void> {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
+    // Same select:false issue as validateUser() - re-select passwordHash explicitly.
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.id = :id', { id: userId })
+      .getOne();
     if (!user) {
       throw new NotFoundException('User not found');
     }
