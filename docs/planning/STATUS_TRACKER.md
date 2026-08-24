@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-24
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master` — see `git log` for the exact count)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 11 commits on `master`, latest `7daffed`)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
