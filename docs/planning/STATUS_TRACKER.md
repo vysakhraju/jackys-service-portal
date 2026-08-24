@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-24
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 8 commits on `master`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 9 commits on `master`)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -132,7 +132,15 @@ npm run test:cov            # with a coverage report
 
 ---
 
-## Try it yourself right now
+## Full self-test walkthrough
+
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. It covers starting the server, logging in, setting up master data, creating and assigning appointments, and running the full Technician Mobile API flow (start visit → capture serial number → capture fault/symptom), plus a troubleshooting table. Every step in it was verified against a live server before being written down, so it should just work if you follow it in order.
+
+Also new this session: `npm run seed:technician` creates a test `TECHNICIAN_FIELD` login (same pattern as `npm run seed:admin`) so you can try the Technician Mobile API as "the technician" without touching SQL.
+
+---
+
+## Quick reference (see the full guide above for step-by-step)
 
 The dev server is already running on your machine (`npm run start:dev`, watch mode — it auto-restarts when you edit a file). Open **http://localhost:3000/api/docs** in a browser: that's the Swagger UI, where you can click "Authorize", log in with the credentials below, and try every endpoint interactively without writing any code.
 
