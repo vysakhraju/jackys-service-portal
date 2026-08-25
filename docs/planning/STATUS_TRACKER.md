@@ -1,8 +1,8 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-24
+**Last updated:** 2026-08-25
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 18 commits on `master`, latest `4192ceb` — a docs-only commit for this write-up follows)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 20 commits on `master`, latest `3c0d953`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
@@ -204,6 +204,8 @@ Tests:       215 passed, 215 total
 ```
 
 Committed as `4192ceb`, pushed to GitHub (`main` + `master`).
+
+**Follow-up doc fix**: Section 8d of `TESTING_GUIDE.md` (the old `approve-customer` stopgap) still said the real approval flow was "a later phase, not built yet" — stale now that Estimates shipped. Updated it to point testers at Section 9 instead, kept documented as a still-working manual fallback. Committed as `3c0d953`, pushed.
 
 ---
 
