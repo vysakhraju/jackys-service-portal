@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-25
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 21 commits on `master`, latest `225b88e`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 24 commits on `master`, latest `eb9ac90`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
@@ -19,7 +19,8 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 3 | Job Cards + Warranty Check | ✅ Done — S/N validation, section assignment, warranty override with TL approval + audit trail (new, this session) |
 | 4 | Estimates + Notifications | ✅ Done — shareable-link + staff-assisted customer approval, RWR/revise flow, notification stubs (new, this session) |
 | 5 | Workshop + Inventory (Reserve) | ✅ Done — reserve/custody/return model, technician-deactivation custody guard, live-verified (new, this session) |
-| 6 | QC + Inventory auto-deduct | ⬜ Not started |
+| — | Test-master audit + full testing guide rewrite | ✅ Done — every endpoint (82) now documented and indexed, see below |
+| 6 | QC + Inventory auto-deduct | ⬜ Not started — up next |
 | 7 | Delivery + POD + OOW block | ⬜ Not started |
 | 8 | Finance + Customer Portal | ⬜ Not started |
 
@@ -258,6 +259,40 @@ Committed as `225b88e`, pushed to GitHub (`main` + `master`).
 
 ---
 
+## Test-master audit + full testing guide rewrite — done this session
+
+Before handing you a "don't miss anything" testing guide, ran a real coverage audit rather
+than trusting the existing guide was still complete — it had grown section-by-section across
+five phases and had never been checked against the app as a whole in one pass.
+
+**Method**: grepped every route decorator out of all 8 controllers directly (not from memory
+or docs) to build a canonical list of every endpoint that actually exists, then cross-checked
+that list line-by-line against what `TESTING_GUIDE.md` documented.
+
+**Finding**: the guide was covering roughly 60% of the app. The worst gap was master-data —
+only 3 of its 29 endpoints had a walkthrough (service centre create, fault/symptom create,
+warranty range create); spare parts, spare part models, price lists, KPI rules, notification
+templates, component yield matrix, and bulk import had no documentation at all despite being
+fully built and working. Appointments was missing 8 of its 14 endpoints (list-with-filters,
+dashboard stats, both schedule views, lookup-by-number, update, confirm/on-site/complete).
+Auth was missing refresh and logout. Job Cards had no walkthrough at all for cancelling a
+job card, even though Section 10 already referenced it in passing. The automated test suite
+itself had no gaps worth flagging — 277/277 passing, re-confirmed with a fresh run this
+session, same as the end of Phase 5.
+
+**Fix**: rewrote `docs/testing/TESTING_GUIDE.md` from scratch, cold-start to finish. It now
+starts from "is Node installed" and "is Postgres running" (previously assumed already done),
+walks through first-time database creation, `npm install`, and seeding the first admin login,
+then covers all 82 endpoints across every module — including a brand new **Section 11**, a
+full endpoint-to-section index table, specifically so a future gap like this one is
+immediately visible rather than discovered by another audit. Every code example was written
+directly from the real DTOs and controller signatures, not copied from memory of earlier
+sections.
+
+Committed as `eb9ac90`, pushed to GitHub (`main` + `master`).
+
+---
+
 ## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
@@ -273,7 +308,7 @@ Committed as `225b88e`, pushed to GitHub (`main` + `master`).
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. It covers starting the server, logging in, setting up master data, creating and assigning appointments, running the full Technician Mobile API flow (start visit → capture serial number → capture fault/symptom), the full Job Cards flow, the full Estimates flow (create → send → customer link or staff-recorded response → reject/RWR/revise), and now the full Workshop + Inventory flow (Section 10: link a spare to a model → GRN → assign a workshop technician → reserve spares → the deactivation custody guard → return/cancel → confirm-return), plus a troubleshooting table. Every step in it was verified against a live server before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 82 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, and Workshop + Inventory — plus a troubleshooting table and a new **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
 
 Also new this session: `npm run seed:technician` now accepts `SEED_TECH_ROLE` (e.g. `TECHNICIAN_WORKSHOP`, `WAREHOUSE_CLERK`) so you can seed a test login for any role, not just `TECHNICIAN_FIELD` — same pattern as `npm run seed:admin`.
 
@@ -343,6 +378,33 @@ GET  /workshop/:jobCardId
 There's also a ready-made PowerShell smoke-test script covering the whole flow at once: `scripts/phase5-e2e-test.ps1` — AC-17 negative case, GRN, full + partial reservation, the deactivation custody guard (blocked then unblocked), job-card cancel auto-releasing reservations, and confirm-return. Run it with `powershell -ExecutionPolicy Bypass -File scripts\phase5-e2e-test.ps1` while the dev server is up.
 
 All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`).
+
+---
+
+## Next: Phase 6 — QC + Inventory auto-deduct
+
+What it covers, from the implementation plan: a Quality Control step after workshop repair
+work finishes, plus the "mark spare as consumed" step that Phase 5 deliberately left out
+(flagged repeatedly above — on-hand stock currently only ever goes up, via GRN or a
+confirmed return, and nothing ever permanently subtracts a spare that was genuinely used).
+
+Concretely, that likely means:
+- A QC gate on a `WORKSHOP`-section Job Card once it reaches `READY_FOR_QC` — a QC Officer
+  role checking the completed repair before it's allowed to move on, matching the discovery
+  doc's `QC_OFFICER` role that already exists but has nothing to do yet.
+- The actual consumption step: when a Job Card passes QC (or completes, if QC turns out not
+  to gate every job type), every spare-part reservation still attached to it that was
+  genuinely used — not returned — needs to be marked `CONSUMED` and have its quantity
+  permanently subtracted from `InventoryStock.quantityOnHand`. Right now nothing does this;
+  it's the single biggest correctness gap in the inventory model as it stands.
+- Likely also where the Component Yield Matrix (Section 3i — already built as master data
+  but unused so far) starts to matter: when an appliance is dismantled/scrapped, this table
+  says whether a component gets recovered as a spare, treated as a consumable, or scrapped.
+
+Same process as every phase so far: a `the-fool` pre-mortem on the design before writing
+code (Phase 5's caught four real gaps this way), then implementation, then a live end-to-end
+verification script, then this document and the testing guide both get updated. Ready to
+start whenever you are — just say the word.
 
 ---
 
