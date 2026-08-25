@@ -7,6 +7,7 @@ import { AssignSectionDto } from './dto/assign-section.dto';
 import { WarrantyOverrideDto } from './dto/warranty-override.dto';
 import { ApproveCustomerDto } from './dto/approve-customer.dto';
 import { CancelJobCardDto } from './dto/cancel-job-card.dto';
+import { QcRejectDto } from './dto/qc-reject.dto';
 import { JobCard } from './entities/job-card.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -17,6 +18,8 @@ import { AuditAction } from '../auth/entities/audit-log.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 import { InventoryService } from '../inventory/inventory.service';
+import { PermissionsService } from '../permissions/permissions.service';
+import { PermissionType } from '../permissions/entities/user-permission-grant.entity';
 
 // Creation/validation/section-assignment/approval: same office-side role set used
 // elsewhere (Appointments' CCE-facing endpoints). Warranty override is deliberately
@@ -24,6 +27,14 @@ import { InventoryService } from '../inventory/inventory.service';
 const JOB_CARD_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
 // FR-17: only a Technical Team Leader (or above) may perform a warranty override.
 const WARRANTY_OVERRIDE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
+// Phase 6 QC gate: deliberately NOT a fixed @Roles() list. Anyone can be admin-assigned
+// the QC_APPROVAL grant (QC_OFFICER, a Team Leader, a Supervisor, a CCE - whoever the
+// business actually wants) via PermissionsController. These roles are only the "can even
+// be considered for this action at all" floor (excludes pure field/workshop technicians
+// by default) - the REAL check is the requireActiveGrant() call inside each handler
+// below, which is what makes this "each and every activity ... assigned to role based if
+// needed" per the user's own requirement.
+const QC_GATE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE', 'QC_OFFICER'];
 
 @ApiTags('job-cards')
 @Controller('job-cards')
@@ -33,6 +44,7 @@ export class JobCardsController {
   constructor(
     private jobCardsService: JobCardsService,
     private inventoryService: InventoryService,
+    private permissionsService: PermissionsService,
   ) {}
 
   @Post()
@@ -143,6 +155,51 @@ export class JobCardsController {
     const jobCard = await this.jobCardsService.cancel(id, dto.reason);
     await this.inventoryService.cancelReservationsForJobCard(id);
     return jobCard;
+  }
+
+  // --- Phase 6: QC gate ---------------------------------------------------------------
+  // Every job freezes at READY_FOR_QC until one of these two endpoints is called. Both
+  // require the caller to hold an active QC_APPROVAL grant (PermissionsService) -
+  // completely independent of their primary @Roles() - see QC_GATE_ROLES above for why
+  // that role list is only a floor, not the real gate.
+
+  @Post(':id/qc/approve')
+  @Roles(...QC_GATE_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.QC_APPROVE,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params?.id,
+    getNewValues: (result) => ({ status: result?.status, qcApprovedByUserId: result?.qcApprovedByUserId }),
+  })
+  @ApiOperation({ summary: 'QC approve (FR-10): atomically consumes every reserved spare on this job (Main Store -> Damage Location) and passes the job. Requires the QC_APPROVAL grant.' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 201, type: JobCard })
+  @ApiResponse({ status: 400, description: 'Job Card is not READY_FOR_QC' })
+  @ApiResponse({ status: 403, description: 'Caller does not hold an active QC_APPROVAL grant' })
+  @ApiResponse({ status: 409, description: 'Blocked - a spare part on this job was never fully reserved (stock shortfall) or a stock data problem was detected' })
+  async qcApprove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
+    await this.permissionsService.requireActiveGrant(user.id, PermissionType.QC_APPROVAL);
+    return this.inventoryService.consumeReservationsOnQcApproval(id, user.id);
+  }
+
+  @Post(':id/qc/reject')
+  @Roles(...QC_GATE_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.QC_REJECT,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params?.id,
+    getNewValues: (result) => ({ status: result?.status, qcRejectionCount: result?.qcRejectionCount, reason: result?.lastQcRejectionReason }),
+  })
+  @ApiOperation({ summary: 'QC reject: sends the job back to the workshop to be fixed. Requires the QC_APPROVAL grant. Nothing in stock is touched - nothing was ever consumed before an approval.' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 201, type: JobCard })
+  @ApiResponse({ status: 400, description: 'Job Card is not READY_FOR_QC' })
+  @ApiResponse({ status: 403, description: 'Caller does not hold an active QC_APPROVAL grant' })
+  async qcRejectJobCard(@Param('id', ParseUUIDPipe) id: string, @Body() dto: QcRejectDto, @CurrentUser() user: User) {
+    await this.permissionsService.requireActiveGrant(user.id, PermissionType.QC_APPROVAL);
+    return this.jobCardsService.qcReject(id, dto.reason);
   }
 
   @Get(':id')

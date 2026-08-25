@@ -779,7 +779,7 @@ the first thing Phase 6 builds.
 
 ---
 
-## 11. Full endpoint index (82 endpoints, all documented above)
+## 11. Full endpoint index (89 endpoints, all documented above)
 
 Every route the app exposes, and exactly where in this guide it's covered. Use this to
 confirm nothing was missed — if you ever add a new endpoint and it doesn't show up here,
@@ -856,7 +856,7 @@ that's the signal to update this guide.
 | `GET /technician/visits/:appointmentId` | 6d |
 | `GET /technician/schedule` | 6e |
 
-### job-cards (8)
+### job-cards (10)
 | Endpoint | Section |
 |---|---|
 | `POST /job-cards` | 8a |
@@ -865,6 +865,8 @@ that's the signal to update this guide.
 | `POST /job-cards/:id/approve-customer` | 8d |
 | `POST /job-cards/:id/warranty-override` | 8e |
 | `POST /job-cards/:id/cancel` | 8h |
+| `POST /job-cards/:id/qc/approve` | 12c |
+| `POST /job-cards/:id/qc/reject` | 12e |
 | `GET /job-cards/:id` | 8f |
 | `GET /job-cards/by-appointment/:appointmentId` | 8f |
 
@@ -884,7 +886,7 @@ that's the signal to update this guide.
 | Endpoint | Section |
 |---|---|
 | `POST /inventory/grn` | 10b |
-| `GET /inventory/stock/:sparePartId` | 10b |
+| `GET /inventory/stock/:sparePartId` (optional `?location=` query, defaults `MAIN_STORE`) | 10b, 12c |
 | `GET /inventory/reservations/stale` | 10h |
 | `POST /inventory/reservations/:id/review` | 10g |
 | `POST /inventory/reservations/:id/request-return` | 10g |
@@ -895,11 +897,140 @@ that's the signal to update this guide.
 |---|---|
 | `POST /workshop/:jobCardId/assign` | 10d |
 | `POST /workshop/:jobCardId/start-wip` | 10d |
-| `POST /workshop/:jobCardId/request-spare` | 10e |
+| `POST /workshop/:jobCardId/request-spare` (also callable from `READY_FOR_QC` for a post-QC-block top-up) | 10e, 12d |
 | `POST /workshop/:jobCardId/complete` | 10e |
 | `GET /workshop/:jobCardId` | 10h |
 
-**Total: 82 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 8 job-cards + 8 estimates + 6 inventory + 5 workshop.)
+### permissions (4)
+| Endpoint | Section |
+|---|---|
+| `POST /permissions/grant` | 12a |
+| `POST /permissions/revoke` | 12f |
+| `GET /permissions/users/:userId` | 12a |
+| `GET /permissions` (`?type=`) | 12a |
+
+**Total: 89 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions.)
+
+
+## 12. QC gate + admin-assignable permissions + inventory consumption (Phase 6)
+
+This is where a spare part stops being merely *reserved* and becomes permanently
+**consumed** — the "mark as consumed" step flagged as a known gap at the end of Section
+10. Nothing is ever deducted from `quantityOnHand` until a Job Card actually passes QC;
+until then everything you did in Section 10 (reserve, top-up, return) still applies
+unchanged.
+
+The core idea: a Job Card that reaches `READY_FOR_QC` freezes there until someone holding
+a **QC_APPROVAL permission grant** approves or rejects it. That grant is admin-assignable
+to *any* user regardless of their role — a CCE, a Team Leader, a field technician, whoever
+your business actually wants doing QC — not a hardcoded `QC_OFFICER`-only check. The same
+mechanism (a different grant, `REWORK_APPROVAL`) gates re-consuming the *same* spare part
+on the *same* job after a QC rejection, so a second draw on a part always gets a second
+pair of eyes.
+
+### 12a. Grant a permission (admin only)
+**`POST /permissions/grant`**
+```json
+{ "userId": "<any user's id>", "permissionType": "QC_APPROVAL", "notes": "Covering QC this week" }
+```
+`permissionType` is either `QC_APPROVAL` or `REWORK_APPROVAL`. Grants are admin-only
+(`SUPER_ADMIN`/`SERVICE_HEAD`) and never deleted, only revoked — the full history stays.
+Granting the same active permission twice to the same user → expect **`409`**.
+
+**`GET /permissions/users/{userId}`** — that user's full grant history (active + revoked).
+**`GET /permissions?type=QC_APPROVAL`** — everyone currently holding a given permission.
+
+### 12b. Get a Job Card to READY_FOR_QC
+Follow Section 10c–10e to get a Job Card assigned to `WORKSHOP`, request whatever spares
+it needs, then:
+
+**`POST /workshop/{jobCardId}/complete`** — moves `IN_PROGRESS` → `READY_FOR_QC`. Blocked
+(**`400`**) while `SPARE_PENDING`, same as before.
+
+### 12c. QC approve — stock actually moves
+**`POST /job-cards/{id}/qc/approve`** — no body. The caller needs an active `QC_APPROVAL`
+grant (12a); without one, expect **`403`** regardless of their `@Roles()` — role alone is
+no longer enough for this specific action.
+
+On success: every reservation still attached to the job (`HELD`/`PARTIALLY_RESERVED`) is
+marked `CONSUMED`, its quantity moves out of `MAIN_STORE` and into a `DAMAGE_LOCATION`
+stock row for the same part (a real double-entry movement, not a silent decrement), and
+the Job Card becomes `QC_PASSED`. Check it:
+
+**`GET /inventory/stock/{sparePartId}`** — `quantityOnHand` dropped by the consumed amount.
+**`GET /inventory/stock/{sparePartId}?location=DAMAGE_LOCATION`** — the new `?location=`
+query param (defaults to `MAIN_STORE` if omitted) shows the consumed total landed here.
+
+Try approving the same Job Card again → expect **`400`** (`QC_PASSED`, not `READY_FOR_QC`).
+
+### 12d. The negative-inventory hard gate
+This is the "never allow negative inventory" requirement, and it's a hard block, not a
+warning. Reserve more of a part than is actually on hand (Section 10e's `PARTIALLY_RESERVED`
+case), let an unrelated fully-held request flip the job back out of `SPARE_PENDING`, then
+`complete` it — the job reaches `READY_FOR_QC` (Phase 5's job-level check only looks at the
+*latest* request, not per-part — a pre-existing gap this gate compensates for). Now:
+
+**`POST /job-cards/{id}/qc/approve`** → expect **`409`**, with a `blockers` array naming
+exactly which spare part is still short and by how much.
+
+To resolve it: `POST /inventory/grn` to bring in more stock, then **`POST
+/workshop/{jobCardId}/request-spare`** again for the remaining shortfall — this now works
+even while the Job Card is `READY_FOR_QC` (not just `IN_PROGRESS`/`SPARE_PENDING`), because
+this exact top-up-after-the-gate-blocked-you scenario is the whole point of "reserved isn't
+necessarily final." The Job Card's status doesn't change either way (still `READY_FOR_QC`)
+— `qc/approve` just re-checks stock fresh on the next attempt and succeeds once the part's
+most recent reservation is fully `HELD`.
+
+### 12e. QC reject + the rework gate
+**`POST /job-cards/{id}/qc/reject`**
+```json
+{ "reason": "Compressor swap didn't fix the noise, needs another unit" }
+```
+Also needs an active `QC_APPROVAL` grant. Sends the job back to `IN_PROGRESS` and
+increments `qcRejectionCount` — nothing is ever consumed on a rejection, since nothing gets
+consumed until an approval.
+
+Now, if the *same* spare part gets requested again on this *same* job (a genuine rework —
+not the 12d top-up scenario, which never touches `qcRejectionCount`):
+
+**`POST /workshop/{jobCardId}/request-spare`** for that same part, no extra fields →
+expect **`400`** — it needs one of:
+```json
+{ "sparePartId": "...", "quantity": 1, "approverId": "<a different user with an active REWORK_APPROVAL grant>" }
+```
+or, if no one holding the grant is reachable:
+```json
+{ "sparePartId": "...", "quantity": 1, "verbalOverrideBy": "Supervisor Raj (phone, off-site)", "verbalOverrideNotes": "Confirmed verbally, will countersign tomorrow" }
+```
+`verbalOverrideNotes` needs at least 5 characters, or expect **`400`**. Setting `approverId`
+to the same user who's making the request → expect **`400`** (anti-self-dealing — the
+requester can never also be their own rework approver). An `approverId` who doesn't
+actually hold an active `REWORK_APPROVAL` grant → expect **`403`**.
+
+Complete and QC-approve the job again as usual (12b/12c) — both the original and the
+rework reservation get consumed together.
+
+### 12f. Prove the guardrails work
+- Try **12c** without a `QC_APPROVAL` grant → expect **`403`**.
+- Try **12c** on a job with a genuine stock shortfall → expect **`409`** with `blockers`.
+- Try **12e**'s rework re-request with no `approverId`/`verbalOverrideBy` → expect **`400`**.
+- Try `approverId === requestedByUserId` on a rework re-request → expect **`400`**.
+- Revoke a grant (`POST /permissions/revoke`, same body shape as 12a) and try **12c** again
+  as that same user → expect **`403`**.
+
+**Live-verified**: `scripts/phase6-e2e-test.ps1` runs this entire section end to end against
+a real server — happy-path consumption with real stock movement, the access-control story,
+the negative-inventory gate (blocked, then resolved via the READY_FOR_QC top-up in 12d), the
+full rework gate (blocked, anti-self-dealing, missing-grant, granted-and-succeeds, verbal
+override), a real concurrent-approval race (two Job Cards sharing two spare parts reserved
+in reverse order, `qc/approve` fired at the same time — no deadlock, correct totals), and
+the permissions admin surface. Run it yourself with `powershell -ExecutionPolicy Bypass
+-File scripts\phase6-e2e-test.ps1` while the dev server is up.
+
+One gap knowingly left as-is: Phase 5's `SPARE_PENDING`→`IN_PROGRESS` status flip is still
+job-level, not per-part (12d references this) — it can never cause negative inventory,
+because Phase 6's gate re-checks per-part before anything is ever consumed, but it's worth
+knowing the job-level status alone isn't proof every part on it is actually fully stocked.
 
 ---
 
@@ -925,19 +1056,20 @@ that's the signal to update this guide.
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 5** (Auth, Master Data, Appointments, Technician Mobile API, Job
-Cards, Estimates + Notifications, Workshop + Inventory) is real, working code you can
-exercise exactly as above — all 82 endpoints in Section 11 are live. Phases 6–8 (QC +
-Inventory auto-deduct, Delivery, Finance, Customer Portal) aren't built yet — their Swagger
+Everything through **Phase 6** (Auth, Master Data, Appointments, Technician Mobile API,
+Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions) is real,
+working code you can exercise exactly as above — all 89 endpoints in Section 11 are live.
+Phases 7–8 (Delivery + POD, Finance, Customer Portal) aren't built yet — their Swagger
 sections don't exist until we build them, so there's nothing to click there yet.
 
-Two known, deliberate gaps to be aware of while testing:
+One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider
   is wired up (Section 9b) — so the record-response phone/call path (9d) is the actually
   usable way to move an Estimate forward today.
-- **Spare-part consumption**: nothing yet permanently deducts a spare from `quantityOnHand`
-  when a job finishes normally (Section 10i) — only a confirmed physical return adds stock
-  back. This is exactly what Phase 6 builds first (see below).
+
+Spare-part consumption is no longer a gap — Section 12 covers the QC-approval step that
+permanently deducts a spare from `quantityOnHand` (Main Store → Damage Location) once a
+job passes QC.
 
 `docs/planning/STATUS_TRACKER.md` always reflects current status — check there first if
 you're unsure what's ready.

@@ -1,10 +1,14 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { InventoryStock, InventoryLocation } from './entities/inventory-stock.entity';
 import { InventoryReservation, ReservationStatus, ReviewDecision } from './entities/inventory-reservation.entity';
 import { SparePart } from '../master-data/entities/spare-part.entity';
 import { UserStatus } from '../auth/entities/user.entity';
+// Cross-module entity-class import for typing/transaction use only (not a @Module import,
+// so this does not create a Nest DI circular-module dependency) - the same established
+// pattern AuthService already uses for JobCard/InventoryReservation.
+import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 
 // The idle-reservation review cadence (mitigation for the-fool failure #3/#4): a
 // reservation sitting untouched this long shows up on GET /inventory/reservations/stale
@@ -40,8 +44,8 @@ export class InventoryService {
     return reservation;
   }
 
-  async getStock(sparePartId: string): Promise<InventoryStock | null> {
-    return this.stockRepository.findOne({ where: { sparePartId, location: InventoryLocation.MAIN_STORE } });
+  async getStock(sparePartId: string, location: InventoryLocation = InventoryLocation.MAIN_STORE): Promise<InventoryStock | null> {
+    return this.stockRepository.findOne({ where: { sparePartId, location } });
   }
 
   /**
@@ -83,6 +87,15 @@ export class InventoryService {
    * If less is available than requested, reserves what's available (PARTIALLY_RESERVED)
    * rather than failing outright - the caller (WorkshopService) decides what that means
    * for the Job Card's status.
+   *
+   * Phase 6: the three rework* params are set only when WorkshopService has determined
+   * this request is a same-part rework re-request (the job already had a QC rejection AND
+   * a prior reservation exists for this exact part on this exact job) - either a real
+   * supervisor/TL sign-off (reworkApprovedByUserId) or a verbal-override fallback
+   * (reworkVerbalOverrideBy/Notes). InventoryService itself does not enforce the gate -
+   * it just persists whatever WorkshopService already validated, keeping the
+   * access-control decision in one place (PermissionsService.requireActiveGrant, called
+   * from WorkshopService) rather than duplicated here.
    */
   async reserve(
     sparePartId: string,
@@ -91,6 +104,9 @@ export class InventoryService {
     custodianUserId: string,
     requestedByUserId: string,
     now: Date = new Date(),
+    reworkApprovedByUserId?: string,
+    reworkVerbalOverrideBy?: string,
+    reworkVerbalOverrideNotes?: string,
   ): Promise<InventoryReservation> {
     return this.dataSource.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sparePartId]);
@@ -115,9 +131,25 @@ export class InventoryService {
         status: quantityReserved >= quantity ? ReservationStatus.HELD : ReservationStatus.PARTIALLY_RESERVED,
         requestedByUserId,
         requestedAt: now,
+        reworkApprovedByUserId: reworkApprovedByUserId ?? null,
+        reworkVerbalOverrideBy: reworkVerbalOverrideBy ?? null,
+        reworkVerbalOverrideNotes: reworkVerbalOverrideNotes ?? null,
       });
       return manager.save(reservation);
     });
+  }
+
+  /**
+   * Phase 6 rework gate support: has this exact spare part ever been requested/reserved
+   * before on this exact Job Card, regardless of the reservation's current status? Used
+   * by WorkshopService.requestSpare() together with JobCard.qcRejectionCount > 0 to decide
+   * whether THIS request is a same-part rework re-request that needs sign-off. Both
+   * conditions must hold - a same-part top-up before any QC rejection is ordinary Phase 5
+   * behaviour and must NOT trigger this gate.
+   */
+  async hasPriorReservationForPart(jobCardId: string, sparePartId: string): Promise<boolean> {
+    const count = await this.reservationRepository.count({ where: { jobCardId, sparePartId } });
+    return count > 0;
   }
 
   /**
@@ -223,6 +255,138 @@ export class InventoryService {
     }
     active.forEach((r) => (r.status = ReservationStatus.RETURN_PENDING));
     return this.reservationRepository.save(active);
+  }
+
+  /**
+   * Phase 6 (FR-09/FR-10): the QC-approval gate and consumption, both in ONE atomic
+   * transaction - deliberately NOT split into "transition the Job Card" then "consume the
+   * stock" as two separate calls (that anti-pattern already exists in
+   * JobCardsController.cancel() and is low-stakes there; it would NOT be low-stakes here,
+   * since this deducts real, permanent stock). Everything below either all commits or all
+   * rolls back together.
+   *
+   * Hard stock-sufficiency gate (the negative-inventory requirement): for every spare
+   * part this job has an active reservation against, look at the MOST RECENT (by
+   * requestedAt) active reservation for that part - if it is still PARTIALLY_RESERVED,
+   * QC approval is blocked outright (409) with the specific parts named.
+   *
+   * Why "latest per part" and not "any row" or "sum requested vs reserved": a technician
+   * who gets a partial reservation and later tops up the shortfall makes a SEPARATE
+   * follow-up reserve() call (Phase 5 never mutates the original row), so the original
+   * PARTIALLY_RESERVED row sits there forever even after the part is fully covered.
+   * Blocking on "any row is PARTIALLY_RESERVED" would then block that job's QC approval
+   * permanently despite the shortfall being resolved. Summing quantityRequested across
+   * rows doesn't work either - a top-up's quantityRequested is "how much more I still
+   * need," not a repeat of the original ask, so summing double-counts. The one signal
+   * that's actually reliable is: for this part, did the LAST time anyone asked for it
+   * come back short? That mirrors the exact same logic WorkshopService.requestSpare()
+   * already uses to flip the whole Job Card between IN_PROGRESS/SPARE_PENDING (the latest
+   * request's outcome), just scoped per spare part instead of per job - which additionally
+   * closes a real gap in that job-level check: today a job can flip back to IN_PROGRESS
+   * because an unrelated second part's request was fully held, even while a different
+   * part is still genuinely short. This gate catches that case per part.
+   *
+   * Locking order (the-fool fix #1): a per-job-card advisory lock first (guards against
+   * two concurrent approve calls on the SAME job double-consuming), then every distinct
+   * spare part this job touches, sorted alphabetically by id, so two concurrent
+   * QC-approvals on different jobs that happen to share parts in reverse order can never
+   * deadlock against each other.
+   */
+  async consumeReservationsOnQcApproval(jobCardId: string, approvedByUserId: string, now: Date = new Date()): Promise<JobCard> {
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`jobcard:${jobCardId}`]);
+
+      const jobCard = await manager.findOne(JobCard, { where: { id: jobCardId } });
+      if (!jobCard) {
+        throw new NotFoundException(`Job Card ${jobCardId} not found`);
+      }
+      if (jobCard.status !== JobCardStatus.READY_FOR_QC) {
+        throw new BadRequestException(
+          `Cannot QC-approve a Job Card that is ${jobCard.status}, not READY_FOR_QC.`,
+        );
+      }
+
+      const activeReservations = await manager.find(InventoryReservation, {
+        where: [
+          { jobCardId, status: ReservationStatus.HELD },
+          { jobCardId, status: ReservationStatus.PARTIALLY_RESERVED },
+        ],
+      });
+
+      const latestByPart = new Map<string, InventoryReservation>();
+      for (const r of activeReservations) {
+        const current = latestByPart.get(r.sparePartId);
+        if (!current || r.requestedAt > current.requestedAt) {
+          latestByPart.set(r.sparePartId, r);
+        }
+      }
+
+      const shortfalls = Array.from(latestByPart.values())
+        .filter((r) => r.status === ReservationStatus.PARTIALLY_RESERVED)
+        .map((r) => ({ reservationId: r.id, sparePartId: r.sparePartId, quantityRequested: r.quantityRequested, quantityReserved: r.quantityReserved }));
+
+      if (shortfalls.length > 0) {
+        throw new ConflictException({
+          message: 'Cannot QC-approve: this job has spare part(s) whose most recent request was never fully reserved (stock shortfall). Complete the GRN/top-up first.',
+          blockers: shortfalls,
+        });
+      }
+
+      if (activeReservations.length === 0) {
+        // No spares were ever reserved against this job (e.g. a repair needing no parts) -
+        // valid, just nothing to consume. Fall through to the status transition below.
+      }
+
+      const sparePartIds = Array.from(new Set(activeReservations.map((r) => r.sparePartId))).sort();
+      for (const sparePartId of sparePartIds) {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sparePartId]);
+      }
+
+      for (const sparePartId of sparePartIds) {
+        const mainStock = await manager.findOne(InventoryStock, { where: { sparePartId, location: InventoryLocation.MAIN_STORE } });
+        const reservationsForPart = activeReservations.filter((r) => r.sparePartId === sparePartId);
+        const totalToConsume = reservationsForPart.reduce((sum, r) => sum + r.quantityReserved, 0);
+
+        // Defensive invariant check - reserve() should already guarantee
+        // quantityReserved never exceeds quantityOnHand, so this should never trip in
+        // practice. It exists purely so a data-integrity bug throws loudly here instead
+        // of ever silently pushing quantityOnHand negative.
+        if (!mainStock || mainStock.quantityOnHand < totalToConsume) {
+          throw new ConflictException(
+            `Cannot QC-approve: recorded stock for spare part ${sparePartId} (${mainStock?.quantityOnHand ?? 0} on hand) is less than what this job has reserved (${totalToConsume}). This indicates a stock data problem - resolve before approving.`,
+          );
+        }
+
+        let damageStock = await manager.findOne(InventoryStock, { where: { sparePartId, location: InventoryLocation.DAMAGE_LOCATION } });
+        if (!damageStock) {
+          damageStock = manager.create(InventoryStock, {
+            sparePartId,
+            location: InventoryLocation.DAMAGE_LOCATION,
+            quantityOnHand: 0,
+            quantityReserved: 0,
+          });
+        }
+
+        mainStock.quantityOnHand -= totalToConsume;
+        mainStock.quantityReserved = Math.max(0, mainStock.quantityReserved - totalToConsume);
+        damageStock.quantityOnHand += totalToConsume;
+
+        await manager.save(mainStock);
+        await manager.save(damageStock);
+
+        for (const reservation of reservationsForPart) {
+          reservation.status = ReservationStatus.CONSUMED;
+          reservation.consumedAt = now;
+          reservation.consumedByUserId = approvedByUserId;
+          await manager.save(reservation);
+        }
+      }
+
+      jobCard.status = JobCardStatus.QC_PASSED;
+      jobCard.qcApprovedByUserId = approvedByUserId;
+      jobCard.qcApprovedAt = now;
+      return manager.save(jobCard);
+    });
   }
 
   /**

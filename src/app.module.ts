@@ -10,6 +10,7 @@ import { EstimatesModule } from './estimates/estimates.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { WorkshopModule } from './workshop/workshop.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { PermissionsModule } from './permissions/permissions.module';
 // import { DeliveryModule } from './delivery/delivery.module';
 // import { FinanceModule } from './finance/finance.module';
 // import { AmcModule } from './amc/amc.module';
@@ -46,6 +47,7 @@ import { InventoryModule } from './inventory/inventory.module';
     NotificationsModule,
     InventoryModule,
     WorkshopModule,
+    PermissionsModule,
     // DeliveryModule,
     // FinanceModule,
     // AmcModule,

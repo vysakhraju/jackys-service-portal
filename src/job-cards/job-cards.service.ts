@@ -349,4 +349,36 @@ export class JobCardsService {
     jobCard.cancellationReason = reason;
     return this.jobCardRepository.save(jobCard);
   }
+
+  // --- Phase 6: QC gate --------------------------------------------------------------
+  // qcApprove is NOT here - it lives in InventoryService.consumeReservationsOnQcApproval()
+  // because approval must atomically consume reserved stock in the same transaction as
+  // the status transition (unlike cancel() above, this one can't be split across two
+  // separate calls - see that method's doc comment). qcReject stays here because a
+  // rejection never touches stock (nothing was ever consumed before QC passes) - it's a
+  // pure entity transition, same shape as every other gate in this file.
+
+  /**
+   * QC officer (or whoever holds the QC_APPROVAL grant - enforced at the controller via
+   * PermissionsService) rejects the finished work. Sends the job back to the workshop to
+   * be fixed properly (FR: "If they reject it, it goes back to the workshop"). Can happen
+   * more than once - qcRejectionCount tracks how many times, mirroring the
+   * warrantyOverride "latest snapshot + full history via @Audit()" pattern above.
+   */
+  async qcReject(id: string, reason: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status !== JobCardStatus.READY_FOR_QC) {
+      throw new BadRequestException(
+        `Cannot QC-reject a Job Card that is ${jobCard.status}, not READY_FOR_QC.`,
+      );
+    }
+
+    jobCard.status = JobCardStatus.IN_PROGRESS;
+    jobCard.qcRejectionCount += 1;
+    jobCard.lastQcRejectedAt = new Date();
+    jobCard.lastQcRejectionReason = reason;
+
+    return this.jobCardRepository.save(jobCard);
+  }
 }

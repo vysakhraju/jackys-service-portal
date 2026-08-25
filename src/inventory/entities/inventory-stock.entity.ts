@@ -11,11 +11,15 @@ import {
 import { SparePart } from '../../master-data/entities/spare-part.entity';
 
 export enum InventoryLocation {
-  // Only location populated in Phase 5. Schema allows more (van stock, damage location,
-  // per-service-centre stores) to be added later as data, not a code change - see
-  // InventoryReservation.custodianUserId for how technician custody is modeled instead
-  // of a location row per technician (dynamic with technician count, per design).
+  // Where stock lives while it's genuinely available to reserve.
   MAIN_STORE = 'MAIN_STORE',
+  // Phase 6 (FR-10): where a spare's quantity moves TO when a Job Card QC-passes and its
+  // reservations are permanently consumed - "Main Store -> Damage Location" per the spec.
+  // Modeled as a real second InventoryStock row (same shape, different location) rather
+  // than just decrementing MAIN_STORE, so consumption is a real double-entry movement:
+  // the numbers always balance and "how much of X did we actually use" stays queryable
+  // without mining audit logs. See InventoryService.consumeReservationsOnQcApproval().
+  DAMAGE_LOCATION = 'DAMAGE_LOCATION',
 }
 
 @Entity('inventory_stock')
@@ -41,10 +45,8 @@ export class InventoryStock {
   // this stock row. Available-to-reserve = quantityOnHand - quantityReserved. Kept on the
   // stock row itself (not derived by summing reservations on every read) so
   // InventoryService.reserve() can check + update it inside one advisory-locked
-  // transaction. The ONLY method allowed to change quantityOnHand is confirmReturn() /
-  // grn() - everything else (job cancellation, TL-approved reallocation, a technician's
-  // own return request) only moves a reservation to RETURN_PENDING and never touches
-  // this column. See InventoryService for the full invariant.
+  // transaction. Only MAIN_STORE rows ever carry a nonzero quantityReserved -
+  // DAMAGE_LOCATION only ever receives quantityOnHand from consumption.
   @Column({ type: 'int', default: 0 })
   quantityReserved: number;
 

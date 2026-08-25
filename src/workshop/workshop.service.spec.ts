@@ -7,6 +7,7 @@ describe('WorkshopService', () => {
   let service: WorkshopService;
   let jobCardsService: any;
   let inventoryService: any;
+  let permissionsService: any;
 
   const jobCard = (overrides: any = {}) =>
     ({
@@ -15,6 +16,7 @@ describe('WorkshopService', () => {
       status: JobCardStatus.IN_PROGRESS,
       section: JobCardSection.WORKSHOP,
       assignedWorkshopTechnicianId: 'tech-1',
+      qcRejectionCount: 0,
       ...overrides,
     } as any);
 
@@ -31,8 +33,12 @@ describe('WorkshopService', () => {
       hasUnresolvedStaleReservation: jest.fn().mockResolvedValue(null),
       reserve: jest.fn(),
       getStaleReservations: jest.fn().mockResolvedValue([]),
+      hasPriorReservationForPart: jest.fn().mockResolvedValue(false),
     };
-    service = new WorkshopService(jobCardsService, inventoryService);
+    permissionsService = {
+      requireActiveGrant: jest.fn().mockResolvedValue(undefined),
+    };
+    service = new WorkshopService(jobCardsService, inventoryService, permissionsService);
   });
 
   describe('assign', () => {
@@ -101,7 +107,7 @@ describe('WorkshopService', () => {
 
       await service.requestSpare('jc-1', 'part-1', 1, 'tl-caller-id', 'tl-caller-id', true);
 
-      expect(inventoryService.reserve).toHaveBeenCalledWith('part-1', 1, 'jc-1', 'tech-1', 'tl-caller-id');
+      expect(inventoryService.reserve).toHaveBeenCalledWith('part-1', 1, 'jc-1', 'tech-1', 'tl-caller-id', undefined, undefined, undefined, undefined);
     });
 
     it('is blocked when this job already has an unreviewed stale reservation past 48h', async () => {
@@ -122,6 +128,139 @@ describe('WorkshopService', () => {
       jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: null }));
 
       await expect(service.requestSpare('jc-1', 'part-1', 1, 'tl-1', 'tl-1', true)).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('requestSpare - Phase 6 READY_FOR_QC top-up (resolving a negative-inventory-gate block)', () => {
+    it('allows a top-up request from READY_FOR_QC (not just IN_PROGRESS/SPARE_PENDING)', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC }));
+      inventoryService.reserve.mockResolvedValue({ id: 'res-2', status: ReservationStatus.HELD, quantityReserved: 3 });
+
+      await expect(service.requestSpare('jc-1', 'part-1', 3, 'tech-1', 'tech-1', false)).resolves.toBeDefined();
+      expect(inventoryService.reserve).toHaveBeenCalled();
+    });
+
+    it('leaves a READY_FOR_QC job at READY_FOR_QC when the top-up fully covers the shortfall (does not call resumeFromSparePending)', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC }));
+      inventoryService.reserve.mockResolvedValue({ id: 'res-2', status: ReservationStatus.HELD, quantityReserved: 3 });
+
+      await service.requestSpare('jc-1', 'part-1', 3, 'tech-1', 'tech-1', false);
+
+      expect(jobCardsService.resumeFromSparePending).not.toHaveBeenCalled();
+      expect(jobCardsService.setSparePending).not.toHaveBeenCalled();
+    });
+
+    it('leaves a READY_FOR_QC job at READY_FOR_QC even when the top-up is still only partial (does not call setSparePending)', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC }));
+      inventoryService.reserve.mockResolvedValue({ id: 'res-2', status: ReservationStatus.PARTIALLY_RESERVED, quantityReserved: 1 });
+
+      await service.requestSpare('jc-1', 'part-1', 3, 'tech-1', 'tech-1', false);
+
+      expect(jobCardsService.setSparePending).not.toHaveBeenCalled();
+      expect(jobCardsService.resumeFromSparePending).not.toHaveBeenCalled();
+    });
+
+    it('a READY_FOR_QC top-up is NOT gated by rework approval when the job was never actually QC-rejected (qcRejectionCount stays 0 on a blocked-but-not-rejected approve attempt)', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC, qcRejectionCount: 0 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(true);
+      inventoryService.reserve.mockResolvedValue({ id: 'res-2', status: ReservationStatus.HELD, quantityReserved: 3 });
+
+      await service.requestSpare('jc-1', 'part-1', 3, 'tech-1', 'tech-1', false);
+
+      expect(permissionsService.requireActiveGrant).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('requestSpare - Phase 6 rework gate', () => {
+    it('does NOT trigger the gate on an ordinary top-up before any QC rejection, even if the part was requested before', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.SPARE_PENDING, qcRejectionCount: 0 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(true); // same part requested before...
+      inventoryService.reserve.mockResolvedValue({ id: 'res-1', status: ReservationStatus.HELD, quantityReserved: 1 });
+
+      await service.requestSpare('jc-1', 'part-1', 1, 'tech-1', 'tech-1', false);
+
+      // ...but qcRejectionCount is 0, so no approval/verbal-override was required.
+      expect(inventoryService.reserve).toHaveBeenCalled();
+      expect(permissionsService.requireActiveGrant).not.toHaveBeenCalled();
+    });
+
+    it('does NOT trigger the gate for a first-time request even after a QC rejection', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, qcRejectionCount: 1 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(false); // never requested before
+      inventoryService.reserve.mockResolvedValue({ id: 'res-1', status: ReservationStatus.HELD, quantityReserved: 1 });
+
+      await service.requestSpare('jc-1', 'part-2', 1, 'tech-1', 'tech-1', false);
+
+      expect(inventoryService.reserve).toHaveBeenCalled();
+      expect(permissionsService.requireActiveGrant).not.toHaveBeenCalled();
+    });
+
+    it('triggers the gate when the same part is re-requested on a job with a prior QC rejection, and passes with a valid approver', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, qcRejectionCount: 1 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(true);
+      inventoryService.reserve.mockResolvedValue({ id: 'res-1', status: ReservationStatus.HELD, quantityReserved: 1 });
+
+      await service.requestSpare('jc-1', 'part-1', 1, 'tech-1', 'tech-1', false, 'tl-approver-1');
+
+      expect(permissionsService.requireActiveGrant).toHaveBeenCalledWith('tl-approver-1', 'REWORK_APPROVAL');
+      expect(inventoryService.reserve).toHaveBeenCalledWith('part-1', 1, 'jc-1', 'tech-1', 'tech-1', undefined, 'tl-approver-1', undefined, undefined);
+    });
+
+    it('hard-enforces approverId !== requester - the requester cannot approve their own rework re-request', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, qcRejectionCount: 1 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(true);
+
+      await expect(
+        service.requestSpare('jc-1', 'part-1', 1, 'tech-1', 'tech-1', false, 'tech-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(inventoryService.reserve).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the named approver does not hold an active REWORK_APPROVAL grant', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, qcRejectionCount: 1 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(true);
+      permissionsService.requireActiveGrant.mockRejectedValue(new ForbiddenException('no grant'));
+
+      await expect(
+        service.requestSpare('jc-1', 'part-1', 1, 'tech-1', 'tech-1', false, 'not-a-real-approver'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(inventoryService.reserve).not.toHaveBeenCalled();
+    });
+
+    it('accepts a verbal override fallback (with notes) when no approver is reachable', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, qcRejectionCount: 1 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(true);
+      inventoryService.reserve.mockResolvedValue({ id: 'res-1', status: ReservationStatus.HELD, quantityReserved: 1 });
+
+      await service.requestSpare(
+        'jc-1', 'part-1', 1, 'tech-1', 'tech-1', false,
+        undefined, 'Supervisor Raj (phone)', 'No TL reachable on-site, urgent customer pickup',
+      );
+
+      expect(permissionsService.requireActiveGrant).not.toHaveBeenCalled();
+      expect(inventoryService.reserve).toHaveBeenCalledWith(
+        'part-1', 1, 'jc-1', 'tech-1', 'tech-1', undefined, undefined, 'Supervisor Raj (phone)', 'No TL reachable on-site, urgent customer pickup',
+      );
+    });
+
+    it('rejects a verbal override with no/too-short notes', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, qcRejectionCount: 1 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(true);
+
+      await expect(
+        service.requestSpare('jc-1', 'part-1', 1, 'tech-1', 'tech-1', false, undefined, 'Supervisor Raj', 'ok'),
+      ).rejects.toThrow(BadRequestException);
+      expect(inventoryService.reserve).not.toHaveBeenCalled();
+    });
+
+    it('rejects a same-part rework re-request with neither an approver nor a verbal override', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, qcRejectionCount: 1 }));
+      inventoryService.hasPriorReservationForPart.mockResolvedValue(true);
+
+      await expect(
+        service.requestSpare('jc-1', 'part-1', 1, 'tech-1', 'tech-1', false),
+      ).rejects.toThrow(BadRequestException);
+      expect(inventoryService.reserve).not.toHaveBeenCalled();
     });
   });
 

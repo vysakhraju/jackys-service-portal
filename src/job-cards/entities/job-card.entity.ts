@@ -31,8 +31,15 @@ export enum JobCardStatus {
   // until either more stock arrives and the technician tops up, or the shortfall is
   // otherwise resolved. Moves back to IN_PROGRESS once a request-spare call is fully filled.
   SPARE_PENDING = 'SPARE_PENDING',
-  // Work is done, waiting for Phase 6's QC step.
+  // Work is done, frozen waiting for QC. Only qcApprove/qcReject (guarded by
+  // PermissionType.QC_APPROVAL, admin-assignable to any user) can move it out of here.
   READY_FOR_QC = 'READY_FOR_QC',
+  // Phase 6: QC officer (or whoever holds the QC_APPROVAL grant) approved the job.
+  // Reservations for this job are atomically consumed (Main Store -> Damage Location) in
+  // the same transaction that sets this status - see
+  // InventoryService.consumeReservationsOnQcApproval(). Terminal for the repair workflow;
+  // later phases (Delivery/Invoice) pick up from here.
+  QC_PASSED = 'QC_PASSED',
   CANCELLED = 'CANCELLED',
 }
 
@@ -139,6 +146,29 @@ export class JobCard {
 
   @Column({ type: 'timestamp', nullable: true })
   workshopAssignedAt: Date | null;
+
+  // Phase 6 QC gate. Mirrors the warrantyOverride "latest snapshot on the entity, full
+  // history via @Audit()" pattern above. qcApproved*/lastQcRejected* are both nullable and
+  // independent - a job can be rejected any number of times (qcRejectionCount increments
+  // each time) before eventually being approved.
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'qcApprovedByUserId' })
+  qcApprovedByUser: User | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  qcApprovedByUserId: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  qcApprovedAt: Date | null;
+
+  @Column({ type: 'int', default: 0 })
+  qcRejectionCount: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  lastQcRejectedAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  lastQcRejectionReason: string | null;
 
   @Column({ type: 'text', nullable: true })
   cancellationReason: string | null;

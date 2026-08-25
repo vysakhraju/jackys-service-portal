@@ -57,12 +57,23 @@ export class WorkshopController {
     entityType: 'InventoryReservation',
     getNewValues: (result) => ({ id: result?.id, status: result?.status, quantityReserved: result?.quantityReserved }),
   })
-  @ApiOperation({ summary: 'FR-09: reserve (not deduct) a spare part from Main Store for this job' })
+  @ApiOperation({ summary: 'FR-09: reserve (not deduct) a spare part from Main Store for this job. If this exact part was already requested once before on this job AND the job has a prior QC rejection, this is a rework re-request and requires approverId (REWORK_APPROVAL grant, must differ from requester) or a verbal override (verbalOverrideBy + verbalOverrideNotes).' })
   @ApiResponse({ status: 201 })
-  @ApiResponse({ status: 400, description: 'Wrong status, or a stale reservation on this job needs TL review first' })
+  @ApiResponse({ status: 400, description: 'Wrong status, a stale reservation on this job needs TL review first, or a rework re-request is missing approval/verbal-override' })
+  @ApiResponse({ status: 403, description: 'The named rework approver does not hold an active REWORK_APPROVAL grant' })
   async requestSpare(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @Body() dto: RequestSpareDto, @CurrentUser() user: User, @Request() req: any) {
     const isPrivileged = PRIVILEGED_ROLES.includes(req.user.role?.name);
-    return this.workshopService.requestSpare(jobCardId, dto.sparePartId, dto.quantity, user.id, user.id, isPrivileged);
+    return this.workshopService.requestSpare(
+      jobCardId,
+      dto.sparePartId,
+      dto.quantity,
+      user.id,
+      user.id,
+      isPrivileged,
+      dto.approverId,
+      dto.verbalOverrideBy,
+      dto.verbalOverrideNotes,
+    );
   }
 
   @Post(':jobCardId/complete')

@@ -48,6 +48,11 @@ describe('JobCardsService', () => {
     overrideCount: 0,
     customerApproved: false,
     customerApprovalNotes: null,
+    qcApprovedByUserId: null,
+    qcApprovedAt: null,
+    qcRejectionCount: 0,
+    lastQcRejectedAt: null,
+    lastQcRejectionReason: null,
     createdById: 'user-1',
     ...overrides,
   });
@@ -489,6 +494,39 @@ describe('JobCardsService', () => {
       jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC }));
 
       await expect(service.cancel('jc-1', 'too late')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('qcReject - Phase 6 QC gate', () => {
+    it('sends a READY_FOR_QC job back to the workshop (IN_PROGRESS) and records the rejection', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC, qcRejectionCount: 0 }));
+
+      const result = await service.qcReject('jc-1', 'Solder joint still loose on the compressor board');
+
+      expect(result.status).toBe(JobCardStatus.IN_PROGRESS);
+      expect(result.qcRejectionCount).toBe(1);
+      expect(result.lastQcRejectionReason).toBe('Solder joint still loose on the compressor board');
+      expect(result.lastQcRejectedAt).toBeInstanceOf(Date);
+    });
+
+    it('increments qcRejectionCount across repeated rejections rather than resetting it', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC, qcRejectionCount: 2 }));
+
+      const result = await service.qcReject('jc-1', 'Still failing the leak test');
+
+      expect(result.qcRejectionCount).toBe(3);
+    });
+
+    it('rejects QC-rejecting a Job Card that is not READY_FOR_QC', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+
+      await expect(service.qcReject('jc-1', 'not applicable yet')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws NotFoundException for an unknown Job Card', async () => {
+      jobCardRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.qcReject('missing', 'irrelevant')).rejects.toThrow(NotFoundException);
     });
   });
 });

@@ -23,6 +23,11 @@ export enum ReservationStatus {
   RETURN_PENDING = 'RETURN_PENDING',
   // Physically confirmed back in Main Store. Terminal.
   RETURNED = 'RETURNED',
+  // Phase 6 (FR-10): permanently consumed on QC approval - moved Main Store -> Damage
+  // Location and will never come back. Terminal, distinct from RETURNED (which is stock
+  // going back INTO Main Store, not out of it). Set only by
+  // InventoryService.consumeReservationsOnQcApproval().
+  CONSUMED = 'CONSUMED',
 }
 
 export enum ReviewDecision {
@@ -114,6 +119,39 @@ export class InventoryReservation {
 
   @Column({ type: 'timestamp', nullable: true })
   returnConfirmedAt: Date | null;
+
+  // Phase 6 (FR-10): set when this reservation is permanently consumed on QC approval.
+  @Column({ type: 'timestamp', nullable: true })
+  consumedAt: Date | null;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'consumedByUserId' })
+  consumedBy: User | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  consumedByUserId: string | null;
+
+  // Phase 6 rework gate: if this reservation was created because the SAME spare part was
+  // already consumed/reserved once before on this same Job Card (a rework re-request),
+  // one of the two pairs below must be populated - either a real supervisor/TL sign-off
+  // (reworkApprovedByUserId, checked against PermissionType.REWORK_APPROVAL) or a verbal
+  // override fallback (reworkVerbalOverrideBy + notes) when no one with that grant is
+  // reachable. Both null means this reservation was NOT a rework re-request (first time
+  // this part was requested on this job, or a same-part top-up before any QC rejection -
+  // see WorkshopService.requestSpare()). Latest-only on the reservation row; the full
+  // history of every request is still in the audit log via @Audit().
+  @Column({ type: 'uuid', nullable: true })
+  reworkApprovedByUserId: string | null;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'reworkApprovedByUserId' })
+  reworkApprovedBy: User | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  reworkVerbalOverrideBy: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  reworkVerbalOverrideNotes: string | null;
 
   @UpdateDateColumn()
   updatedAt: Date;
