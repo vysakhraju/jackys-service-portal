@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-25
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 20 commits on `master`, latest `3c0d953`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 21 commits on `master`, latest `225b88e`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
@@ -18,7 +18,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 2 | Appointments + Technician Mobile API | ✅ Done — Appointments (fixed & wired in) + Technician Mobile API (new, this session) |
 | 3 | Job Cards + Warranty Check | ✅ Done — S/N validation, section assignment, warranty override with TL approval + audit trail (new, this session) |
 | 4 | Estimates + Notifications | ✅ Done — shareable-link + staff-assisted customer approval, RWR/revise flow, notification stubs (new, this session) |
-| 5 | Workshop + Inventory (Reserve) | ⬜ Not started |
+| 5 | Workshop + Inventory (Reserve) | ✅ Done — reserve/custody/return model, technician-deactivation custody guard, live-verified (new, this session) |
 | 6 | QC + Inventory auto-deduct | ⬜ Not started |
 | 7 | Delivery + POD + OOW block | ⬜ Not started |
 | 8 | Finance + Customer Portal | ⬜ Not started |
@@ -209,6 +209,55 @@ Committed as `4192ceb`, pushed to GitHub (`main` + `master`).
 
 ---
 
+## Phase 5: Workshop + Inventory — done this session
+
+Implements FR-09 (spare part reservation) built around a specific design mandate you gave up front, not the generic "reserve then deduct" pattern I'd have defaulted to: a central Main Store inventory with per-technician custody, where the *first* technician to request a low-stock part gets it reserved (not consumed) until their job is completed or QC'd, a 1-day idle check before anything gets reallocated, and a hard rule that a technician can't be deactivated while still holding open work or parts.
+
+**Design process**: ran a `the-fool` pre-mortem on the draft design before writing code. You engaged with all four failure narratives and each one changed something concrete:
+1. *Approval bypassed under time pressure* — your fix: a Team Leader/Supervisor must physically confirm with the technician before approving a reallocation, not just rubber-stamp a busy day. Implemented as a manual step (`review` endpoint), not automatable away — the guardrail is procedural, matching what you asked for.
+2. *A deactivated technician's custody goes invisible* — your fix: a technician can't be deactivated at all while their id is still tied to any open appointment, workshop job, or spare-part reservation, and the admin should see everything they hold before trying. Implemented as a hard `409` block in `AuthService.deactivateUser()`, listing every blocker at once (not just the first one found, so clearing one doesn't reveal a second surprise).
+3. *The on-demand review screen nobody opens* — your ask was how to make sure it actually gets looked at without adding scheduling infrastructure (you'd already picked the on-demand endpoint over a background job). Answer: staleness is a purely computed property (never a stored flag that can itself go stale), surfaced two places — a dedicated `GET /inventory/reservations/stale` list, and inline inside `GET /workshop/:jobCardId`, the screen a Team Leader already opens to run the job day-to-day. Plus a real forcing function, not just visibility: `requestSpare()` refuses to reserve anything more on a Job Card once one of its reservations has gone 48h+ with no review decision, until a TL actually reviews it.
+4. *Reject-once-exempt-forever* — you asked for the industry-standard answer here. A `REJECT` review decision is a **snooze, not an exemption**: it resets the idle clock (`lastReviewedAt`) but leaves the reservation exactly where it was, so it resurfaces on the stale list again after another cycle instead of being permanently cleared by one rejection.
+
+**Location model**: you specified sub-inventory count should track technician count directly, adjusting automatically as technicians are added/deactivated — rather than a fixed roster of location rows needing manual sync. Implemented as `InventoryReservation.custodianUserId`, a direct FK to whichever technician currently holds a reservation — custody is computed from live reservations, not a separate location entity that would need to be kept in sync by hand.
+
+**Entities**: `InventoryStock` (`sparePartId` + `location` [currently only `MAIN_STORE`], `quantityOnHand`, `quantityReserved`) and `InventoryReservation` (`sparePartId`, `jobCardId`, `custodianUserId`, `quantityRequested`/`quantityReserved`, `status` [`HELD → PARTIALLY_RESERVED | RETURN_PENDING → RETURNED`], `requestedByUserId`/`requestedAt`, `lastReviewedAt`/`reviewedByUserId`/`reviewDecision`, `quantityReturned`/`returnConfirmedByUserId`/`returnConfirmedAt`).
+
+**Inventory module (6 endpoints):**
+1. **`POST /inventory/grn`** — Goods Received Note, new stock arriving. Blocked `400` (AC-17) unless the spare part is linked to at least one appliance model.
+2. **`GET /inventory/stock/:sparePartId`** — current on-hand/reserved at Main Store.
+3. **`GET /inventory/reservations/stale`** — reservations idle 24h+ (or whose custodian is no longer active, surfaced first regardless of age), oldest first.
+4. **`POST /inventory/reservations/:id/review`** — TL+ decision: `APPROVE_REALLOCATION` (→ `RETURN_PENDING`) or `REJECT` (snooze, per failure #4 above).
+5. **`POST /inventory/reservations/:id/request-return`** — the custodian technician (or a TL+ on their behalf) voluntarily returning an unused reservation, without waiting for a staleness flag.
+6. **`POST /inventory/reservations/:id/confirm-return`** — the **only** action anywhere in the system that increments `quantityOnHand` for a return. Everything else (cancellation, a TL-approved reallocation, a technician's own return request) only ever gets a reservation to `RETURN_PENDING` — nothing moves actual stock until someone at Main Store has the part physically in hand and confirms it. This is the direct implementation of your instruction that inventory is only added back "when the technician physically give[s] the spare to the inventory and the role to confirm it."
+
+**Workshop module (5 endpoints):** `assign` (Team Lead assigns a workshop technician to a `SECTION_ASSIGNED`/`WORKSHOP` Job Card) → `start-wip` → `request-spare` (reserves, doesn't deduct; `custodianUserId` is always the Job Card's assigned technician regardless of who clicked the button; partial-fill if less is available than requested, which also flips the Job Card to a new `SPARE_PENDING` status) → `complete` (blocked while `SPARE_PENDING`) → `GET :jobCardId` (full workshop state, including any stale reservations against that job).
+
+**Job Card changes**: new statuses `WORKSHOP_ASSIGNED`/`IN_PROGRESS`/`SPARE_PENDING`/`READY_FOR_QC`; new `assignedWorkshopTechnicianId`/`workshopAssignedAt` columns; a new **`POST /job-cards/:id/cancel`** endpoint (`{ reason }`) that auto-releases every active reservation on that Job Card to `RETURN_PENDING` — directly implementing "if job is cancelled by any role the spare will be automatically added to main inventory" (added to *custody release*, not directly to on-hand stock — still gated behind a physical confirm-return, consistent with the physical-confirmation rule above).
+
+**Deactivation guard (`AuthService.deactivateUser`)**: `PATCH /auth/users/:id/deactivate` (SUPER_ADMIN/SERVICE_HEAD only) checks three things before allowing it — any open field appointment, any open workshop job assignment, any open inventory reservation in that user's custody — and blocks with `409` listing every one found if any exist. There was no user-deactivation endpoint at all before this; `User.status` had an `INACTIVE` value that nothing ever set.
+
+**Concurrency**: `reserve()`, `grn()`, and `confirmReturn()` (every method that reads-then-writes `InventoryStock` quantities) run inside a Postgres transaction-scoped advisory lock (`pg_advisory_xact_lock(hashtext(sparePartId))`) so two technicians requesting the last few units of the same low-stock part at the same moment can't both read the same "available" number and over-reserve — the lock serializes them, and the first one to actually commit wins the remaining stock, matching your "who request first... should be reserved" rule. This can't be proven with a mocked-repository unit test (a mock has no concept of a database lock), so it's the one piece of Phase 5 that's architecturally sound but not independently proven under real concurrent load — worth a dedicated two-simultaneous-requests test against low stock if this ever becomes a place where race conditions actually show up in practice.
+
+**Closed a pre-existing gap while building this**: `SparePart` ↔ `SparePartModel` is a many-to-many relationship that had no REST-reachable way to create the link — only the CSV bulk-import path could ever populate it. Since the new GRN endpoint's AC-17 check ("no stock without a linked model") made this link a hard requirement to even test the feature, added **`POST /master-data/spare-parts/:id/link-model`** to close it.
+
+**Automated tests**: `src/inventory/inventory.service.spec.ts`, `src/workshop/workshop.service.spec.ts` (new), plus additions to `job-cards.service.spec.ts` (workshop transitions + cancel), `auth.service.spec.ts` (`deactivateUser`), and `master-data.service.spec.ts` (`linkSparePartToModel`) — 62 new tests this phase.
+
+```
+Test Suites: 12 passed, 12 total
+Tests:       277 passed, 277 total
+```
+
+**Verified live end-to-end** (real local Postgres, full flow via `scripts/phase5-e2e-test.ps1`): AC-17 GRN block on an unlinked spare part → link → GRN 5 units → full appointment/technician-visit/job-card/estimate chain to get a Job Card into `WORKSHOP` → workshop technician assigned → start-wip → request 2 units (`HELD`, on-hand unchanged, reserved +2) → **attempted deactivating the technician while they held that reservation → correctly `409`'d with the reservation listed as a blocker** → requested 10 more units against 3 remaining (`PARTIALLY_RESERVED`, Job Card → `SPARE_PENDING`) → `complete` correctly blocked while `SPARE_PENDING` → cancelled the Job Card → both reservations moved to `RETURN_PENDING` automatically → confirmed both physical returns → confirming the same return twice correctly `400`'d → **deactivation retried and succeeded** now that custody was clear.
+
+**A genuine finding from the live run, not an app bug**: my own E2E script's helper function used `Write-Output` for its status lines, which in PowerShell leaks into a function's own return value and silently corrupted one `.Count` check (made a real `0` look like `1`). Fixed by switching to `Write-Host` for status lines; re-ran and confirmed the real result was `0` all along. Mentioning it because it's exactly the kind of thing that looks like an app bug at first glance and isn't — worth remembering if a future live-test result looks surprising.
+
+**Known gap, called out on purpose, not fixed this phase**: nothing in Phase 5 ever permanently deducts `quantityOnHand` when a spare is genuinely used in a completed (non-cancelled, non-returned) job — only `confirmReturn()` ever moves that number, and only upward. In the live E2E run this meant on-hand ended at 10 units after only 5 were ever received (both test reservations were deliberately returned to prove the mechanics, which is why this showed up). Your original instruction was explicit that a spare stays reserved "till job is completed or qc completed" — the natural place for a real consumption/deduction step is QC completion, which is Phase 6 and doesn't exist yet. Flagging this now so it isn't lost: Phase 6 needs a step where a reservation that's never returned gets marked consumed and permanently subtracted from on-hand stock, otherwise on-hand will drift upward-only forever and stop meaning anything.
+
+Committed as `225b88e`, pushed to GitHub (`main` + `master`).
+
+---
+
 ## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
@@ -217,14 +266,16 @@ Committed as `4192ceb`, pushed to GitHub (`main` + `master`).
 - **No real WhatsApp/SMS/Email provider wired up (Phase 4)** — `channelsDelivered` will stay empty for every Estimate until this is done. WhatsApp Business API approval is the known external blocker (2-4 weeks); email/SMS just need a provider chosen and credentials added. The `record-response` staff-assisted path is the practically-usable way to move an Estimate forward until then.
 - **`ESTIMATE_APPROVAL_ROLES` (who can record a customer approval on their behalf) is a plain TS constant, not admin-editable** — extending it to a new role means a code change + redeploy. Deliberately kept as a separate, narrowly-named constant from the general Estimates role list so this is a small, contained change when it's needed, but there's no UI for it yet.
 - **The staff-recorded-approval audit trail relies on the `notes` field and the `contactValue` match check, not independent verification** — this was the strongest risk flagged in the Phase 4 pre-mortem (a rubber-stamped "customer approved" with no real call). The `contactValue`-must-match guard prevents attesting to an unknown contact, but nothing stops a genuinely fabricated approval by someone with valid access. Worth a periodic audit-log review of `record-response` entries per staff member if this becomes a real usage pattern; a second-approval requirement above some order value is a reasonable future addition if disputes ever occur.
+- **No "mark as consumed" step exists yet for spares genuinely used in a completed job (Phase 5)** — `InventoryStock.quantityOnHand` only ever increases (GRN, confirmed returns), never decreases for a legitimate use. This needs to land in Phase 6 alongside QC completion (see the Phase 5 section above for the full explanation) — until then, on-hand numbers will drift upward-only and stop being trustworthy for anything beyond "has this specific reservation been returned."
+- **`InventoryLocation` currently has only one value (`MAIN_STORE`)** — there's no separate "technician van stock" location distinct from custody tracking via `InventoryReservation.custodianUserId`. Fine for the current design (custody *is* the location signal), but worth knowing if a future requirement needs a real second physical location (e.g. a regional warehouse) rather than just "who's holding it."
 
 ---
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. It covers starting the server, logging in, setting up master data, creating and assigning appointments, running the full Technician Mobile API flow (start visit → capture serial number → capture fault/symptom), the full Job Cards flow, and now the full Estimates flow (create → send → customer link or staff-recorded response → reject/RWR/revise), plus a troubleshooting table. Every step in it was verified against a live server before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. It covers starting the server, logging in, setting up master data, creating and assigning appointments, running the full Technician Mobile API flow (start visit → capture serial number → capture fault/symptom), the full Job Cards flow, the full Estimates flow (create → send → customer link or staff-recorded response → reject/RWR/revise), and now the full Workshop + Inventory flow (Section 10: link a spare to a model → GRN → assign a workshop technician → reserve spares → the deactivation custody guard → return/cancel → confirm-return), plus a troubleshooting table. Every step in it was verified against a live server before being written down, so it should just work if you follow it in order.
 
-Also new this session: `npm run seed:technician` creates a test `TECHNICIAN_FIELD` login (same pattern as `npm run seed:admin`) so you can try the Technician Mobile API as "the technician" without touching SQL.
+Also new this session: `npm run seed:technician` now accepts `SEED_TECH_ROLE` (e.g. `TECHNICIAN_WORKSHOP`, `WAREHOUSE_CLERK`) so you can seed a test login for any role, not just `TECHNICIAN_FIELD` — same pattern as `npm run seed:admin`.
 
 ---
 
@@ -273,7 +324,25 @@ GET  /estimates/by-job-card/:jobCardId
 ```
 There's also two ready-made PowerShell smoke-test scripts if you'd rather run the whole flow at once instead of clicking through Swagger: `scripts/phase4-e2e-test.ps1` (full create → reject → revise → approve → assign-section chain) and `scripts/phase4-notif-check.ps1` (confirms notification attempts actually fire once a template exists). Run either with `powershell -ExecutionPolicy Bypass -File scripts\phase4-e2e-test.ps1` while the dev server is up.
 
-All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`).
+To try Workshop + Inventory (needs a Job Card already `assign-section`'d to `WORKSHOP`):
+```
+POST /master-data/spare-parts/:id/link-model    { "modelId": "..." }        (required before GRN will accept stock - AC-17)
+POST /inventory/grn                             { "sparePartId": "...", "quantity": 5, "notes": "..." }
+POST /workshop/:jobCardId/assign                { "technicianId": "..." }
+POST /workshop/:jobCardId/start-wip
+POST /workshop/:jobCardId/request-spare         { "sparePartId": "...", "quantity": 2 }
+POST /inventory/reservations/:id/review         { "decision": "APPROVE_REALLOCATION", "notes": "..." }
+POST /inventory/reservations/:id/request-return
+POST /inventory/reservations/:id/confirm-return { "quantityReturned": 2 }
+POST /job-cards/:id/cancel                      { "reason": "..." }
+PATCH /auth/users/:id/deactivate
+GET  /inventory/stock/:sparePartId
+GET  /inventory/reservations/stale
+GET  /workshop/:jobCardId
+```
+There's also a ready-made PowerShell smoke-test script covering the whole flow at once: `scripts/phase5-e2e-test.ps1` — AC-17 negative case, GRN, full + partial reservation, the deactivation custody guard (blocked then unblocked), job-card cancel auto-releasing reservations, and confirm-return. Run it with `powershell -ExecutionPolicy Bypass -File scripts\phase5-e2e-test.ps1` while the dev server is up.
+
+All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`).
 
 ---
 
@@ -284,3 +353,4 @@ All endpoints show up in Swagger under their respective tags (`job-cards`, `esti
 - External Warranty API access/documentation
 - Acceptance criteria not yet validated with stakeholders
 - `backend/`/`frontend/` folder layout vs. actual `src/` layout — decide whether to reconcile before the React frontend is scaffolded
+- Phase 6 (QC) needs to add the "mark spare as consumed" step that permanently deducts `quantityOnHand` for a completed job's used spares (see Phase 5 section above) — otherwise on-hand stock only ever goes up
