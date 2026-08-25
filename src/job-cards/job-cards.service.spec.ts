@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { JobCardsService } from './job-cards.service';
 import { JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
+import { IsNull } from 'typeorm';
 
 describe('JobCardsService', () => {
   let service: JobCardsService;
@@ -65,6 +66,7 @@ describe('JobCardsService', () => {
     };
     jobCardRepository = {
       findOne: jest.fn(),
+      find: jest.fn(),
       create: jest.fn((data: any) => data),
       save: jest.fn((data: any) => Promise.resolve({ ...data, id: data.id || 'jc-1' })),
       createQueryBuilder: jest.fn(() => queryBuilder),
@@ -495,6 +497,21 @@ describe('JobCardsService', () => {
 
       await expect(service.cancel('jc-1', 'too late')).rejects.toThrow(BadRequestException);
     });
+
+    // Phase 7: closes a gap Delivery's existence newly makes reachable - stock is already
+    // permanently consumed at QC_PASSED (Phase 6), and DELIVERED means the unit is back
+    // with the customer. Neither has a compensating stock/delivery-reversal path.
+    it('rejects cancelling a Job Card that is QC_PASSED - stock already consumed', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.QC_PASSED }));
+
+      await expect(service.cancel('jc-1', 'too late')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects cancelling a Job Card that has already been DELIVERED', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.DELIVERED }));
+
+      await expect(service.cancel('jc-1', 'too late')).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe('qcReject - Phase 6 QC gate', () => {
@@ -527,6 +544,45 @@ describe('JobCardsService', () => {
       jobCardRepository.findOne.mockResolvedValue(null);
 
       await expect(service.qcReject('missing', 'irrelevant')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('Phase 7: Delivery lookups', () => {
+    describe('findReadyForDelivery', () => {
+      it('queries for QC_PASSED job cards with no deliveryId yet, oldest first', async () => {
+        jobCardRepository.find.mockResolvedValue([jobCard({ status: JobCardStatus.QC_PASSED, deliveryId: null })]);
+
+        const result = await service.findReadyForDelivery();
+
+        expect(jobCardRepository.find).toHaveBeenCalledWith({
+          where: { status: JobCardStatus.QC_PASSED, deliveryId: IsNull() },
+          order: { updatedAt: 'ASC' },
+        });
+        expect(result).toHaveLength(1);
+      });
+
+      it('adds a warrantyStatus filter when provided (the IW/OOW tabs)', async () => {
+        jobCardRepository.find.mockResolvedValue([]);
+
+        await service.findReadyForDelivery(WarrantyStatus.OUT_OF_WARRANTY);
+
+        expect(jobCardRepository.find).toHaveBeenCalledWith({
+          where: { status: JobCardStatus.QC_PASSED, deliveryId: IsNull(), warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY },
+          order: { updatedAt: 'ASC' },
+        });
+      });
+    });
+
+    describe('findByDeliveryId', () => {
+      it('returns every job card attached to a given delivery', async () => {
+        const members = [jobCard({ id: 'jc-1', deliveryId: 'dlv-1' }), jobCard({ id: 'jc-2', deliveryId: 'dlv-1' })];
+        jobCardRepository.find.mockResolvedValue(members);
+
+        const result = await service.findByDeliveryId('dlv-1');
+
+        expect(jobCardRepository.find).toHaveBeenCalledWith({ where: { deliveryId: 'dlv-1' } });
+        expect(result).toBe(members);
+      });
     });
   });
 });

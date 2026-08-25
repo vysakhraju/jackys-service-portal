@@ -11,7 +11,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { WorkshopModule } from './workshop/workshop.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { PermissionsModule } from './permissions/permissions.module';
-// import { DeliveryModule } from './delivery/delivery.module';
+import { DeliveryModule } from './delivery/delivery.module';
+import { InvoicingModule } from './invoicing/invoicing.module';
 // import { FinanceModule } from './finance/finance.module';
 // import { AmcModule } from './amc/amc.module';
 // import { DismantlingModule } from './dismantling/dismantling.module';
@@ -48,7 +49,8 @@ import { PermissionsModule } from './permissions/permissions.module';
     InventoryModule,
     WorkshopModule,
     PermissionsModule,
-    // DeliveryModule,
+    DeliveryModule,
+    InvoicingModule,
     // FinanceModule,
     // AmcModule,
     // DismantlingModule,

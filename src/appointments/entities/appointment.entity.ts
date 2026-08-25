@@ -91,6 +91,11 @@ export class Appointment {
   @Column({ nullable: true })
   purchaseDate: Date;
 
+  // The customer's ORIGINAL PURCHASE invoice/receipt number (used for S/N-vs-invoice
+  // warranty verification) - NOT related to the billing Invoice entity added in Phase 7
+  // (src/invoicing/entities/invoice.entity.ts), which is the bill WE issue for an
+  // out-of-warranty repair. Two unrelated documents that happen to share the word
+  // "invoice" - easy to conflate, so flagging it here and on that entity's own doc comment.
   @Column({ nullable: true })
   invoiceNumber: string;
 

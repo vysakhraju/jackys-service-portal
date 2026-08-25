@@ -1,12 +1,19 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import * as cors from 'cors';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Phase 7: POD signature/photo travel as base64 text inside a JSON body
+  // (src/delivery/dto/capture-pod.dto.ts caps each field at ~2MB decoded) - well past
+  // Express's ~100kb default JSON limit, so it's raised here via Nest v11's body-parser
+  // override API rather than reaching for a separate multipart/upload pipeline.
+  app.useBodyParser('json', { limit: '6mb' });
 
   // Security
   app.use(helmet());

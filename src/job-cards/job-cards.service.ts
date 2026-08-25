@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { AppointmentsService } from '../appointments/appointments.service';
@@ -72,6 +72,28 @@ export class JobCardsService {
       throw new NotFoundException(`No Job Card exists for appointment ${appointmentId}`);
     }
     return jobCard;
+  }
+
+  // --- Phase 7: Delivery lookups --------------------------------------------------
+  // Plain reads only - DeliveryService.create()/capturePod() reach past this into the
+  // JobCard entity directly via a transactional EntityManager for the actual atomic
+  // claim/release mutations (same "one shared transaction, not delegated service calls"
+  // discipline InventoryService.consumeReservationsOnQcApproval() established in Phase 6).
+
+  /** QC_PASSED jobs not yet attached to a Delivery - the ready-for-delivery pool. */
+  async findReadyForDelivery(warrantyStatus?: WarrantyStatus): Promise<JobCard[]> {
+    return this.jobCardRepository.find({
+      where: {
+        status: JobCardStatus.QC_PASSED,
+        deliveryId: IsNull(),
+        ...(warrantyStatus ? { warrantyStatus } : {}),
+      },
+      order: { updatedAt: 'ASC' },
+    });
+  }
+
+  async findByDeliveryId(deliveryId: string): Promise<JobCard[]> {
+    return this.jobCardRepository.find({ where: { deliveryId } });
   }
 
   /**
@@ -343,6 +365,17 @@ export class JobCardsService {
     }
     if (jobCard.status === JobCardStatus.READY_FOR_QC) {
       throw new BadRequestException('Cannot cancel a Job Card that is already READY_FOR_QC.');
+    }
+    // Phase 7: closes a gap Delivery's existence newly makes reachable - QC_PASSED means
+    // stock has already been permanently consumed (Main Store -> Damage Location, Phase
+    // 6), and DELIVERED means the unit is back with the customer. Neither has a
+    // compensating stock/delivery-reversal path, so cancelling from here would silently
+    // strand consumed stock (or an already-handed-back unit) with no record of it.
+    if (jobCard.status === JobCardStatus.QC_PASSED) {
+      throw new BadRequestException('Cannot cancel a Job Card that is QC_PASSED - stock has already been permanently consumed.');
+    }
+    if (jobCard.status === JobCardStatus.DELIVERED) {
+      throw new BadRequestException('Cannot cancel a Job Card that has already been DELIVERED.');
     }
 
     jobCard.status = JobCardStatus.CANCELLED;

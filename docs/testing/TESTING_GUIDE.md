@@ -779,7 +779,7 @@ the first thing Phase 6 builds.
 
 ---
 
-## 11. Full endpoint index (89 endpoints, all documented above)
+## 11. Full endpoint index (100 endpoints, all documented above)
 
 Every route the app exposes, and exactly where in this guide it's covered. Use this to
 confirm nothing was missed — if you ever add a new endpoint and it doesn't show up here,
@@ -909,7 +909,26 @@ that's the signal to update this guide.
 | `GET /permissions/users/:userId` | 12a |
 | `GET /permissions` (`?type=`) | 12a |
 
-**Total: 89 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions.)
+### delivery (8)
+| Endpoint | Section |
+|---|---|
+| `GET /delivery/ready` (`?warrantyStatus=IW\|OOW`) | 13b |
+| `GET /delivery/job-card/:jobCardId` | 13b |
+| `POST /delivery` | 13b |
+| `GET /delivery` (`?status=`) | 13b |
+| `GET /delivery/:id` | 13b |
+| `POST /delivery/:id/dispatch` | 13c |
+| `POST /delivery/:id/pod` | 13d |
+| `POST /delivery/:id/cancel` | 13f |
+
+### invoicing (3)
+| Endpoint | Section |
+|---|---|
+| `GET /invoicing/job-card/:jobCardId` | 13e |
+| `GET /invoicing/:id` | 13e |
+| `POST /invoicing/:id/record-payment` | 13e |
+
+**Total: 100 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 3 invoicing.)
 
 
 ## 12. QC gate + admin-assignable permissions + inventory consumption (Phase 6)
@@ -1032,6 +1051,138 @@ job-level, not per-part (12d references this) — it can never cause negative in
 because Phase 6's gate re-checks per-part before anything is ever consumed, but it's worth
 knowing the job-level status alone isn't proof every part on it is actually fully stocked.
 
+
+## 13. Delivery + POD + OOW invoicing block (Phase 7)
+
+Once a Job Card passes QC (`QC_PASSED`, Section 12c), it's ready to go back to the
+customer. This phase covers batching one or more `QC_PASSED` Job Cards into a single
+delivery (`DLV-####`), dispatching it, capturing proof of delivery, and - for
+out-of-warranty jobs - blocking the hand-back until the repair is actually paid for (or
+approved as B2B Credit).
+
+Login roles you'll need beyond what Sections 1-12 already set up: seed a
+`LOGISTICS_DISPATCHER` (and optionally a `DRIVER`) the same way Section 4 seeded a
+technician (`SEED_TECH_ROLE='LOGISTICS_DISPATCHER'`). Delivery endpoints accept
+`LOGISTICS_DISPATCHER`/`DRIVER`/`SUPER_ADMIN`/`SERVICE_HEAD`. Invoicing endpoints
+(recording a payment) accept `ACCOUNTANT`/`FINANCE_MANAGER`/`SUPER_ADMIN`/`SERVICE_HEAD`
+- plus `LOGISTICS_DISPATCHER`/`DRIVER` for the read-only "what does this job owe" lookup,
+so a dispatcher can see the amount without being able to record it themselves.
+
+### 13a. Get a Job Card to QC_PASSED
+
+Nothing new here - it's exactly Sections 8-12 end to end: create the appointment, run the
+field visit, create the Job Card, `validate-sn`, (OOW only) get an Estimate approved
+(Section 9) and `approve-customer` (8d), `assign-section` into `WORKSHOP`, `workshop/assign`
++ `start-wip` + `complete` (Section 10), then `qc/approve` (12c) with a user holding the
+`QC_APPROVAL` grant. An in-warranty job needs no Estimate at all - warranty covers it.
+
+### 13b. List the ready-for-delivery pool and create a delivery
+
+```
+GET /delivery/ready?warrantyStatus=IW
+```
+Lists every `QC_PASSED` Job Card with no delivery attached yet. Each entry also carries
+`invoiceStatus`/`payable` - for an in-warranty job these are always `null`/`true` (nothing
+to pay); for an out-of-warranty job, `payable` reflects whatever invoice already exists
+*without creating one* - so browsing this list never side-effects an invoice into
+existence. Swap `warrantyStatus=OOW` for the out-of-warranty tab.
+
+```
+POST /delivery
+{ "jobCardIds": ["<jobCardId1>", "<jobCardId2>"] }
+```
+A single id is a normal delivery; two or more is a batch - same endpoint, same response
+shape, one generated `DLV-####` either way. Every listed Job Card must currently be
+`QC_PASSED` and not already attached to another delivery, or the whole call is rejected
+(nothing partially succeeds) - expect **`400`** for a not-yet-`QC_PASSED` Job Card,
+**`404`** for one that doesn't exist, **`409`** for one already claimed by another
+delivery. The response is `{ delivery, jobCards }`.
+
+`GET /delivery/:id`, `GET /delivery` (optionally `?status=PENDING|DISPATCHED|DELIVERED|
+CANCELLED`), and `GET /delivery/job-card/:jobCardId` (returns `null` if that Job Card
+isn't attached to a delivery yet) are all read-only lookups.
+
+### 13c. Dispatch
+
+```
+POST /delivery/:id/dispatch
+{ "driverUserId": "<optional driver user id>" }
+```
+Only legal from `PENDING` → expect **`400`** on a delivery that's already `DISPATCHED`/
+`DELIVERED`/`CANCELLED`.
+
+### 13d. Capture POD (proof of delivery)
+
+```
+POST /delivery/:id/pod
+{ "signatureBase64": "<base64>", "recipientName": "Anita Kumar", "notes": "Handed over at reception" }
+```
+AC-12: at least one of `signatureBase64` or `photoBase64` is required - send neither and
+expect **`400`**. Either one alone is enough (they're not both required). Only legal from
+`DISPATCHED` → expect **`400`** otherwise. On success, the delivery *and every member Job
+Card* move to `DELIVERED` in one step - terminal for the repair-and-hand-back cycle.
+
+### 13e. FR-12/AC-11: the OOW-paid block, and recording payment
+
+Try to batch an out-of-warranty Job Card that hasn't been paid yet (13b) and expect
+**`409`**, with a `blockers` array (same shape as Section 12's negative-inventory gate):
+```json
+{ "message": "Cannot create delivery: ...", "blockers": [{ "jobCardId": "...", "jobCardNumber": "JC-0040", "invoiceId": "...", "invoiceStatus": "DRAFT", "amount": 493.5 }] }
+```
+The `invoiceId`/`amount` come from a DRAFT invoice that's lazily created the first time
+anyone asks (either this blocked attempt, or `GET /invoicing/job-card/:jobCardId`
+directly) - snapshotted from the Job Card's approved Estimate total, so there's always a
+real number behind it. Resolve it:
+```
+POST /invoicing/:invoiceId/record-payment
+{ "method": "CASH", "amountReceived": 493.5, "reference": "receipt-001" }
+```
+`method` is one of `CASH`/`CARD`/`BANK_TRANSFER`/`B2B_CREDIT` (FR-14 - no online gateway
+yet). `amountReceived` must match the invoice amount **exactly** - a mismatch is
+**`400`** (no silent partial "paid"). `B2B_CREDIT` is rejected with **`403`** unless the
+Job Card's appointment is an actual `customerType: B2B` - it can't be used as a free
+payment-bypass for a B2C customer who won't pay. Once paid, retry `POST /delivery` (13b) -
+it now succeeds. As a defense-in-depth measure, `POST /delivery/:id/pod` (13d) re-checks
+the same paid/B2B-Credit gate right before the irreversible `DELIVERED` flip, in case
+anything changed in between.
+
+### 13f. Cancel before dispatch
+
+```
+POST /delivery/:id/cancel
+{ "reason": "Wrong job cards batched together" }
+```
+Only legal from `PENDING` (before dispatch) → expect **`400`** otherwise. Releases every
+member Job Card's `deliveryId` back to `null`, so they reappear in the ready-for-delivery
+pool (13b) and can be re-batched into a fresh delivery.
+
+### 13g. Prove the guardrails work
+- Batch an OOW Job Card with no payment recorded → expect **`409`** with `blockers` (13e).
+- `record-payment` with `B2B_CREDIT` on a B2C customer → expect **`403`**.
+- `record-payment` with an `amountReceived` that doesn't match the invoice → expect **`400`**.
+- `POST /delivery/:id/pod` with neither `signatureBase64` nor `photoBase64` → expect **`400`**.
+- Batch a Job Card that isn't `QC_PASSED` yet → expect **`400`**; a nonexistent one → **`404`**.
+- Re-batch an already-`DELIVERED` Job Card → expect **`400`**.
+- Two dispatchers `POST /delivery` on the *same* Job Card at the same time → exactly one
+  succeeds, the other gets a clean `409` - never a silent double-claim.
+
+**Live-verified**: `scripts/phase7-e2e-test.ps1` runs this entire section end to end
+against a real server - the happy path (batch two IW jobs, dispatch, POD with a signature
+only, both Job Cards DELIVERED), the OOW-paid block and its resolution via
+`record-payment`, the B2B Credit loophole rejection on a real B2C customer (and a
+successful B2B_CREDIT payment on a real B2B customer), the amount-mismatch rejection, POD
+validation (photo-only also proven to succeed, not just signature-only), a real
+concurrent-dispatcher race on the same Job Card (two `POST /delivery` calls fired at the
+same time - one clean winner, one clean `409` loser, no double-claim), batch cancel + the
+freed Job Cards being genuinely re-batchable afterward, and the missing/not-ready Job Card
+guards. Run it yourself with `powershell -ExecutionPolicy Bypass -File
+scripts\phase7-e2e-test.ps1` while the dev server is up.
+
+One deliberate scope limit to be aware of: this phase doesn't track failed-delivery-attempt
+history (driver arrives, customer isn't home, needs to retry as a fresh `DLV#` tomorrow) -
+out of what FR-11/FR-12/AC-10-12 actually ask for. If that need comes up, it wants a proper
+attempt-history table, not a workaround bolted onto this one.
+
 ---
 
 ## Troubleshooting
@@ -1056,11 +1207,14 @@ knowing the job-level status alone isn't proof every part on it is actually full
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 6** (Auth, Master Data, Appointments, Technician Mobile API,
-Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions) is real,
-working code you can exercise exactly as above — all 89 endpoints in Section 11 are live.
-Phases 7–8 (Delivery + POD, Finance, Customer Portal) aren't built yet — their Swagger
-sections don't exist until we build them, so there's nothing to click there yet.
+Everything through **Phase 7** (Auth, Master Data, Appointments, Technician Mobile API,
+Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
++ POD + OOW invoicing block) is real, working code you can exercise exactly as above — all
+100 endpoints in Section 11 are live. Phase 8 (the full Finance module: VAT breakdown, GL
+posting, interdepartment debit notes, partial payments, B2B aging) isn't built yet — the
+Phase 7 `Invoice` entity is a deliberately minimal stopgap (DRAFT/PAID/CANCELLED, no VAT
+line, no GL) that Phase 8 will substantially extend, not replace. AMC, Dismantling,
+Reports, and Customer Portal also remain unbuilt.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

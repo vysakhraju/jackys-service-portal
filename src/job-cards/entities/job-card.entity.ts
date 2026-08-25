@@ -12,6 +12,7 @@ import {
 import { Appointment } from '../../appointments/entities/appointment.entity';
 import { User } from '../../auth/entities/user.entity';
 import { WarrantyStatus } from '../../technician/entities/technician-visit.entity';
+import { Delivery } from '../../delivery/entities/delivery.entity';
 
 export enum JobCardStatus {
   OPEN = 'OPEN',
@@ -40,6 +41,10 @@ export enum JobCardStatus {
   // InventoryService.consumeReservationsOnQcApproval(). Terminal for the repair workflow;
   // later phases (Delivery/Invoice) pick up from here.
   QC_PASSED = 'QC_PASSED',
+  // Phase 7: POD actually captured (DeliveryService.capturePod). Terminal - the repair
+  // and hand-back cycle is fully complete. See `delivery`/`deliveryId` below for how a job
+  // gets here (batch/normal delivery, one DLV# covering one or more Job Cards).
+  DELIVERED = 'DELIVERED',
   CANCELLED = 'CANCELLED',
 }
 
@@ -172,6 +177,17 @@ export class JobCard {
 
   @Column({ type: 'text', nullable: true })
   cancellationReason: string | null;
+
+  // Phase 7: many Job Cards -> one Delivery (batch or normal, N>=1 members under one
+  // DLV#). Set by DeliveryService.create() once the OOW-paid gate clears for every job in
+  // the batch; cleared again by DeliveryService.cancel() while still PENDING (before
+  // dispatch) so the job returns to the ready-for-delivery pool.
+  @ManyToOne(() => Delivery, { nullable: true })
+  @JoinColumn({ name: 'deliveryId' })
+  delivery: Delivery;
+
+  @Column({ type: 'uuid', nullable: true })
+  deliveryId: string | null;
 
   @ManyToOne(() => User)
   @JoinColumn({ name: 'createdById' })
