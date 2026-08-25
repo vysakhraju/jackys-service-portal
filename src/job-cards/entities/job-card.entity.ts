@@ -21,6 +21,18 @@ export enum JobCardStatus {
   // validate-sn/assign-section/warranty-override until a revised Estimate is created
   // (Estimate.revise()), which moves the Job Card back to SN_VALIDATED.
   RWR = 'RWR',
+  // Phase 5, section=WORKSHOP jobs only: a workshop technician has been assigned
+  // (WorkshopService.assign), but hasn't started WIP yet.
+  WORKSHOP_ASSIGNED = 'WORKSHOP_ASSIGNED',
+  // WIP started (WorkshopService.startWip). A spare request that's fully reserved keeps
+  // the job here; one that's short of stock moves it to SPARE_PENDING below.
+  IN_PROGRESS = 'IN_PROGRESS',
+  // A requested spare couldn't be fully reserved (FR-09) - blocks WorkshopService.complete
+  // until either more stock arrives and the technician tops up, or the shortfall is
+  // otherwise resolved. Moves back to IN_PROGRESS once a request-spare call is fully filled.
+  SPARE_PENDING = 'SPARE_PENDING',
+  // Work is done, waiting for Phase 6's QC step.
+  READY_FOR_QC = 'READY_FOR_QC',
   CANCELLED = 'CANCELLED',
 }
 
@@ -114,6 +126,22 @@ export class JobCard {
 
   @Column({ type: 'text', nullable: true })
   customerApprovalNotes: string | null;
+
+  // Phase 5: the workshop technician this job is assigned to once section=WORKSHOP work
+  // actually starts. Distinct from the field technician on the Appointment - a job can
+  // (and for major repairs, does) have a different person doing the workshop half.
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'assignedWorkshopTechnicianId' })
+  assignedWorkshopTechnician: User | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  assignedWorkshopTechnicianId: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  workshopAssignedAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  cancellationReason: string | null;
 
   @ManyToOne(() => User)
   @JoinColumn({ name: 'createdById' })

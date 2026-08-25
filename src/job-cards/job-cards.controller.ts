@@ -6,6 +6,7 @@ import { ValidateSnDto } from './dto/validate-sn.dto';
 import { AssignSectionDto } from './dto/assign-section.dto';
 import { WarrantyOverrideDto } from './dto/warranty-override.dto';
 import { ApproveCustomerDto } from './dto/approve-customer.dto';
+import { CancelJobCardDto } from './dto/cancel-job-card.dto';
 import { JobCard } from './entities/job-card.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -15,6 +16,7 @@ import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
+import { InventoryService } from '../inventory/inventory.service';
 
 // Creation/validation/section-assignment/approval: same office-side role set used
 // elsewhere (Appointments' CCE-facing endpoints). Warranty override is deliberately
@@ -28,7 +30,10 @@ const WARRANTY_OVERRIDE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth('JWT-auth')
 export class JobCardsController {
-  constructor(private jobCardsService: JobCardsService) {}
+  constructor(
+    private jobCardsService: JobCardsService,
+    private inventoryService: InventoryService,
+  ) {}
 
   @Post()
   @Roles(...JOB_CARD_ROLES)
@@ -118,6 +123,25 @@ export class JobCardsController {
   @ApiResponse({ status: 403, description: 'Caller is not a Technical Team Leader or above' })
   async warrantyOverride(@Param('id', ParseUUIDPipe) id: string, @Body() dto: WarrantyOverrideDto, @CurrentUser() user: User) {
     const { jobCard } = await this.jobCardsService.warrantyOverride(id, dto, user.id);
+    return jobCard;
+  }
+
+  @Post(':id/cancel')
+  @Roles(...JOB_CARD_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.CANCEL,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params?.id,
+    getNewValues: (result) => ({ status: result?.status, cancellationReason: result?.cancellationReason }),
+  })
+  @ApiOperation({ summary: 'Cancel a Job Card - any active spare reservations move to RETURN_PENDING (never auto-restored to on-hand stock, see Inventory)' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 201, type: JobCard })
+  @ApiResponse({ status: 400, description: 'Already CANCELLED, or already READY_FOR_QC' })
+  async cancel(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CancelJobCardDto) {
+    const jobCard = await this.jobCardsService.cancel(id, dto.reason);
+    await this.inventoryService.cancelReservationsForJobCard(id);
     return jobCard;
   }
 

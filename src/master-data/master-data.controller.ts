@@ -16,6 +16,7 @@ import { CreateServiceCentreDto, UpdateServiceCentreDto } from './dto/create-ser
 import { CreateFaultSymptomDto } from './dto/create-fault-symptom.dto';
 import { CreateSparePartDto } from './dto/create-spare-part.dto';
 import { CreateSparePartModelDto } from './dto/create-spare-part-model.dto';
+import { LinkSparePartModelDto } from './dto/link-spare-part-model.dto';
 import { CreatePriceListDto } from './dto/create-price-list.dto';
 import { CreateKpiRuleDto } from './dto/create-kpi-rule.dto';
 import { CreateNotificationTemplateDto } from './dto/create-notification-template.dto';
@@ -186,6 +187,21 @@ export class MasterDataController {
   @ApiResponse({ status: 200, type: [SparePart] })
   findSparePartsByModel(@Param('modelId') modelId: string) {
     return this.masterDataService.findSparePartsByModel(modelId);
+  }
+
+  @Post('spare-parts/:id/link-model')
+  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'SparePart',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Link a spare part to an appliance model (required before GRN will accept stock for it - AC-17)' })
+  @ApiBody({ type: LinkSparePartModelDto })
+  @ApiResponse({ status: 200, type: SparePart })
+  linkSparePartToModel(@Param('id') id: string, @Body() dto: LinkSparePartModelDto) {
+    return this.masterDataService.linkSparePartToModel(id, dto.modelId);
   }
 
   // === Spare Part Models ===

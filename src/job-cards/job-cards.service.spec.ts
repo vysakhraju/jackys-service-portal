@@ -390,4 +390,105 @@ describe('JobCardsService', () => {
       await expect(service.findByAppointmentId('apt-missing')).rejects.toThrow(NotFoundException);
     });
   });
+
+  describe('assignWorkshopTechnician', () => {
+    it('sets WORKSHOP_ASSIGNED from SECTION_ASSIGNED + section=WORKSHOP', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SECTION_ASSIGNED, section: JobCardSection.WORKSHOP }));
+
+      const result = await service.assignWorkshopTechnician('jc-1', 'tech-1');
+
+      expect(result.status).toBe(JobCardStatus.WORKSHOP_ASSIGNED);
+      expect(result.assignedWorkshopTechnicianId).toBe('tech-1');
+    });
+
+    it('rejects a job routed to ON_SITE_REPAIR instead of WORKSHOP', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SECTION_ASSIGNED, section: JobCardSection.ON_SITE_REPAIR }));
+
+      await expect(service.assignWorkshopTechnician('jc-1', 'tech-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects when not yet SECTION_ASSIGNED', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SN_VALIDATED, section: null }));
+
+      await expect(service.assignWorkshopTechnician('jc-1', 'tech-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('startWip / setSparePending / resumeFromSparePending / completeWorkshop', () => {
+    it('startWip moves WORKSHOP_ASSIGNED -> IN_PROGRESS', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.WORKSHOP_ASSIGNED }));
+
+      const result = await service.startWip('jc-1');
+
+      expect(result.status).toBe(JobCardStatus.IN_PROGRESS);
+    });
+
+    it('startWip rejects from any other status', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SECTION_ASSIGNED }));
+
+      await expect(service.startWip('jc-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('setSparePending moves IN_PROGRESS -> SPARE_PENDING', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+
+      const result = await service.setSparePending('jc-1');
+
+      expect(result.status).toBe(JobCardStatus.SPARE_PENDING);
+    });
+
+    it('resumeFromSparePending moves SPARE_PENDING -> IN_PROGRESS (the top-up case)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SPARE_PENDING }));
+
+      const result = await service.resumeFromSparePending('jc-1');
+
+      expect(result.status).toBe(JobCardStatus.IN_PROGRESS);
+    });
+
+    it('resumeFromSparePending is a no-op when the job was not waiting on parts', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+
+      const result = await service.resumeFromSparePending('jc-1');
+
+      expect(result.status).toBe(JobCardStatus.IN_PROGRESS);
+      expect(jobCardRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('completeWorkshop moves IN_PROGRESS -> READY_FOR_QC', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+
+      const result = await service.completeWorkshop('jc-1');
+
+      expect(result.status).toBe(JobCardStatus.READY_FOR_QC);
+    });
+
+    it('completeWorkshop rejects while SPARE_PENDING - cannot complete while still waiting on parts', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SPARE_PENDING }));
+
+      await expect(service.completeWorkshop('jc-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('cancel', () => {
+    it('sets CANCELLED and records the reason', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+
+      const result = await service.cancel('jc-1', 'Customer withdrew the appliance');
+
+      expect(result.status).toBe(JobCardStatus.CANCELLED);
+      expect(result.cancellationReason).toBe('Customer withdrew the appliance');
+    });
+
+    it('rejects cancelling an already-cancelled Job Card', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.CANCELLED }));
+
+      await expect(service.cancel('jc-1', 'again')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects cancelling a Job Card already READY_FOR_QC', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC }));
+
+      await expect(service.cancel('jc-1', 'too late')).rejects.toThrow(BadRequestException);
+    });
+  });
 });

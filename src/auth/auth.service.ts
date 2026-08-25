@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { User } from './entities/user.entity';
@@ -16,6 +16,9 @@ import { Role } from './entities/role.entity';
 import { AuditLog } from './entities/audit-log.entity';
 import { AuditAction } from './entities/audit-log.entity';
 import { LoginDto } from './dto/login.dto';
+import { Appointment, AppointmentStatus } from '../appointments/entities/appointment.entity';
+import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
+import { InventoryReservation, ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
 
 export interface TokenPair {
   accessToken: string;
@@ -32,9 +35,72 @@ export class AuthService {
     private roleRepository: Repository<Role>,
     @InjectRepository(AuditLog)
     private auditLogRepository: Repository<AuditLog>,
+    @InjectRepository(Appointment)
+    private appointmentRepository: Repository<Appointment>,
+    @InjectRepository(JobCard)
+    private jobCardRepository: Repository<JobCard>,
+    @InjectRepository(InventoryReservation)
+    private inventoryReservationRepository: Repository<InventoryReservation>,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
+
+  /**
+   * Phase 5: a technician cannot be deactivated until every job assigned to them and
+   * every spare part in their custody is cleared - the-fool failure #2's mitigation.
+   * Blocks with a 409 listing every blocker at once, so an admin fixing one doesn't hit a
+   * second, previously-hidden one next. No user-deactivation endpoint existed at all
+   * before this - User.status already had an INACTIVE value with nothing wired to it.
+   */
+  async deactivateUser(id: string): Promise<User> {
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`User ${id} not found`);
+    }
+
+    const blockers: string[] = [];
+
+    const openAppointments = await this.appointmentRepository.find({
+      where: {
+        technicianId: id,
+        status: In([
+          AppointmentStatus.SCHEDULED,
+          AppointmentStatus.CONFIRMED,
+          AppointmentStatus.TECHNICIAN_ASSIGNED,
+          AppointmentStatus.ON_SITE,
+        ]),
+      },
+    });
+    openAppointments.forEach((a) => blockers.push(`Appointment ${a.id} (status ${a.status}) still assigned as field technician`));
+
+    const openWorkshopJobs = await this.jobCardRepository.find({
+      where: {
+        assignedWorkshopTechnicianId: id,
+        status: In([JobCardStatus.WORKSHOP_ASSIGNED, JobCardStatus.IN_PROGRESS, JobCardStatus.SPARE_PENDING]),
+      },
+    });
+    openWorkshopJobs.forEach((jc) => blockers.push(`Job Card ${jc.jobCardNumber} (status ${jc.status}) still assigned as workshop technician`));
+
+    const openReservations = await this.inventoryReservationRepository.find({
+      where: {
+        custodianUserId: id,
+        status: In([ReservationStatus.HELD, ReservationStatus.PARTIALLY_RESERVED, ReservationStatus.RETURN_PENDING]),
+      },
+    });
+    openReservations.forEach((r) =>
+      blockers.push(`Inventory reservation ${r.id} (${r.quantityReserved} units, status ${r.status}) still in this user's custody`),
+    );
+
+    if (blockers.length > 0) {
+      throw new ConflictException({
+        message: `Cannot deactivate ${user.email}: they still hold ${blockers.length} open item(s). Clear these first.`,
+        blockers,
+      });
+    }
+
+    user.status = UserStatus.INACTIVE;
+    return this.userRepository.save(user);
+  }
 
   async validateUser(email: string, password: string): Promise<User | null> {
     // passwordHash has `select: false` on the entity, so it must be explicitly

@@ -1,10 +1,12 @@
 /**
- * One-time bootstrap script: creates a TECHNICIAN_FIELD test user so you can log in as
- * "the technician" and try the Technician Mobile API endpoints yourself.
+ * One-time bootstrap script: creates a test user with a given role (default
+ * TECHNICIAN_FIELD) so you can log in as "the technician" (or a workshop tech, warehouse
+ * clerk, etc.) and try role-gated endpoints yourself.
  *
  * Why this exists: there's no public "register" endpoint (same reason seed-admin.ts
- * exists for the first SUPER_ADMIN), and a technician account additionally needs the
- * TECHNICIAN_FIELD role to already be seeded.
+ * exists for the first SUPER_ADMIN), and there's still no admin-facing "create user"
+ * REST endpoint either - createUser() exists in AuthService but nothing calls it yet.
+ * This script is the workaround until that endpoint is built.
  *
  * Prerequisite: roles must already be seeded. If you haven't done this yet, log in as
  * admin and call POST /auth/seed-roles once (from Swagger, or `npm run seed:admin` first
@@ -14,6 +16,7 @@
  * Usage:
  *   npm run seed:technician
  *   (optionally) SEED_TECH_EMAIL=you@jackys.com SEED_TECH_PASSWORD=YourPass123! npm run seed:technician
+ *   (optionally) SEED_TECH_ROLE=TECHNICIAN_WORKSHOP npm run seed:technician   <- Phase 5: any seeded role name works
  *
  * Safe to re-run: skips creation if the user already exists.
  */
@@ -55,10 +58,11 @@ async function main(): Promise<void> {
     const firstName = process.env.SEED_TECH_FIRSTNAME || 'Test';
     const lastName = process.env.SEED_TECH_LASTNAME || 'Technician';
 
-    const roleRes = await client.query(`SELECT id FROM roles WHERE name = 'TECHNICIAN_FIELD'`);
+    const roleName = process.env.SEED_TECH_ROLE || 'TECHNICIAN_FIELD';
+    const roleRes = await client.query(`SELECT id FROM roles WHERE name = $1`, [roleName]);
     if (roleRes.rows.length === 0) {
       console.error('');
-      console.error('TECHNICIAN_FIELD role not found. Roles have not been seeded yet.');
+      console.error(`${roleName} role not found. Roles have not been seeded yet.`);
       console.error('Log in as your admin user and call POST /auth/seed-roles once (via Swagger at');
       console.error('http://localhost:3000/api/docs), then re-run this script.');
       console.error('');
@@ -82,7 +86,7 @@ async function main(): Promise<void> {
     );
 
     console.log('');
-    console.log('TECHNICIAN_FIELD user created. Login with:');
+    console.log(`${roleName} user created. Login with:`);
     console.log(`  email:    ${email}`);
     console.log(`  password: ${password}`);
     console.log(`  user id:  ${inserted.rows[0].id}   <- you'll need this to assign appointments to them`);

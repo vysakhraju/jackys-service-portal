@@ -12,10 +12,17 @@ import { Role } from './entities/role.entity';
 import { AuditLog } from './entities/audit-log.entity';
 import { RolesGuard } from './guards/roles.guard';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
+import { Appointment } from '../appointments/entities/appointment.entity';
+import { JobCard } from '../job-cards/entities/job-card.entity';
+import { InventoryReservation } from '../inventory/entities/inventory-reservation.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Role, AuditLog]),
+    // Appointment/JobCard/InventoryReservation are registered here (not by importing
+    // their owning modules) purely for the deactivateUser() custody-clearance check
+    // below - avoids a circular module dependency, since AppointmentsModule/JobCardsModule
+    // both already import AuthModule for AuditInterceptor.
+    TypeOrmModule.forFeature([User, Role, AuditLog, Appointment, JobCard, InventoryReservation]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],

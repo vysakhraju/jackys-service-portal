@@ -442,4 +442,45 @@ describe('MasterDataService', () => {
       expect(result.errors[0]).toContain('fault-symptom row error');
     });
   });
+
+  describe('linkSparePartToModel', () => {
+    it('links a spare part to a model and saves the join', async () => {
+      const spare = { id: 'spare-1', code: 'SP-1', models: [] };
+      const model = { id: 'model-1', modelId: 'WA80J5710' };
+      sparePartRepository.findOne.mockResolvedValue(spare);
+      sparePartModelRepository.findOne.mockResolvedValue(model);
+
+      const result = await service.linkSparePartToModel('spare-1', 'model-1');
+
+      expect(result.models).toContainEqual(model);
+      expect(sparePartRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'spare-1', models: [model] }),
+      );
+    });
+
+    it('is idempotent - linking an already-linked model does not duplicate or re-save', async () => {
+      const model = { id: 'model-1', modelId: 'WA80J5710' };
+      const spare = { id: 'spare-1', code: 'SP-1', models: [model] };
+      sparePartRepository.findOne.mockResolvedValue(spare);
+      sparePartModelRepository.findOne.mockResolvedValue(model);
+
+      const result = await service.linkSparePartToModel('spare-1', 'model-1');
+
+      expect(result.models).toHaveLength(1);
+      expect(sparePartRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the spare part does not exist', async () => {
+      sparePartRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.linkSparePartToModel('missing', 'model-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when the model does not exist', async () => {
+      sparePartRepository.findOne.mockResolvedValue({ id: 'spare-1', models: [] });
+      sparePartModelRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.linkSparePartToModel('spare-1', 'missing')).rejects.toThrow(NotFoundException);
+    });
+  });
 });

@@ -1,12 +1,15 @@
 import {
   Controller,
   Post,
+  Patch,
   Body,
   Get,
+  Param,
   UseGuards,
   Request,
   HttpCode,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
@@ -80,6 +83,18 @@ export class AuthController {
   async getProfile(@Request() req: any) {
     const { passwordHash, refreshTokenHash, ...user } = req.user;
     return user;
+  }
+
+  @Patch('users/:id/deactivate')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: "Deactivate a user - blocked (409) until every open job assignment and inventory custody they hold is cleared" })
+  @ApiResponse({ status: 200, description: 'User deactivated' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 409, description: 'User still holds open job assignments or spare-part custody - see blockers[] in the response' })
+  async deactivateUser(@Param('id', ParseUUIDPipe) id: string) {
+    return this.authService.deactivateUser(id);
   }
 
   @Post('seed-roles')

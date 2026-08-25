@@ -8,8 +8,8 @@ import { TechnicianModule } from './technician/technician.module';
 import { JobCardsModule } from './job-cards/job-cards.module';
 import { EstimatesModule } from './estimates/estimates.module';
 import { NotificationsModule } from './notifications/notifications.module';
-// import { WorkshopModule } from './workshop/workshop.module';
-// import { InventoryModule } from './inventory/inventory.module';
+import { WorkshopModule } from './workshop/workshop.module';
+import { InventoryModule } from './inventory/inventory.module';
 // import { DeliveryModule } from './delivery/delivery.module';
 // import { FinanceModule } from './finance/finance.module';
 // import { AmcModule } from './amc/amc.module';
@@ -44,8 +44,8 @@ import { NotificationsModule } from './notifications/notifications.module';
     JobCardsModule,
     EstimatesModule,
     NotificationsModule,
-    // WorkshopModule,
-    // InventoryModule,
+    InventoryModule,
+    WorkshopModule,
     // DeliveryModule,
     // FinanceModule,
     // AmcModule,

@@ -16,6 +16,9 @@ describe('AuthService', () => {
   let userRepository: any;
   let roleRepository: any;
   let auditLogRepository: any;
+  let appointmentRepository: any;
+  let jobCardRepository: any;
+  let inventoryReservationRepository: any;
   let jwtService: jest.Mocked<JwtService>;
   let configService: jest.Mocked<ConfigService>;
 
@@ -54,6 +57,9 @@ describe('AuthService', () => {
       create: jest.fn((data) => data),
       save: jest.fn().mockResolvedValue(undefined),
     };
+    appointmentRepository = { find: jest.fn().mockResolvedValue([]) };
+    jobCardRepository = { find: jest.fn().mockResolvedValue([]) };
+    inventoryReservationRepository = { find: jest.fn().mockResolvedValue([]) };
     jwtService = { sign: jest.fn() } as any;
     configService = { get: jest.fn() } as any;
 
@@ -61,6 +67,9 @@ describe('AuthService', () => {
       userRepository,
       roleRepository,
       auditLogRepository,
+      appointmentRepository,
+      jobCardRepository,
+      inventoryReservationRepository,
       jwtService,
       configService,
     );
@@ -324,6 +333,88 @@ describe('AuthService', () => {
 
       expect(consoleSpy).toHaveBeenCalled();
       consoleSpy.mockRestore();
+    });
+  });
+
+  describe('deactivateUser', () => {
+    it('throws NotFoundException when the user does not exist', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.deactivateUser('missing-user')).rejects.toThrow(NotFoundException);
+      expect(appointmentRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('deactivates a user with no open appointments, jobs, or reservations', async () => {
+      const user = { id: 'tech-1', email: 'tech@jackys.com', status: UserStatus.ACTIVE } as User;
+      userRepository.findOne.mockResolvedValue(user);
+      appointmentRepository.find.mockResolvedValue([]);
+      jobCardRepository.find.mockResolvedValue([]);
+      inventoryReservationRepository.find.mockResolvedValue([]);
+
+      const result = await service.deactivateUser('tech-1');
+
+      expect(result.status).toBe(UserStatus.INACTIVE);
+      expect(userRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'tech-1', status: UserStatus.INACTIVE }),
+      );
+    });
+
+    it('blocks deactivation when the technician has an open field appointment', async () => {
+      const user = { id: 'tech-1', email: 'tech@jackys.com', status: UserStatus.ACTIVE } as User;
+      userRepository.findOne.mockResolvedValue(user);
+      appointmentRepository.find.mockResolvedValue([{ id: 'appt-1', status: 'SCHEDULED' }]);
+      jobCardRepository.find.mockResolvedValue([]);
+      inventoryReservationRepository.find.mockResolvedValue([]);
+
+      await expect(service.deactivateUser('tech-1')).rejects.toThrow(ConflictException);
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('blocks deactivation when the technician has an open workshop job card', async () => {
+      const user = { id: 'tech-2', email: 'wtech@jackys.com', status: UserStatus.ACTIVE } as User;
+      userRepository.findOne.mockResolvedValue(user);
+      appointmentRepository.find.mockResolvedValue([]);
+      jobCardRepository.find.mockResolvedValue([{ id: 'jc-1', jobCardNumber: 'JC-1001', status: 'IN_PROGRESS' }]);
+      inventoryReservationRepository.find.mockResolvedValue([]);
+
+      await expect(service.deactivateUser('tech-2')).rejects.toThrow(ConflictException);
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('blocks deactivation when the technician still has spares in custody', async () => {
+      const user = { id: 'tech-3', email: 'wtech3@jackys.com', status: UserStatus.ACTIVE } as User;
+      userRepository.findOne.mockResolvedValue(user);
+      appointmentRepository.find.mockResolvedValue([]);
+      jobCardRepository.find.mockResolvedValue([]);
+      inventoryReservationRepository.find.mockResolvedValue([
+        { id: 'res-1', quantityReserved: 2, status: 'HELD' },
+      ]);
+
+      await expect(service.deactivateUser('tech-3')).rejects.toThrow(ConflictException);
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('collects every blocker at once rather than stopping at the first', async () => {
+      const user = { id: 'tech-4', email: 'busy@jackys.com', status: UserStatus.ACTIVE } as User;
+      userRepository.findOne.mockResolvedValue(user);
+      appointmentRepository.find.mockResolvedValue([{ id: 'appt-1', status: 'ON_SITE' }]);
+      jobCardRepository.find.mockResolvedValue([{ id: 'jc-1', jobCardNumber: 'JC-1002', status: 'SPARE_PENDING' }]);
+      inventoryReservationRepository.find.mockResolvedValue([
+        { id: 'res-1', quantityReserved: 1, status: 'PARTIALLY_RESERVED' },
+      ]);
+
+      try {
+        await service.deactivateUser('tech-4');
+        fail('expected deactivateUser to throw');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(ConflictException);
+        const response = err.getResponse();
+        expect(response.blockers).toHaveLength(3);
+        expect(response.blockers.join(' ')).toContain('appt-1');
+        expect(response.blockers.join(' ')).toContain('JC-1002');
+        expect(response.blockers.join(' ')).toContain('res-1');
+      }
+      expect(userRepository.save).not.toHaveBeenCalled();
     });
   });
 });

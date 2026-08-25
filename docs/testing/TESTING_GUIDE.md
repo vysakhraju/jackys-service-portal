@@ -449,6 +449,134 @@ a new `DRAFT` Estimate linked to the rejected one and moves the Job Card back to
 
 ---
 
+## 10. Workshop + Inventory — spare part reservations, not deductions
+
+The core idea, in plain terms: when a workshop technician needs a spare part, the system
+**reserves** it for them out of Main Store stock — it doesn't hand it over and forget about
+it. Nothing is treated as permanently consumed until the technician physically gives an
+unused part back and someone at Main Store confirms receiving it. This section walks
+through that whole loop, plus the technician-deactivation safety check that goes with it.
+
+### 10a. Create a workshop technician test account
+Same helper script as Section 4, with a different role:
+```powershell
+cd "D:\Jackys\jackys service portal"
+$env:SEED_TECH_EMAIL="workshop@x.com"; $env:SEED_TECH_PASSWORD="Pass123!"; $env:SEED_TECH_ROLE="TECHNICIAN_WORKSHOP"; npm run seed:technician
+```
+Copy the printed **user id** — you'll assign the Job Card to this id in 10d.
+
+### 10b. Link a spare part to a model, then receive stock (GRN)
+Stock can't be received for a spare part until it's linked to at least one appliance model
+(this stops orphaned parts nobody can ever match to a repair). If you haven't already made
+a spare part and a spare part model (Section 3), do that first under **master-data**, then:
+
+**`POST /master-data/spare-parts/{id}/link-model`** (`{id}` = the spare part's id)
+```json
+{ "modelId": "<the spare part model's id>" }
+```
+Safe to call again with the same model — it won't duplicate the link.
+
+**`POST /inventory/grn`** (Goods Received Note — new stock arriving)
+```json
+{ "sparePartId": "<spare part id>", "quantity": 5, "notes": "GRN against PO-2044" }
+```
+Try this on a spare part you *haven't* linked to a model yet first → expect **`400`**.
+
+**`GET /inventory/stock/{sparePartId}`** — check `quantityOnHand` and `quantityReserved`.
+
+### 10c. Get a Job Card to the Workshop section
+Follow Sections 5, 6, 8 up through **`POST /job-cards/{id}/assign-section`** with
+`{"section": "WORKSHOP"}` (an in-warranty job or an approved-OOW job both work — either
+way `assign-section` needs to succeed first).
+
+### 10d. Assign the workshop technician and start work
+**`POST /workshop/{jobCardId}/assign`**
+```json
+{ "technicianId": "<the workshop technician's user id from 10a>" }
+```
+Status moves to `WORKSHOP_ASSIGNED`. Now **log in as the workshop technician** (Section 1,
+their email/password from 10a) and use their token from here on:
+
+**`POST /workshop/{jobCardId}/start-wip`** — no body. Status moves to `IN_PROGRESS`.
+
+### 10e. Request a spare (reserve, don't deduct)
+**`POST /workshop/{jobCardId}/request-spare`**
+```json
+{ "sparePartId": "<the linked spare part's id>", "quantity": 2 }
+```
+Check `GET /inventory/stock/{sparePartId}` afterward — `quantityReserved` went up by 2, but
+`quantityOnHand` **did not change**. That's the point: reserving isn't consuming.
+
+Now request more than what's left (e.g. `"quantity": 10` when only 3 remain) → the
+response comes back `"status": "PARTIALLY_RESERVED"` with `quantityReserved` capped at
+whatever was actually available, and `GET /job-cards/{id}` shows the Job Card moved to
+`SPARE_PENDING`. Try **`POST /workshop/{jobCardId}/complete`** while `SPARE_PENDING` →
+expect **`400`** (can't finish a job that's still waiting on a part).
+
+### 10f. The technician-deactivation safety check
+While the technician from 10a still holds an unreturned reservation, try:
+
+**`PATCH /auth/users/{technicianId}/deactivate`** (as admin) → expect **`409`**, with a
+`blockers` array listing every open appointment, workshop job, and spare-part reservation
+still tied to them. This is deliberate — a technician can't be deactivated (and their
+custody quietly lost track of) while they're still holding something. Clear everything
+below first, then try this again — it should succeed and return `"status": "INACTIVE"`.
+
+### 10g. Returning a spare / cancelling the job
+Two ways an active reservation gets resolved:
+
+- **Technician returns it voluntarily:** `POST /inventory/reservations/{id}/request-return`
+  (as the technician, or a Team Leader+ on their behalf) → moves to `RETURN_PENDING`.
+- **A Team Leader reviews an idle one:** `POST /inventory/reservations/{id}/review`
+  ```json
+  { "decision": "APPROVE_REALLOCATION", "notes": "Checked with technician, job stalled" }
+  ```
+  → `RETURN_PENDING`. Using `"decision": "REJECT"` instead leaves the reservation exactly
+  where it was (it isn't a permanent exemption — it resurfaces on the stale-reservations
+  list again later).
+- **The Job Card is cancelled:** `POST /job-cards/{id}/cancel` with `{"reason": "..."}` →
+  every open reservation on that Job Card moves to `RETURN_PENDING` automatically.
+
+Either way, nothing is added back to `quantityOnHand` until someone at Main Store
+physically has the part in hand and confirms it:
+
+**`POST /inventory/reservations/{id}/confirm-return`**
+```json
+{ "quantityReturned": 2 }
+```
+This is the *only* action anywhere in the system that increases `quantityOnHand` for a
+return. `GET /inventory/stock/{sparePartId}` afterward to see it reflected. Try confirming
+the same reservation's return twice → expect **`400`** the second time.
+
+### 10h. Look around
+- **`GET /inventory/reservations/stale`** — reservations idle 24h+ with no request or
+  review since, oldest first (a deactivated technician's reservations always sort to the
+  top regardless of age). Empty in a fresh test run — nothing's had time to go stale yet.
+- **`GET /workshop/{jobCardId}`** — full workshop state for one Job Card, including any of
+  its own reservations that have gone stale. This is the screen a Team Leader actually
+  opens day to day, so staleness is surfaced right there rather than needing a separate
+  report nobody remembers to check.
+
+### 10i. Prove the guardrails work
+- Try **10b**'s GRN on an unlinked spare part → expect **`400`**.
+- Try **10f** while the technician still holds a reservation → expect **`409`** (all
+  blockers listed, not just the first one found).
+- Try **10e** on a Job Card that isn't `IN_PROGRESS`/`SPARE_PENDING` → expect **`400`**.
+- Try **10g**'s `confirm-return` on a reservation that isn't `RETURN_PENDING` yet → expect
+  **`400`**.
+- Try **`POST /workshop/{jobCardId}/request-spare`** as a *different* workshop technician
+  than the one assigned to that Job Card → expect **`403`** (Team Leaders and above can
+  still act on any job; a workshop technician only their own).
+
+**One known gap, on purpose:** there's currently no step that permanently deducts a spare
+from `quantityOnHand` when a job finishes normally (spare genuinely used, not returned).
+Only a confirmed physical return adds stock back — nothing yet subtracts it for a
+legitimate use. That "mark as consumed" step naturally belongs at QC completion (Phase 6,
+not built yet) per the original design note ("not consumed till job is completed or QC
+completed") — flagged in `docs/planning/STATUS_TRACKER.md` so it isn't forgotten.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -468,4 +596,4 @@ a new `DRAFT` Estimate linked to the rejected one and moves the Job Card back to
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 4** (Auth, Master Data, Appointments, Technician Mobile API, Job Cards, Estimates + Notifications) is real, working code you can exercise exactly as above. Phases 5–8 (Workshop, Inventory, Delivery, Finance, Customer Portal) aren't built yet — their Swagger sections don't exist until we build them, so there's nothing to click there yet. Note that Notifications (WhatsApp/SMS/Email) only *attempts* sends right now — no real provider is wired up (a known blocker, see Section 9b) — so the record-response phone/call path (9d) is the actually-usable way to move an Estimate forward today. `docs/planning/STATUS_TRACKER.md` always reflects current status — check there first if you're unsure what's ready.
+Everything through **Phase 5** (Auth, Master Data, Appointments, Technician Mobile API, Job Cards, Estimates + Notifications, Workshop + Inventory) is real, working code you can exercise exactly as above. Phases 6–8 (QC/Delivery, Finance, Customer Portal) aren't built yet — their Swagger sections don't exist until we build them, so there's nothing to click there yet. Note that Notifications (WhatsApp/SMS/Email) only *attempts* sends right now — no real provider is wired up (a known blocker, see Section 9b) — so the record-response phone/call path (9d) is the actually-usable way to move an Estimate forward today. Also note Section 10's "known gap" — spares aren't yet permanently deducted from stock when a job completes normally, only on a confirmed physical return; that lands in Phase 6 alongside QC. `docs/planning/STATUS_TRACKER.md` always reflects current status — check there first if you're unsure what's ready.

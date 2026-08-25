@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { JobCard, JobCardStatus } from './entities/job-card.entity';
+import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { AppointmentsService } from '../appointments/appointments.service';
 import { TechnicianService } from '../technician/technician.service';
@@ -259,6 +259,94 @@ export class JobCardsService {
     }
 
     jobCard.status = JobCardStatus.SN_VALIDATED;
+    return this.jobCardRepository.save(jobCard);
+  }
+
+  // --- Phase 5: Workshop transitions -----------------------------------------------
+  // These mirror the same "own repository, guard, save" pattern as the gates above.
+  // WorkshopService orchestrates calls into these plus InventoryService - it doesn't
+  // touch the JobCard repository directly, so every valid transition stays in one place.
+
+  async assignWorkshopTechnician(id: string, technicianId: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status !== JobCardStatus.SECTION_ASSIGNED || jobCard.section !== JobCardSection.WORKSHOP) {
+      throw new BadRequestException(
+        `Cannot assign a workshop technician: Job Card must be SECTION_ASSIGNED with section=WORKSHOP (current: status=${jobCard.status}, section=${jobCard.section}).`,
+      );
+    }
+
+    jobCard.assignedWorkshopTechnicianId = technicianId;
+    jobCard.workshopAssignedAt = new Date();
+    jobCard.status = JobCardStatus.WORKSHOP_ASSIGNED;
+    return this.jobCardRepository.save(jobCard);
+  }
+
+  async startWip(id: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status !== JobCardStatus.WORKSHOP_ASSIGNED) {
+      throw new BadRequestException(`Cannot start WIP from status ${jobCard.status} (expected WORKSHOP_ASSIGNED).`);
+    }
+
+    jobCard.status = JobCardStatus.IN_PROGRESS;
+    return this.jobCardRepository.save(jobCard);
+  }
+
+  /** Called by WorkshopService when a spare request comes back short of stock. */
+  async setSparePending(id: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status !== JobCardStatus.IN_PROGRESS && jobCard.status !== JobCardStatus.SPARE_PENDING) {
+      throw new BadRequestException(`Cannot mark SPARE_PENDING from status ${jobCard.status} (expected IN_PROGRESS).`);
+    }
+
+    jobCard.status = JobCardStatus.SPARE_PENDING;
+    return this.jobCardRepository.save(jobCard);
+  }
+
+  /** Called by WorkshopService when a top-up request on a SPARE_PENDING job fully fills. */
+  async resumeFromSparePending(id: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status !== JobCardStatus.SPARE_PENDING) {
+      return jobCard; // no-op if it wasn't waiting on parts - keeps the caller simple
+    }
+
+    jobCard.status = JobCardStatus.IN_PROGRESS;
+    return this.jobCardRepository.save(jobCard);
+  }
+
+  async completeWorkshop(id: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status !== JobCardStatus.IN_PROGRESS) {
+      throw new BadRequestException(
+        `Cannot complete: Job Card is ${jobCard.status} (expected IN_PROGRESS - a SPARE_PENDING job can't be marked complete while still waiting on parts).`,
+      );
+    }
+
+    jobCard.status = JobCardStatus.READY_FOR_QC;
+    return this.jobCardRepository.save(jobCard);
+  }
+
+  /**
+   * Cancellation is deliberately unaware of Inventory - it's a pure entity transition.
+   * Reservation cleanup (moving any active reservations to RETURN_PENDING) is
+   * orchestrated by the caller (JobCardsController), which also has InventoryService.
+   */
+  async cancel(id: string, reason: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.status === JobCardStatus.CANCELLED) {
+      throw new BadRequestException('Job Card is already cancelled.');
+    }
+    if (jobCard.status === JobCardStatus.READY_FOR_QC) {
+      throw new BadRequestException('Cannot cancel a Job Card that is already READY_FOR_QC.');
+    }
+
+    jobCard.status = JobCardStatus.CANCELLED;
+    jobCard.cancellationReason = reason;
     return this.jobCardRepository.save(jobCard);
   }
 }

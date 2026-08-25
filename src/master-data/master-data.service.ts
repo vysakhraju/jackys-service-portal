@@ -159,6 +159,28 @@ export class MasterDataService {
     return spare;
   }
 
+  /**
+   * Phase 5 (AC-17): GRN refuses to receive stock for a spare part with no linked
+   * appliance model. This was the only way to actually create that link - the
+   * many-to-many spare_part_model_links table previously had no REST-reachable writer,
+   * only the CSV bulk-import path.
+   */
+  async linkSparePartToModel(sparePartId: string, modelId: string): Promise<SparePart> {
+    const spare = await this.sparePartRepository.findOne({ where: { id: sparePartId }, relations: { models: true } });
+    if (!spare) {
+      throw new NotFoundException(`Spare part not found`);
+    }
+    const model = await this.sparePartModelRepository.findOne({ where: { id: modelId } });
+    if (!model) {
+      throw new NotFoundException(`Spare part model not found`);
+    }
+    if (!spare.models.some((m) => m.id === modelId)) {
+      spare.models.push(model);
+      await this.sparePartRepository.save(spare);
+    }
+    return spare;
+  }
+
   async findSparePartsByModel(modelId: string): Promise<SparePart[]> {
     return this.sparePartRepository
       .createQueryBuilder('spare')
