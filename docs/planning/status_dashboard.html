@@ -380,10 +380,10 @@
       <h1>Build Status</h1>
     </div>
     <div class="stat-row">
-      <div class="stat"><span class="n mono">MVP + 2</span><span class="l">Phases done (Dismantling live)</span></div>
-      <div class="stat"><span class="n mono">466</span><span class="l">Tests passing</span></div>
-      <div class="stat"><span class="n mono">134</span><span class="l">Endpoints live</span></div>
-      <div class="stat"><span class="n mono">a5d58ed</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Phases done (Reports/Dashboards live)</span></div>
+      <div class="stat"><span class="n mono">489</span><span class="l">Tests passing</span></div>
+      <div class="stat"><span class="n mono">140</span><span class="l">Endpoints live</span></div>
+      <div class="stat"><span class="n mono">99e6786</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -440,59 +440,59 @@
         <div><div class="phase-name">AMC Management (post-MVP)</div><div class="phase-sub">Live-verified</div></div>
         <span class="chip done">Done</span>
       </div>
-      <div class="phase current">
+      <div class="phase done">
         <span class="phase-num mono">10</span>
-        <div><div class="phase-name">Dismantling (post-MVP)</div><div class="phase-sub">Live-verified today — details below</div></div>
+        <div><div class="phase-name">Dismantling (post-MVP)</div><div class="phase-sub">Live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase current">
+        <span class="phase-num mono">11</span>
+        <div><div class="phase-name">Reports/Dashboards (post-MVP)</div><div class="phase-sub">Live-verified today — details below</div></div>
         <span class="chip current">Shipped today</span>
       </div>
     </div>
   </div>
 
   <div class="section">
-    <div class="section-head"><h2>Phase 10, in detail</h2></div>
+    <div class="section-head"><h2>Phase 11, in detail</h2></div>
     <div class="card">
-      <h3 style="font-size:17px;">Defective/DOA appliance recovery — harvest, verify, price-and-post, with a real three-actor segregation of duties</h3>
+      <h3 style="font-size:17px;">BRD 18.1 Service Manager Dashboard — real-time Kanban + three supporting reports</h3>
       <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
-        Second of the three post-MVP modules you asked for (AMC → Dismantling →
-        Reports/Dashboards). A <span class="mono">DismantlingRecord</span> tracks a
-        write-off appliance already in Damage Location through strip-down, logged
-        components (a jsonb snapshot, cross-checked against the existing
-        <span class="mono">ComponentYieldMatrix</span> BOM/yield master data),
-        supervisor verification, and finally the Service Manager's manual pricing +
-        posting — which atomically increases live spare-part stock and posts a GL
-        entry (AC-30). The three steps must be three different people: the API
-        rejects (400, not just a role check) if the same account tries to verify
-        its own harvest, or price-and-post something it harvested or verified.
+        Third and last of the three post-MVP modules you asked for, in your own order
+        (AMC → Dismantling → Reports/Dashboards). Pure read/query over data every
+        earlier phase already produces — no new entity, no migration. The Job Status
+        Board maps <span class="mono">JobCardStatus</span> onto the BRD's 8 named
+        columns; Pending Approval Aging flags OOW estimates the customer hasn't
+        responded to past 4 hours; Service Efficiency and First-Time Fix Rate round
+        out the four 18.1 widgets. 18.2 Finance, 18.3 Quality/Product, and 18.4
+        Operational dashboards are explicitly out of scope for this phase, not
+        silently dropped.
       </p>
 
       <div class="stat-tiles">
-        <div class="tile"><span class="n mono">26</span><span class="l">New tests</span></div>
-        <div class="tile"><span class="n mono">3</span><span class="l">Segregation-of-duties gates</span></div>
-        <div class="tile"><span class="n mono">7</span><span class="l">New endpoints</span></div>
-        <div class="tile"><span class="n mono">1</span><span class="l">New module (dismantling)</span></div>
+        <div class="tile"><span class="n mono">23</span><span class="l">New tests</span></div>
+        <div class="tile"><span class="n mono">6</span><span class="l">New REST endpoints</span></div>
+        <div class="tile"><span class="n mono">1</span><span class="l">WebSocket gateway</span></div>
+        <div class="tile"><span class="n mono">0</span><span class="l">New tables</span></div>
       </div>
 
-      <h3 style="margin-top:4px;">Design gap called out explicitly, not silently guessed</h3>
+      <h3 style="margin-top:4px;">Simplification called out explicitly, not silently shipped</h3>
       <ul class="findings">
         <li>
           <span class="tag">01</span>
-          <div><b>AC-30's "reduce the appliance asset count in Damage Location" has no ledger to check against.</b>
-          <p>Nothing anywhere in this codebase tracks whole-appliance counts by location — only spare-<i>part</i> quantities (<span class="mono">InventoryStock</span>). Rather than invent a parallel entity nothing else references, a <span class="mono">DismantlingRecord</span>'s own existence is treated as the audit trail that a physical appliance is being dismantled — documented in the entity's own comment, with a note on how a real ledger could be added later if a genuine "how many DOA units are in Damage Location right now" report is ever needed.</p></div>
+          <div><b>The WebSocket layer polls and diffs every 5 seconds — it doesn't push on every mutation.</b>
+          <p>FR-20 read literally wants a push fired from inside every status-changing method across ~6 already-shipped modules (Appointments, TechnicianVisit, JobCards, Workshop, Delivery, Estimates) — far more invasive than any prior phase's purely-additive work. What's built instead: a cheap counts-only poll every 5s, broadcasting the full board only when something actually changed, plus a separate 15-minute refresh for Pending Approval Aging matching the BRD's own stated cadence. NFR-02's "&lt;100ms" holds for the broadcast fan-out itself, not for change detection — a real gap, tracked as a follow-up, same honest-simplification pattern as AMC's manual renewal reminders.</p></div>
         </li>
       </ul>
 
       <h3 style="margin-top:22px;">Live-verified end to end against your real server</h3>
       <div class="verified">
-        <span>Three separate seeded accounts, not mocks, exercise the AC-31 chain</span>
-        <span>Consumable-category component correctly excluded from conversion</span>
-        <span>Verify-by-harvester rejected at the service layer</span>
-        <span>Post-by-harvester and post-by-verifier both rejected, isolated separately</span>
-        <span>Successful post increases MAIN_STORE stock by the exact quantity</span>
-        <span>DISMANTLING_RECOVERY GL entry lands with the right amount</span>
-        <span>AC-17-style unlinked-spare-part block on posting</span>
-        <span>Re-posting an already-POSTED record rejected</span>
-        <span>Cancel allowed pre-verify, blocked after — both proven</span>
-        <span>118 total Swagger paths confirmed, up from 111</span>
+        <span>All 6 REST endpoints return 200 with cross-consistent payloads</span>
+        <span>59 real active jobs correctly bucketed across 8 Kanban columns</span>
+        <span>No-token request rejected 401, wrong-role request rejected 403</span>
+        <span>WebSocket accepts a permitted JWT, sends an immediate snapshot</span>
+        <span>WebSocket rejects a wrong-role JWT with an error + forced disconnect</span>
+        <span>Snapshot payload matches the REST payload exactly</span>
       </div>
     </div>
   </div>
@@ -522,17 +522,17 @@
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Post-MVP (Phase 2)</h3>
-        <h2>Reports / Dashboards</h2>
-        <p>AMC and Dismantling are both shipped. The only item left in your sequencing is real-time Reports/Dashboards (WebSocket Kanban — Job Status Board, Pending Approval Aging, Service Efficiency, First-Time Fix Rate, plus the Finance/Quality dashboards).</p>
+        <h3>Next up · nothing queued</h3>
+        <h2>Your sequencing is complete</h2>
+        <p>AMC → Dismantling → Reports/Dashboards — all three shipped, tested, and live-verified. Optional follow-ups, not yet requested: the Finance Dashboard (BRD 18.2), Quality/Product Dashboard (18.3), Operational Reports (18.4), and genuine push-on-mutation WebSocket updates in place of the current 5s poll-and-diff. Say the word whenever you want one started.</p>
       </div>
-      <div class="go">Say the word to start →</div>
+      <div class="go">Standing by</div>
     </div>
   </div>
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced at a5d58ed</span>
+    <span>master + main synced at 99e6786</span>
   </footer>
 
 </div>
