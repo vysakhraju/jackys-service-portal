@@ -1,9 +1,10 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-25
+**Last updated:** 2026-08-26 (Phase 8)
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 24 commits on `master`, latest `eb9ac90`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 29 commits on `master`, latest `98d2217`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
+**Resolved this session:** the real `docs/planning/STATUS_TRACKER.md` file, previously stuck (genuine exFAT-level "Access is denied" across every tool, for several sessions), came back readable/writable again once a plain `git checkout` deleted and recreated it from scratch - whatever had it wedged is now cleared. It's been overwritten with this file's full current content and both are kept in sync going forward; `STATUS_TRACKER.md.new` stays around as a duplicate/fallback rather than being deleted, in case the same issue ever recurs.
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -19,10 +20,10 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 3 | Job Cards + Warranty Check | ✅ Done — S/N validation, section assignment, warranty override with TL approval + audit trail (new, this session) |
 | 4 | Estimates + Notifications | ✅ Done — shareable-link + staff-assisted customer approval, RWR/revise flow, notification stubs (new, this session) |
 | 5 | Workshop + Inventory (Reserve) | ✅ Done — reserve/custody/return model, technician-deactivation custody guard, live-verified (new, this session) |
-| — | Test-master audit + full testing guide rewrite | ✅ Done — every endpoint (82) now documented and indexed, see below |
-| 6 | QC + Inventory auto-deduct | ⬜ Not started — up next |
-| 7 | Delivery + POD + OOW block | ⬜ Not started |
-| 8 | Finance + Customer Portal | ⬜ Not started |
+| — | Test-master audit + full testing guide rewrite | ✅ Done — every endpoint (100, as of Phase 7) now documented and indexed, see below |
+| 6 | QC + Inventory auto-deduct | ✅ Done — QC gate, admin-assignable permissions, negative-inventory hard gate, rework approval, live-verified (new, this session) |
+| 7 | Delivery + POD + OOW block | ✅ Done — batch/normal delivery (`DLV-####`), dispatch, POD (signature/photo), OOW-paid block + minimal invoicing (Cash/Card/Bank Transfer/B2B Credit), live-verified (new, this session) |
+| 8 | Finance + Customer Portal | ✅ Done — VAT breakdown, partial payments, B2B aging, interdepartment Debit Notes + GL posting log, read-only Customer Portal, live-verified (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -293,6 +294,456 @@ Committed as `eb9ac90`, pushed to GitHub (`main` + `master`).
 
 ---
 
+## Phase 6: QC gate + admin-assignable permissions + inventory consumption — done this session
+
+Implements FR-10 (auto-deduct reserved spares on QC pass, Main Store → Damage Location)
+and the QC checkpoint you asked for, built around requirements you gave in detail before
+any code was written, not the generic "QC_OFFICER role gate" I'd have defaulted to:
+
+1. **Never allow negative inventory.** A part can't be QC-approved as consumed unless the
+   system itself already knows it's genuinely in stock — GRN'd and reserved, not just
+   assumed. "Reserved isn't final" — a technician can top up a short reservation later.
+2. **Rework needs a second pair of eyes.** If the *same* spare part has to be consumed
+   again on the *same* job (a QC rejection sends it back, and the fix needs the same part
+   a second time), that re-consumption needs supervisor/Team Leader sign-off — or a verbal
+   override with notes if no one's reachable.
+3. **The QC checkpoint itself is a hard gate.** Once a job hits `READY_FOR_QC`, it freezes
+   until someone with the right authority approves or rejects it.
+4. **All of this must be admin-configurable, not hardcoded to a role.** "QC officer" and
+   "who can approve a rework" both need to be grantable to *any* user regardless of their
+   primary role — a CCE, a Team Leader, a field technician, whoever the business actually
+   wants — by an admin, not by editing a `@Roles()` list and redeploying.
+
+**Design process**: resolved one real architectural fork up front — a full app-wide
+dynamic-RBAC system vs. a scoped grant just for QC — you chose scoped-to-QC-for-now,
+per-individual-user grants (matching my own recommendation). Then ran a `the-fool`
+pre-mortem (failure-modes mode) on the resulting design before writing any code. Four
+findings, and you engaged with all of them:
+- **Deadlock risk**: two concurrent QC-approvals on jobs sharing spare parts, locked in
+  opposite order, could deadlock. Fix: sort spare-part ids and acquire advisory locks in a
+  fixed order every time, plus a per-job-card lock first.
+- **Self-approval on rework**: your fix, refined further than my draft — the rework
+  sign-off had to be the *same* per-user admin-configurable grant mechanism as QC
+  approval, not a separate hardcoded role check. This became `PermissionType` with two
+  values (`QC_APPROVAL`, `REWORK_APPROVAL`) on one reusable grant table, not two.
+- **Anti-self-dealing**: the person requesting a rework re-consumption can't also approve
+  it — hard-enforced (`400` if `approverId === requesterId`), the same pattern Estimates
+  already uses for `contactValue`.
+- **Silent stock movement**: instead of just decrementing Main Store, QC-approved
+  consumption is modeled as a real double-entry movement — Main Store down, a genuine
+  second `InventoryStock` row for `DAMAGE_LOCATION` up — so the books always balance and
+  "how much of X did we actually use" stays queryable without mining audit logs.
+
+A `test-master` pass followed before implementation, and it caught a real architectural
+risk in *existing* code before it could be repeated at higher stakes: `JobCardsController
+.cancel()` makes two separate, unguarded calls (transition the Job Card, then release its
+reservations) with no shared transaction — low-stakes there (only moves reservations to
+`RETURN_PENDING`), but QC-approve deducts real, permanent stock, so it was designed from
+the start as **one atomic transaction**, never split across two calls.
+
+**A design bug I found and fixed while writing the live E2E test for this, before you ever
+saw it**: my first cut of the negative-inventory gate blocked QC approval whenever *any*
+reservation on the job was still `PARTIALLY_RESERVED` — but Phase 5's normal top-up flow
+never mutates the original short reservation, it just creates a *new* one for the
+remainder. That meant a job whose shortfall was legitimately resolved via a top-up would
+have been blocked from QC approval **forever**, because the old row's status never
+changes. Fixed to check the *most recent* reservation per spare part instead of "any row"
+— which also closes a real (pre-existing, not new) Phase 5 gap along the way: the
+Job-Card-level `SPARE_PENDING`→`IN_PROGRESS` flip only ever looks at the *latest* request
+overall, not per part, so a job can reach `READY_FOR_QC` with one part still genuinely
+short if an unrelated part's request happened to come back fully held afterward. Phase 6's
+gate catches that per-part, even though Phase 5's own status flip doesn't. Caught by
+writing the live E2E scenario end-to-end before trusting the design, exactly the kind of
+thing this process exists to catch — see `docs/testing/TESTING_GUIDE.md` Section 12 for
+the full "why" written out for future reference.
+
+**New `permissions` module** — `UserPermissionGrant` entity (`userId`, `permissionType`
+[`QC_APPROVAL` | `REWORK_APPROVAL`], `grantedByUserId`/`grantedAt`,
+`revokedByUserId`/`revokedAt` [never deleted, only revoked, so grant history is
+permanent]). `PermissionsService.requireActiveGrant()` is the single call site every gated
+action uses — `JobCardsController`'s QC endpoints and `WorkshopService.requestSpare()`'s
+rework check both go through it, so "what counts as authorized" lives in exactly one
+place. Four endpoints, admin-only (`SUPER_ADMIN`/`SERVICE_HEAD` — the same narrow role set
+`AuthController.deactivateUser()` already uses):
+- `POST /permissions/grant` `{ userId, permissionType, notes? }`
+- `POST /permissions/revoke` `{ userId, permissionType, notes? }`
+- `GET /permissions/users/:userId` — one user's full grant history
+- `GET /permissions?type=` — everyone currently holding a given permission
+
+**QC gate (`job-cards` module)** — two new endpoints, both requiring the caller hold an
+active `QC_APPROVAL` grant (checked via `PermissionsService`, independent of their
+`@Roles()`):
+- `POST /job-cards/:id/qc/approve` — atomically (one `dataSource.transaction()`):
+  guards `status === READY_FOR_QC`, checks the negative-inventory gate described above,
+  locks the job card then every distinct spare part it touches (sorted), moves each
+  reservation's `quantityReserved` from `MAIN_STORE` to a `DAMAGE_LOCATION` stock row,
+  marks every consumed reservation `CONSUMED`, and sets the Job Card to a new
+  `QC_PASSED` status — all in the one transaction, all-or-nothing.
+- `POST /job-cards/:id/qc/reject` `{ reason }` — sends the job back to the workshop
+  (`IN_PROGRESS`). Never touches stock (nothing is ever consumed before QC passes).
+  Tracks `qcRejectionCount`/`lastQcRejectedAt`/`lastQcRejectionReason` on the Job Card
+  (latest snapshot, full history via `@Audit()` — same pattern as `warrantyOverride`).
+
+**Rework gate (`workshop` module)** — `WorkshopService.requestSpare()` extended: if the
+*same* spare part was already requested/reserved once before on the *same* Job Card
+**and** that job has at least one prior QC rejection, the request needs `approverId`
+(a different user holding `REWORK_APPROVAL`) or `verbalOverrideBy` + `verbalOverrideNotes`
+(a documented fallback). Both conditions have to hold together — an ordinary top-up
+before any rejection, or a first-time request even after a rejection, is unaffected;
+existing Phase 5 behavior is unchanged for every case except the real rework scenario.
+
+**New entity columns**: `InventoryReservation` gets `CONSUMED` (terminal, distinct from
+`RETURNED` — stock leaving forever vs. stock coming back), `consumedAt`/`consumedByUserId`,
+and `reworkApprovedByUserId`/`reworkVerbalOverrideBy`/`reworkVerbalOverrideNotes`.
+`JobCard` gets `QC_PASSED`, `qcApprovedByUserId`/`qcApprovedAt`,
+`qcRejectionCount`/`lastQcRejectedAt`/`lastQcRejectionReason`. `InventoryLocation` gets
+`DAMAGE_LOCATION`. `AuditAction` gets `QC_APPROVE`/`QC_REJECT`/`PERMISSION_GRANT`/
+`PERMISSION_REVOKE`. `GET /inventory/stock/:sparePartId` now accepts an optional
+`?location=` query param (defaults to `MAIN_STORE`) so `DAMAGE_LOCATION` totals are
+actually checkable — small, backward-compatible addition needed to prove FR-10 live.
+
+**Automated tests**: new `src/permissions/permissions.service.spec.ts` (14 tests), plus
+substantial additions to `inventory.service.spec.ts` (the QC-consumption method: happy
+path, the negative-inventory gate, the top-up-doesn't-block-forever fix, the per-part gap
+closure, locking order, `hasPriorReservationForPart`, rework fields on `reserve()`),
+`job-cards.service.spec.ts` (`qcReject`), and `workshop.service.spec.ts` (the full rework
+gate: no-trigger cases, anti-self-dealing, missing-grant, verbal override, missing
+approval) — 44 new tests this phase.
+
+```
+Test Suites: 13 passed, 13 total
+Tests:       321 passed, 321 total
+```
+
+`nest build` and `tsc --noEmit` both clean. (Build/test verification for this phase ran
+against a local copy of the source on this machine's own disk rather than the mounted
+project folder directly — the mounted-folder bridge makes `npm ci`/`jest`/`tsc` extremely
+slow file-I/O-wise; a local copy with a fresh `npm ci` cut a single `jest` run from a
+45-second-plus timeout to under 4 seconds. Every file that matters is still written
+directly into `D:\Jackys\jackys service portal` as usual — the local copy was scratch,
+used only to run the verification faster, and was not committed anywhere.)
+
+**Live end-to-end verification — actually run against your server, all green**:
+`scripts/phase6-e2e-test.ps1` ran start to finish against `localhost:3000` and your real
+Postgres — happy-path QC approve with real Main Store→Damage Location stock movement
+(confirmed: 20→17 on hand, 0→3 in Damage Location for a 3-unit consumption), the QC-gate
+access-control story (a CCE denied with 403, admin-granted, then approves), the
+negative-inventory hard gate (blocked with the exact shortfall in the response, resolved
+via GRN+top-up, then approved), the full rework gate (blocked with no approver,
+anti-self-dealing, missing-grant, granted-and-succeeds, verbal-override fallback with a
+too-short-notes rejection case), a real concurrent-approval race (two Job Cards reserving
+two spare parts in reverse order, `qc/approve` fired at the same time via PowerShell
+background jobs — both reached `QC_PASSED`, no deadlock, correct 2-unit Damage Location
+totals for each part), and the permissions admin surface (grant, revoke, post-revoke 403,
+grant history). `=== PHASE 6 E2E TEST COMPLETE ===`, every step `OK`.
+
+The live run found **one more real gap**, beyond the negative-inventory-gate design bug
+above: the gate's own 409 response tells you exactly which part is short and by how much,
+but there was originally no way to actually resolve that from where the job sits.
+`WorkshopService.requestSpare()` only accepted `IN_PROGRESS`/`SPARE_PENDING` — a job stuck
+at `READY_FOR_QC` behind the stock gate had no legal way to receive the top-up needed to
+clear it, short of routing it through `qc/reject` (semantically meant for quality
+problems, not logistics) and re-completing. Fixed by letting `requestSpare()` also accept
+`READY_FOR_QC`: the top-up reserves normally, and the job simply stays at `READY_FOR_QC`
+either way (fully covered or still short) rather than bouncing through `IN_PROGRESS` —
+`qc/approve` re-checks stock itself on the next attempt regardless. This directly
+delivers "reserved isn't necessarily final — a technician can top up a short reservation
+later," for the exact scenario the gate itself creates. Confirmed it does **not**
+accidentally trigger the rework-approval gate for a pure stock top-up: that gate keys off
+an actual prior QC rejection (`qcRejectionCount > 0`), which a stock-blocked-but-never-
+rejected job never has — 4 new unit tests cover this directly (321 tests total now, up
+from 317). The two other issues the live run surfaced were both in the *test script*, not
+the app: it compared a warranty-status enum against its TypeScript member name
+(`OUT_OF_WARRANTY`) instead of its actual serialized value (`OOW`), and it booked every
+test job for the same field technician at the exact same time slot, tripping the
+(correct, pre-existing) technician double-booking check — both are one-line script fixes.
+
+
+## Phase 7: Delivery + POD + OOW invoicing block — done this session
+
+Implements FR-11 (batch delivery = single `DLV#`) and FR-12/AC-11 (block OOW delivery
+unless paid or B2B Credit) and AC-12 (POD mandatory, signature OR photo). Same process as
+every phase so far: a `the-fool` pre-mortem on the design before writing any code, then
+`entities -> services -> controllers -> spec suite -> live E2E script`, in that order.
+
+**The Phase 8 fork, resolved up front**: FR-12/AC-11 needs to check "is this OOW job's
+invoice Paid" *now*, but the real Finance module (VAT breakdown, GL posting,
+interdepartment debit notes, B2B aging) is Phase 8, not built yet. Rather than block this
+phase on Phase 8, or bolt a payment flag directly onto `JobCard`, built a deliberately
+minimal `Invoice` entity now - `DRAFT`/`PAID`/`CANCELLED`, no VAT line, no GL - scoped
+tightly to what FR-12/AC-11 literally asks for (amount snapshotted from the job's approved
+Estimate, `record-payment` accepting Cash/Card/Bank Transfer/B2B Credit). Phase 8
+substantially extends this entity, it doesn't replace it. Also resolved a naming
+collision on paper, not in code: `Appointment.invoiceNumber` (the customer's *original
+purchase* invoice, used for S/N-vs-invoice warranty verification since the Job Cards
+phase) and this new billing `Invoice` are two completely different documents that happen
+to share the word "invoice" - a doc comment on each now calls this out explicitly rather
+than renaming either one and touching already-shipped code.
+
+**`the-fool` pre-mortem, failure-modes mode - eight questions posed, all resolved before
+writing code**:
+1. **Lazy invoice creation race**: two near-simultaneous callers (a dispatcher's delivery
+   attempt, a polling dashboard) could both see "no invoice yet" and both try to insert
+   one. Fixed with a unique index on `Invoice.jobCardId` plus a catch on Postgres's
+   `23505` unique-violation code - the loser refetches and returns the winner's row
+   instead of a raw 500.
+2. **B2B Credit as a payment-bypass loophole**: nothing about `PaymentMethod.B2B_CREDIT`
+   inherently requires the customer actually be B2B. Fixed: `recordPayment()` checks the
+   Job Card's `Appointment.customerType` and rejects with `403` if it isn't `B2B`.
+3. **Batch-claim race**: two dispatchers concurrently `POST /delivery` with overlapping
+   `jobCardIds` could both believe they'd claimed the same Job Card. Fixed the same way
+   Phase 6 closed its concurrent-QC-approval race: `dataSource.transaction()` with
+   Postgres advisory locks acquired in a fixed order (a global "delivery-number-sequence"
+   lock first, then every listed Job Card's lock, sorted by id) - whoever gets there
+   first wins the claim, the loser sees `deliveryId` already set and gets a clean `409`.
+4. **POD payload size**: signature/photo travel as base64 text with no blob storage yet
+   (same stopgap philosophy as the notification stubs). Capped at ~2MB decoded
+   (2.8M base64 chars) at the DTO layer, and excluded from the delivery list-view query so
+   browsing deliveries never drags megabytes of blob data over the wire.
+5. **Whole-batch rejection vs. partial success on the OOW-paid block**: kept whole-batch
+   rejection (mirrors Phase 6's negative-inventory-gate shape) - a `DLV#` means "every
+   member is actually clear to go," not "most of them." Softened with proactive
+   visibility instead: `GET /delivery/ready` shows `invoiceStatus`/`payable` per OOW job
+   *without creating an invoice just by listing*, so a dispatcher can see a job isn't
+   payable before ever attempting to batch it.
+6. **Redelivery-attempt history**: deliberately NOT built. A driver-arrives-customer-not-
+   home retry scenario would want a proper `DeliveryAttempt` history table, which is
+   genuinely out of what FR-11/FR-12/AC-10-12 ask for - documented as a known gap below,
+   not built preemptively.
+7. **Amount staleness**: an approved Estimate's `totalAmount` is immutable once approved
+   (nothing recomputes it later), so a lazily-created invoice's snapshot can never drift
+   from what the customer actually agreed to - no live-staleness risk to guard against.
+8. **The `Invoice`/`Appointment.invoiceNumber` naming collision** - resolved via doc
+   comments, covered above.
+
+**New `delivery` module** - `Delivery` entity is the batch container (`PENDING` ->
+`DISPATCHED` -> `DELIVERED`, or `CANCELLED` from `PENDING`); the JobCard side is a plain
+nullable `deliveryId` FK column (many Job Cards -> one Delivery), not a join table -
+"batch" is just N>=1 members under one manifest, no separate data model needed for
+"normal" (N=1) vs "batch" (N>1). Eight endpoints:
+- `GET /delivery/ready` (`?warrantyStatus=`) - the ready-for-delivery pool with proactive
+  payment visibility (finding #5 above).
+- `POST /delivery` `{ jobCardIds: [...] }` - the transactional batch-claim + OOW-paid gate
+  (findings #2/#3 above); `409` with a `blockers` array on any unpaid OOW member.
+- `POST /delivery/:id/dispatch` `{ driverUserId? }`
+- `POST /delivery/:id/pod` `{ signatureBase64?, photoBase64?, recipientName, notes? }` -
+  AC-12 (`400` if neither signature nor photo), plus a defensive re-check of the OOW-paid
+  gate right before the irreversible `DELIVERED` flip (same "re-check at the irreversible
+  action" pattern Phase 6's `qc/approve` uses for stock).
+- `GET /delivery/:id`, `GET /delivery` (`?status=`), `GET /delivery/job-card/:jobCardId`
+- `POST /delivery/:id/cancel` `{ reason }` - only while `PENDING`; releases every member's
+  `deliveryId` back to the ready-for-delivery pool.
+
+New `JobCardStatus.DELIVERED` (terminal) is set only when POD is actually captured - a
+batch stays `QC_PASSED` through creation and dispatch, no separate Job-Card-level
+`DISPATCHED` status (that's purely a Delivery-level state). Also closed a gap Delivery's
+existence newly makes reachable: `JobCardsService.cancel()` now also blocks cancelling a
+`QC_PASSED` job (stock already permanently consumed, Phase 6) or a `DELIVERED` one -
+neither has a compensating stock/delivery-reversal path.
+
+**New `invoicing` module** - `InvoicingService.getOrCreateForJobCard()` lazily creates a
+`DRAFT` invoice the first time one's needed (never for IW jobs - nothing to invoice,
+warranty covers it), snapshotting `amount` from the job's single approved Estimate
+(defensively errors loud, not silently picks one, if that "at most one APPROVED estimate"
+invariant is ever violated). Three endpoints:
+- `GET /invoicing/job-card/:jobCardId` - lazy-create-on-read.
+- `GET /invoicing/:id`
+- `POST /invoicing/:id/record-payment` `{ method, amountReceived, reference? }` - FR-14
+  (Cash/Card/Bank Transfer/B2B Credit, no online gateway); `amountReceived` must match the
+  invoice exactly (no silent partial "paid"); B2B Credit blocked (`403`) unless the
+  appointment is genuinely `customerType: B2B` (finding #2 above).
+
+Delivery/Invoicing use plain `@Roles()` (`LOGISTICS_DISPATCHER`/`DRIVER`/`SUPER_ADMIN`/
+`SERVICE_HEAD` for Delivery; `ACCOUNTANT`/`FINANCE_MANAGER`/`SUPER_ADMIN`/`SERVICE_HEAD`
+for recording a payment), deliberately **not** Phase 6's admin-assignable
+`PermissionsService` grant mechanism - that stays scoped to QC/rework only, per your
+earlier explicit decision, not extended to every new module by default.
+
+Raised the JSON body-size limit (`app.useBodyParser('json', { limit: '6mb' })`, NestJS
+v11's body-parser override API, needed `NestExpressApplication` typing in `main.ts`) since
+POD signature/photo travel as base64 inside a JSON body, well past Express's ~100kb
+default.
+
+**Automated tests**: new `src/invoicing/invoicing.service.spec.ts` (21 tests) and
+`src/delivery/delivery.service.spec.ts` (21 tests, including explicit coverage of the
+lock-acquisition order from finding #3 and the AC-12 POD validation from finding #4), plus
+additions to `job-cards.service.spec.ts` (the two new `cancel()` guards, the two new
+Delivery lookup methods) - 47 new tests this phase.
+
+```
+Test Suites: 15 passed, 15 total
+Tests:       368 passed, 368 total
+```
+
+`tsc --noEmit` clean. (Same local-copy build-verify technique as Phase 6 - fast
+`tsc`/`jest` against a scratch copy of `src/`, nothing committed from there; every real
+file lives in `D:\Jackys\jackys service portal` as usual.)
+
+**Live end-to-end verification - actually run against your server, all green**:
+`scripts/phase7-e2e-test.ps1` ran start to finish against `localhost:3000` and your real
+Postgres - the happy path (batch two in-warranty Job Cards into one `DLV#`, dispatch, POD
+with a signature only, both Job Cards `DELIVERED`), the OOW-paid block (`409` with the
+real amount owed) resolved via `record-payment` then a successful retry (POD proven again
+with a photo-only capture, confirming signature/photo are a genuine OR), the B2B Credit
+loophole correctly rejected (`403`) for a real B2C customer and correctly accepted for a
+real B2B customer, the amount-mismatch rejection, a real concurrent-dispatcher race (two
+different `LOGISTICS_DISPATCHER` users firing `POST /delivery` on the *same* Job Card at
+the same time via PowerShell background jobs - exactly one winner, one clean `409` loser,
+no double-claim), batch cancel-before-dispatch with the freed Job Cards proven genuinely
+re-batchable afterward, and the missing/not-ready Job Card guards. `=== PHASE 7 E2E TEST
+COMPLETE ===`, every step `OK`.
+
+The live run found two bugs - both in the *test script*, not the app (the app's actual
+behavior was correct both times, confirmed by inspecting the raw response bodies): the
+script assumed `ConflictException`'s `blockers` array was nested under a `.message`
+property when Nest actually returns the object passed to `ConflictException` as the
+response body directly (no extra nesting); and it tested the "nonexistent Job Card"
+`404` case with an all-zeros UUID, which fails class-validator's `@IsUUID('4')`
+version-format check before the request ever reaches the service (a `400`, not what that
+case was testing) - fixed by generating a real random v4 UUID instead.
+
+---
+
+## Phase 8: Finance extension + Customer Portal — done this session
+
+Extends Phase 7's deliberately-minimal `Invoice` stopgap in place (never replaced) and
+adds the two remaining post-MVP pieces the implementation plan scopes to this week:
+FR-13/AC-13's VAT breakdown, FR-14's partial payments, AC-16's B2B aging/recharge
+reporting, FR-15/AC-15's interdepartment Debit Notes, an internal GL posting log, and
+EPIC-005's read-only Customer Portal (track/view-invoice/download-summary - Estimate
+approval already had its own public flow since Phase 4, untouched here).
+
+**Design decisions made before writing code** (a self-directed pre-mortem pass covering
+the same ground `the-fool` would - the areas most likely to hide a real gap):
+
+1. **VAT breakdown is a copy, not a recomputation.** The Estimate already computed
+   `subtotal`/`vatAmount`/`totalAmount` correctly using the Job Card's Service Centre
+   `vatRate` back in Phase 4 - Invoice's new `subtotal`/`vatRate`/`vatAmount` columns
+   snapshot those values at the same moment `amount` is snapshotted, rather than
+   recomputing anything. One number, one source of truth.
+2. **Partial payments replace Phase 7's all-or-nothing `recordPayment`.** A new `Payment`
+   entity (one row per payment, append-only like `AuditLog`) replaces "amountReceived
+   must equal the invoice exactly" with "amount must be `> 0` and `<=` the remaining
+   balance" - `Invoice.status` becomes `PARTIALLY_PAID` until the balance actually hits
+   zero. `Invoice.amountReceived`/`paymentMethod`/`paidAt` stay on the entity as a
+   latest-payment display convenience, but the real source of truth for "how much has
+   been paid" is `SUM(Payment.amount)`.
+3. **B2B aging looks at customer type, not payment method.** A `DRAFT` invoice has no
+   `paymentMethod` yet (nothing's been paid), so bucketing by "invoices already tagged
+   B2B_CREDIT" would miss every not-yet-touched B2B invoice - exactly the ones a recharge
+   report most needs to surface. Instead it looks at the Job Card's
+   `Appointment.customerType === B2B` directly, buckets by days past a new `dueDate`
+   (createdAt + 30 days, B2B Credit's term), and only ever looks at still-open
+   (`DRAFT`/`PARTIALLY_PAID`) invoices.
+4. **Debit Notes are scoped narrowly: `B2B_SALES_CHANNEL` + `IN_WARRANTY` only.**
+   Everything else (any warranty status for B2C/B2B, or an out-of-warranty
+   B2B_SALES_CHANNEL job) still goes through Invoice exactly as before - an OOW job
+   always means "someone external owes money," which Invoice already models; a Debit
+   Note is specifically for recharging a *warranty* repair *internally* between
+   departments, where no external customer bill exists at all.
+5. **Interdepartment labor rate: a documented assumption, guarded against silent 0.**
+   There's no existing link from a Job Card to a specific Service Price List row, so
+   `DebitNotesService.resolveLaborCost()` looks for a `REPAIR`-activity row matching the
+   job's exact model, falling back to a model-agnostic default `REPAIR` row. If neither
+   exists, it throws a clear `400` rather than silently charging 0 labor - a silent 0
+   would understate every recharge and is exactly the kind of gap a real Finance audit
+   would flag.
+6. **GL posting is an honest internal-only stopgap, flagged as such - same philosophy as
+   Phase 7's Invoice.** The discovery doc lists the real GL/accounting-system integration
+   format as an open, unresolved external dependency (no chart of accounts exists). Built
+   a `GlPosting` journal log instead - system-generated only (no manual-entry endpoint, so
+   every row is traceable to a real payment or posted Debit Note), fixed account-code
+   strings standing in for a real chart of accounts. Meant to be the ready-made source
+   list a real integration replays from later, not thrown away when that's built.
+7. **"Pay invoice" in the Customer Portal is view-only, not a checkout.** The discovery
+   doc's own scope question S2 ("Payment gateway explicitly out of scope?") is
+   Closed/Confirmed, and FR-14 is manual-only payment. So the portal shows what's owed
+   and its status, with a message pointing the customer to contact staff - it never
+   pretends to take a payment.
+8. **Customer Portal tokens are per-Job-Card, generated at creation, long-lived (180
+   days)** - unlike Estimate's `accessToken` (generated only when `send()` is explicitly
+   called, since there's nothing to approve before then), a tracking link is useful from
+   day one of any job, so `JobCardsService.create()` now sets `publicToken`/
+   `publicTokenExpiresAt` directly. Mirrors `EstimatesPublicController`'s existing
+   pattern exactly: a separate, guard-free controller (`CustomerPortalController`), not a
+   per-route bypass on the staff one.
+
+**New `payments` table** (`src/invoicing/entities/payment.entity.ts`) - one row per
+payment, `invoiceId`/`method`/`amount`/`reference`/`recordedByUserId`/`recordedAt`.
+`Invoice` gains `subtotal`/`vatRate`/`vatAmount`/`dueDate` and a new
+`PARTIALLY_PAID` status.
+
+**New `debit-notes` module** - `DebitNote` (`DN-####`, lazily created exactly like
+`Invoice`, same unique-index + `23505`-retry race safety) with `sparePartsCost` (summed
+from every `CONSUMED` `InventoryReservation` for the job, at `unitCost`, not the
+customer-facing price), `laborCost` (resolved per decision #5 above),
+`status` (`DRAFT`/`POSTED`, terminal once posted). Five endpoints:
+`GET /debit-notes/job-card/:jobCardId` (lazy-create), `POST /debit-notes/:id/post`,
+`GET /debit-notes`, `GET /debit-notes/:id`, `GET /debit-notes/recharge-report` (AC-16 -
+posted vs. draft counts/totals).
+
+**New `gl-ledger` module** - `GlPosting` log, `GlLedgerService.postInvoicePayment()`
+(called by every `InvoicingService.recordPayment()`) and `postDebitNote()` (called by
+`DebitNotesService.post()`), one `GET /gl-postings` (`?sourceType=`) list endpoint, no
+write endpoint at all (decision #6 above).
+
+**New `customer-portal` module** - `CustomerPortalController` at `/customer-portal/public`
+(no guards, mirrors `EstimatesPublicController`), three routes:
+`GET /customer-portal/public/track/:token`, `GET /customer-portal/public/invoice/:token`
+(decision #7), `GET /customer-portal/public/job-card/:token/summary`. All three treat an
+unknown or expired token identically (`404`, no distinction) so a token-guessing attempt
+can't learn anything from the difference.
+
+**Extended `invoicing` module** - `recordPayment()` now enforces "amount `<=` remaining
+balance" instead of "amount === full amount" (decision #2), posts a GL entry on every
+call, and two new endpoints: `GET /invoicing/:id/payments` (payment history) and
+`GET /invoicing/b2b-aging` (decision #3).
+
+**Automated tests**: `src/invoicing/invoicing.service.spec.ts` rewritten for the new
+constructor/behavior (partial payments, VAT-breakdown snapshot, aging report - 33 tests,
+up from 21), new `src/debit-notes/debit-notes.service.spec.ts` (16 tests, including the
+"no REPAIR price list row exists" hard-stop from decision #5), new
+`src/gl-ledger/gl-ledger.service.spec.ts` (7 tests, one per account-code branch), new
+`src/customer-portal/customer-portal.service.spec.ts` (10 tests, including the
+customer-safe-shape assertion that no internal id leaks through `trackByToken`), and
+additions to `job-cards.service.spec.ts` (the new `publicToken` generation at `create()`,
+and `findByPublicToken()`'s unknown/expired-token null-return behavior) - net +44 tests
+this phase (some of the +33 on invoicing supersede Phase 7-era tests rather than adding
+alongside them).
+
+```
+Test Suites: 18 passed, 18 total
+Tests:       412 passed, 412 total
+```
+
+`tsc --noEmit` clean (same local-copy build-verify technique as every phase since 6).
+
+**Live end-to-end verification - actually run against your server, all green**:
+`scripts/phase8-e2e-test.ps1` ran start to finish against `localhost:3000` and your real
+Postgres (the same server this session verified was already up and serving Swagger at
+`http://localhost:3000/api/docs`, so you can look at any of this yourself right now) - a
+B2C OOW job through a partial Cash payment (checked it lands on `PARTIALLY_PAID`), an
+over-the-remaining-balance rejection, a completing payment (checked it lands on `PAID`),
+a rejected payment-after-already-paid, and a full 2-entry payment history; a B2B OOW job
+deliberately left unpaid, confirmed to appear in the B2B aging report's `0-30 days`
+bucket with the correct outstanding total; a `B2B_CREDIT` payment attempt on the B2C
+invoice correctly rejected (`403`); a full interdepartment (B2B_SALES_CHANNEL,
+in-warranty) job correctly blocked from getting an Invoice (`400` - "nothing to invoice"),
+its Debit Note created with the labor cost matching a seeded Service Price List row
+exactly, posted successfully, a second post attempt rejected (`400`), and the recharge
+report reflecting it; exactly 3 GL postings traced back to this run's 2 payments + 1
+posted Debit Note (proving nothing extra or missing was posted); and all three Customer
+Portal routes against a real Job Card's real `publicToken` (track, view-invoice showing
+`amountDue: 0` once fully paid, and the consolidated summary), plus the unknown-token
+`404`. One test-script bug found and fixed during the live run (not an app bug, confirmed
+by inspecting the real response before treating it as one): the B2B_CREDIT-rejection
+check was originally placed after the same invoice had already been fully paid off by an
+earlier step in the script, so it hit "already paid" (`400`) instead of the
+customer-type check (`403`) it was meant to exercise - fixed by moving that check earlier
+in the script, right after the invoice is first drafted and still unpaid.
+
+---
+
 ## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
@@ -301,14 +752,20 @@ Committed as `eb9ac90`, pushed to GitHub (`main` + `master`).
 - **No real WhatsApp/SMS/Email provider wired up (Phase 4)** — `channelsDelivered` will stay empty for every Estimate until this is done. WhatsApp Business API approval is the known external blocker (2-4 weeks); email/SMS just need a provider chosen and credentials added. The `record-response` staff-assisted path is the practically-usable way to move an Estimate forward until then.
 - **`ESTIMATE_APPROVAL_ROLES` (who can record a customer approval on their behalf) is a plain TS constant, not admin-editable** — extending it to a new role means a code change + redeploy. Deliberately kept as a separate, narrowly-named constant from the general Estimates role list so this is a small, contained change when it's needed, but there's no UI for it yet.
 - **The staff-recorded-approval audit trail relies on the `notes` field and the `contactValue` match check, not independent verification** — this was the strongest risk flagged in the Phase 4 pre-mortem (a rubber-stamped "customer approved" with no real call). The `contactValue`-must-match guard prevents attesting to an unknown contact, but nothing stops a genuinely fabricated approval by someone with valid access. Worth a periodic audit-log review of `record-response` entries per staff member if this becomes a real usage pattern; a second-approval requirement above some order value is a reasonable future addition if disputes ever occur.
-- **No "mark as consumed" step exists yet for spares genuinely used in a completed job (Phase 5)** — `InventoryStock.quantityOnHand` only ever increases (GRN, confirmed returns), never decreases for a legitimate use. This needs to land in Phase 6 alongside QC completion (see the Phase 5 section above for the full explanation) — until then, on-hand numbers will drift upward-only and stop being trustworthy for anything beyond "has this specific reservation been returned."
-- **`InventoryLocation` currently has only one value (`MAIN_STORE`)** — there's no separate "technician van stock" location distinct from custody tracking via `InventoryReservation.custodianUserId`. Fine for the current design (custody *is* the location signal), but worth knowing if a future requirement needs a real second physical location (e.g. a regional warehouse) rather than just "who's holding it."
+
+- **Phase 5's `SPARE_PENDING`→`IN_PROGRESS` status flip is job-level, not per-part (pre-existing gap, compensated for but not fixed at the source)** — `WorkshopService`'s `resumeFromSparePending()` only ever looks at the *latest* spare request across the whole job, so a job can reach `READY_FOR_QC` with one specific part still genuinely short if an unrelated part's later request happened to come back fully held. Phase 6's QC-approval gate catches this correctly (per-part, on the latest reservation per spare part), so it can never actually cause negative inventory — but the underlying Phase 5 status flip itself is still coarser than it should be. Worth tightening `resumeFromSparePending()` to check per-part in a future pass, not urgent since Phase 6 fully compensates.
+- **No admin UI yet for the Permissions module (Phase 6)** — granting/revoking `QC_APPROVAL`/`REWORK_APPROVAL` only works via the raw `POST /permissions/grant` / `POST /permissions/revoke` endpoints through Swagger or a script; there's no screen for an admin to browse users and click-to-grant. Fine for now with a handful of users, worth a real UI once there's a frontend.
+
+- **Delivery doesn't track failed-delivery-attempt history (Phase 7, deliberate)** — a driver-arrives-customer-not-home retry scenario currently has no representation; the `the-fool` pre-mortem flagged this and it was deliberately left out as genuinely out of what FR-11/FR-12/AC-10-12 ask for. If this comes up in practice, it wants a proper `DeliveryAttempt` history table, not a field bolted onto `Delivery`.
+- **GL posting (Phase 8) is a deliberate internal-only stopgap, not a real accounting-system integration** — fixed account-code strings stand in for a real chart of accounts, and postings are a simplified two-line entry (no separate COGS/revenue split). The discovery doc lists the real GL/ERP integration format as an open, unresolved external dependency. Meant to be the ready-made list a real integration replays from, not thrown away once that's built.
+- **Interdepartment labor rate (Phase 8) relies on a documented assumption** — since no direct link exists from a Job Card to a specific Service Price List row, `DebitNotesService.resolveLaborCost()` matches on `activityType=REPAIR` (model-specific, falling back to a model-agnostic default row). Worth a real link if a Job Card's actual "activity type" ever needs to be something other than REPAIR.
+- **Customer Portal's "pay invoice" is deliberately view-only (Phase 8)** — no online payment gateway exists (confirmed out of scope, S2 in the discovery doc), so a customer sees what's owed but a real payment still has to go through staff via `record-payment`. Revisit only if a gateway integration is ever explicitly scoped.
 
 ---
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 82 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, and Workshop + Inventory — plus a troubleshooting table and a new **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 111 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, Delivery + Invoicing, and the Finance extension + Customer Portal (Phase 8) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
 
 Also new this session: `npm run seed:technician` now accepts `SEED_TECH_ROLE` (e.g. `TECHNICIAN_WORKSHOP`, `WAREHOUSE_CLERK`) so you can seed a test login for any role, not just `TECHNICIAN_FIELD` — same pattern as `npm run seed:admin`.
 
@@ -377,34 +834,77 @@ GET  /workshop/:jobCardId
 ```
 There's also a ready-made PowerShell smoke-test script covering the whole flow at once: `scripts/phase5-e2e-test.ps1` — AC-17 negative case, GRN, full + partial reservation, the deactivation custody guard (blocked then unblocked), job-card cancel auto-releasing reservations, and confirm-return. Run it with `powershell -ExecutionPolicy Bypass -File scripts\phase5-e2e-test.ps1` while the dev server is up.
 
-All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`).
+To try QC + Permissions (needs a Job Card at `READY_FOR_QC` — completing Workshop+Inventory as above gets you there):
+```
+POST /permissions/grant                         { "userId": "...", "permissionType": "QC_APPROVAL", "notes": "..." }
+POST /permissions/grant                         { "userId": "...", "permissionType": "REWORK_APPROVAL", "notes": "..." }
+POST /permissions/revoke                        { "userId": "...", "permissionType": "QC_APPROVAL", "notes": "..." }
+GET  /permissions/users/:userId
+GET  /permissions?type=QC_APPROVAL
+POST /job-cards/:id/qc/approve                                                      (caller needs an active QC_APPROVAL grant)
+POST /job-cards/:id/qc/reject                    { "reason": "..." }                (caller needs an active QC_APPROVAL grant)
+GET  /inventory/stock/:sparePartId?location=DAMAGE_LOCATION                         (confirms consumed stock landed here)
+```
+On a rework re-request (same part, same job, after a QC rejection), `POST /workshop/:jobCardId/request-spare` needs either `{ "approverId": "..." }` (a different user holding `REWORK_APPROVAL`) or `{ "verbalOverrideBy": "...", "verbalOverrideNotes": "..." }` added to the usual body.
+
+There's also a ready-made PowerShell smoke-test script covering the whole flow at once: `scripts/phase6-e2e-test.ps1` — the QC-gate access-control story (denied, granted, approved), the negative-inventory hard gate (blocked, resolved via top-up, then approved), the full rework gate (blocked, anti-self-dealing, granted, verbal-override fallback), a real concurrent-approval race proving no deadlock, and the permissions admin surface. Run it with `powershell -ExecutionPolicy Bypass -File scripts\phase6-e2e-test.ps1` while the dev server is up.
+
+To try Delivery + Invoicing (needs a Job Card at `QC_PASSED` — completing QC as above gets you there):
+```
+GET  /delivery/ready?warrantyStatus=IW                                              (or OOW)
+POST /delivery                                   { "jobCardIds": ["...", "..."] }   (409 + blockers if an OOW member is unpaid)
+GET  /invoicing/job-card/:jobCardId                                                 (lazy-creates the DRAFT invoice)
+POST /invoicing/:id/record-payment               { "method": "CASH", "amountReceived": 470, "reference": "..." }
+POST /delivery/:id/dispatch                      { "driverUserId": "..." }
+POST /delivery/:id/pod                           { "signatureBase64": "...", "recipientName": "...", "notes": "..." }
+GET  /delivery/:id
+GET  /delivery?status=PENDING
+GET  /delivery/job-card/:jobCardId
+POST /delivery/:id/cancel                        { "reason": "..." }                (only while PENDING)
+```
+There's also a ready-made PowerShell smoke-test script covering the whole flow at once:
+`scripts/phase7-e2e-test.ps1` — the happy path, the OOW-paid block and its resolution, the
+B2B Credit loophole rejection, the amount-mismatch rejection, POD validation, a real
+concurrent-dispatcher race, and batch cancel. Run it with `powershell -ExecutionPolicy
+Bypass -File scripts\phase7-e2e-test.ps1` while the dev server is up.
+
+To try the Finance extension + Customer Portal (needs a Job Card at `QC_PASSED` as above;
+for a Debit Note, needs `customerType: B2B_SALES_CHANNEL` + an `IN_WARRANTY` job, plus a
+`REPAIR` row in the Service Price List with `interdepartmentLaborCost` set):
+```
+GET  /invoicing/job-card/:jobCardId                                                 (now includes subtotal/vatRate/vatAmount/dueDate)
+POST /invoicing/:id/record-payment               { "method": "CASH", "amountReceived": 200 }   (partial amounts now OK - just <= the remaining balance)
+GET  /invoicing/:id/payments
+GET  /invoicing/b2b-aging
+GET  /debit-notes/job-card/:jobCardId                                               (lazy-creates the DRAFT debit note)
+POST /debit-notes/:id/post
+GET  /debit-notes
+GET  /debit-notes/recharge-report
+GET  /gl-postings?sourceType=INVOICE_PAYMENT                                        (or DEBIT_NOTE - system-generated only, no write endpoint)
+GET  /customer-portal/public/track/:token                                           (no login - token comes from GET /job-cards/:id's publicToken field)
+GET  /customer-portal/public/invoice/:token                                         (no login)
+GET  /customer-portal/public/job-card/:token/summary                                (no login)
+```
+There's also a ready-made PowerShell smoke-test script covering the whole flow at once:
+`scripts/phase8-e2e-test.ps1` — the partial-payment sequence with the overpayment guard,
+the B2B aging report, a full interdepartment Debit Note through creation and posting, the
+GL posting count check, and all three Customer Portal routes. Run it with
+`powershell -ExecutionPolicy Bypass -File scripts\phase8-e2e-test.ps1` while the dev
+server is up.
+
+All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`, `customer-portal`).
 
 ---
 
-## Next: Phase 6 — QC + Inventory auto-deduct
+## Next: Phase 2 (post-MVP) — AMC, Dismantling, Reports/Dashboards, Warranty Claims
 
-What it covers, from the implementation plan: a Quality Control step after workshop repair
-work finishes, plus the "mark spare as consumed" step that Phase 5 deliberately left out
-(flagged repeatedly above — on-hand stock currently only ever goes up, via GRN or a
-confirmed return, and nothing ever permanently subtracts a spare that was genuinely used).
-
-Concretely, that likely means:
-- A QC gate on a `WORKSHOP`-section Job Card once it reaches `READY_FOR_QC` — a QC Officer
-  role checking the completed repair before it's allowed to move on, matching the discovery
-  doc's `QC_OFFICER` role that already exists but has nothing to do yet.
-- The actual consumption step: when a Job Card passes QC (or completes, if QC turns out not
-  to gate every job type), every spare-part reservation still attached to it that was
-  genuinely used — not returned — needs to be marked `CONSUMED` and have its quantity
-  permanently subtracted from `InventoryStock.quantityOnHand`. Right now nothing does this;
-  it's the single biggest correctness gap in the inventory model as it stands.
-- Likely also where the Component Yield Matrix (Section 3i — already built as master data
-  but unused so far) starts to matter: when an appliance is dismantled/scrapped, this table
-  says whether a component gets recovered as a spare, treated as a consumable, or scrapped.
-
-Same process as every phase so far: a `the-fool` pre-mortem on the design before writing
-code (Phase 5's caught four real gaps this way), then implementation, then a live end-to-end
-verification script, then this document and the testing guide both get updated. Ready to
-start whenever you are — just say the word.
+The 8-week MVP scope from the implementation plan (weeks 1–8, Foundation through Finance
++ Customer Portal) is now fully built and live-verified. What's left is explicitly
+Phase 2/post-MVP per that plan: AMC Management (contracts, PM scheduling, 30-day renewal
+reminders, RWR upsell), the Dismantling module (BOM→spare conversion, v2.1), and
+Reports/Dashboards (real-time WebSocket Kanban). None started yet — ready to begin
+whenever you say the word, and happy to help scope which one makes sense to tackle first
+if that's not obvious.
 
 ---
 
@@ -415,4 +915,3 @@ start whenever you are — just say the word.
 - External Warranty API access/documentation
 - Acceptance criteria not yet validated with stakeholders
 - `backend/`/`frontend/` folder layout vs. actual `src/` layout — decide whether to reconcile before the React frontend is scaffolded
-- Phase 6 (QC) needs to add the "mark spare as consumed" step that permanently deducts `quantityOnHand` for a completed job's used spares (see Phase 5 section above) — otherwise on-hand stock only ever goes up
