@@ -1,0 +1,538 @@
+<title>Service Portal Build Status</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #eff3f6;
+    --surface: #ffffff;
+    --surface-2: #e6ecf1;
+    --ink: #121a22;
+    --ink-muted: #55636f;
+    --ink-faint: #8494a1;
+    --border: #d3dbe1;
+    --border-strong: #b9c4cc;
+    --accent: #c97a1d;
+    --accent-ink: #ffffff;
+    --accent-wash: #fbecd9;
+    --success: #2e7d63;
+    --success-wash: #e2f0ea;
+    --critical: #b03a2e;
+    --critical-wash: #f8e6e3;
+    --info: #2b5b8c;
+    --info-wash: #e4edf6;
+    --pending: #8b98a3;
+    --pending-wash: #eaeef1;
+    --shadow: 0 1px 2px rgba(18,26,34,0.04), 0 4px 14px rgba(18,26,34,0.06);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1720;
+      --surface: #17222c;
+      --surface-2: #1e2b37;
+      --ink: #e8edf1;
+      --ink-muted: #9aabb8;
+      --ink-faint: #6d7d8a;
+      --border: #2a3946;
+      --border-strong: #3a4c5a;
+      --accent: #e3a24b;
+      --accent-ink: #17222c;
+      --accent-wash: #3a2c15;
+      --success: #4fb08f;
+      --success-wash: #163229;
+      --critical: #e0685a;
+      --critical-wash: #3a1f1c;
+      --info: #6fa3d8;
+      --info-wash: #17293b;
+      --pending: #6d7d8a;
+      --pending-wash: #1c2731;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 4px 18px rgba(0,0,0,0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1720;
+    --surface: #17222c;
+    --surface-2: #1e2b37;
+    --ink: #e8edf1;
+    --ink-muted: #9aabb8;
+    --ink-faint: #6d7d8a;
+    --border: #2a3946;
+    --border-strong: #3a4c5a;
+    --accent: #e3a24b;
+    --accent-ink: #17222c;
+    --accent-wash: #3a2c15;
+    --success: #4fb08f;
+    --success-wash: #163229;
+    --critical: #e0685a;
+    --critical-wash: #3a1f1c;
+    --info: #6fa3d8;
+    --info-wash: #17293b;
+    --pending: #6d7d8a;
+    --pending-wash: #1c2731;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 4px 18px rgba(0,0,0,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 6px;
+  }
+
+  h1 {
+    font-family: 'Big Shoulders Display', sans-serif;
+    font-weight: 800;
+    font-size: clamp(36px, 5.5vw, 54px);
+    line-height: 0.98;
+    letter-spacing: 0.005em;
+    text-transform: uppercase;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  h2 {
+    font-family: 'Big Shoulders Display', sans-serif;
+    font-weight: 700;
+    font-size: 26px;
+    text-transform: uppercase;
+    letter-spacing: 0.01em;
+    margin: 0 0 4px;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    font-size: 16.5px;
+    margin: 0;
+  }
+
+  .mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    padding-bottom: 28px;
+    border-bottom: 3px solid var(--ink);
+    margin-bottom: 32px;
+  }
+  .stat-row {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+  }
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .stat .n {
+    font-family: 'Big Shoulders Display', sans-serif;
+    font-weight: 700;
+    font-size: 30px;
+    line-height: 1;
+  }
+  .stat .l {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* ---------- phase rail ---------- */
+  .section { margin-bottom: 40px; }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .section-head .count {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--ink-faint);
+  }
+
+  .rail {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .phase {
+    display: grid;
+    grid-template-columns: 56px 1fr auto;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .phase:last-child { border-bottom: none; }
+  .phase.current { background: var(--accent-wash); }
+  .phase-num {
+    font-family: 'Big Shoulders Display', sans-serif;
+    font-weight: 800;
+    font-size: 26px;
+    color: var(--ink-faint);
+    text-align: center;
+  }
+  .phase.done .phase-num { color: var(--success); }
+  .phase.current .phase-num { color: var(--accent); }
+  .phase-name { font-weight: 600; font-size: 15px; }
+  .phase-sub { color: var(--ink-muted); font-size: 13.5px; margin-top: 1px; }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .chip.done { background: var(--success-wash); color: var(--success); }
+  .chip.current { background: var(--accent); color: var(--accent-ink); }
+  .chip.pending { background: var(--pending-wash); color: var(--pending); }
+  .chip::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  /* ---------- cards ---------- */
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    padding: 22px 24px;
+  }
+
+  .stat-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 18px 0;
+  }
+  .tile {
+    background: var(--surface);
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .tile .n {
+    font-family: 'Big Shoulders Display', sans-serif;
+    font-weight: 700;
+    font-size: 28px;
+    color: var(--success);
+  }
+  .tile .l {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .findings { margin: 18px 0 0; padding: 0; list-style: none; }
+  .findings li {
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 10px;
+  }
+  .findings li:first-child { border-top: none; }
+  .findings .tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--critical);
+  }
+  .findings b { font-weight: 600; }
+  .findings p { margin: 3px 0 0; color: var(--ink-muted); font-size: 14.5px; }
+
+  .verified {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .verified span {
+    font-size: 13px;
+    padding: 6px 11px;
+    border-radius: 7px;
+    background: var(--success-wash);
+    color: var(--success);
+    font-weight: 500;
+  }
+  .verified span::before { content: "✓ "; font-weight: 700; }
+
+  /* ---------- alert ---------- */
+  .alert {
+    border: 1px solid var(--critical);
+    border-left-width: 5px;
+    border-radius: 8px;
+    background: var(--critical-wash);
+    padding: 18px 22px;
+  }
+  .alert h3 { color: var(--critical); }
+  .alert p { margin: 8px 0 0; font-size: 14.5px; }
+  .alert ol { margin: 10px 0 0; padding-left: 20px; font-size: 14.5px; }
+  .alert li { margin-bottom: 4px; }
+  .alert .resolved-tag {
+    display: inline-block;
+    margin-top: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--success);
+    color: #fff;
+  }
+
+  /* ---------- next up ---------- */
+  .next {
+    border: 1px solid var(--info);
+    border-radius: 10px;
+    background: var(--info-wash);
+    padding: 22px 24px;
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .next h3 { color: var(--info); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; }
+  .next h2 { color: var(--ink); margin-top: 6px; }
+  .next p { margin: 6px 0 0; color: var(--ink-muted); max-width: 46ch; font-size: 14.5px; }
+  .next .go {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--info);
+    white-space: nowrap;
+  }
+
+  footer {
+    margin-top: 44px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+
+  @media (max-width: 560px) {
+    .phase { grid-template-columns: 40px 1fr; }
+    .phase .chip { grid-column: 1 / -1; justify-self: start; margin-top: 4px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="eyebrow">Jacky's Service Portal · NestJS + PostgreSQL + JWT + React</p>
+      <h1>Build Status</h1>
+    </div>
+    <div class="stat-row">
+      <div class="stat"><span class="n mono">MVP + 2</span><span class="l">Phases done (Dismantling live)</span></div>
+      <div class="stat"><span class="n mono">466</span><span class="l">Tests passing</span></div>
+      <div class="stat"><span class="n mono">134</span><span class="l">Endpoints live</span></div>
+      <div class="stat"><span class="n mono">a5d58ed</span><span class="l">Latest commit</span></div>
+    </div>
+  </header>
+
+  <div class="section">
+    <div class="section-head"><h2>Phase timeline</h2><span class="count mono">master + main in sync</span></div>
+    <div class="rail">
+      <div class="phase done">
+        <span class="phase-num mono">0</span>
+        <div><div class="phase-name">Dev environment setup</div><div class="phase-sub">Postgres, DB, app running on your machine</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">1</span>
+        <div><div class="phase-name">Auth + Master Data</div><div class="phase-sub">9 real bugs found & fixed</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">2</span>
+        <div><div class="phase-name">Appointments + Technician Mobile API</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">3</span>
+        <div><div class="phase-name">Job Cards + Warranty Check</div><div class="phase-sub">S/N validation, TL override, audit trail</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">4</span>
+        <div><div class="phase-name">Estimates + Notifications</div><div class="phase-sub">Shareable link, RWR/revise flow</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">5</span>
+        <div><div class="phase-name">Workshop + Inventory (Reserve)</div><div class="phase-sub">Reserve/custody/return model</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">6</span>
+        <div><div class="phase-name">QC gate + Permissions + Inventory consumption</div><div class="phase-sub">Live-verified, shipped</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">7</span>
+        <div><div class="phase-name">Delivery + POD + OOW invoicing block</div><div class="phase-sub">Live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">8</span>
+        <div><div class="phase-name">Finance extension + Customer Portal</div><div class="phase-sub">Live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">9</span>
+        <div><div class="phase-name">AMC Management (post-MVP)</div><div class="phase-sub">Live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase current">
+        <span class="phase-num mono">10</span>
+        <div><div class="phase-name">Dismantling (post-MVP)</div><div class="phase-sub">Live-verified today — details below</div></div>
+        <span class="chip current">Shipped today</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head"><h2>Phase 10, in detail</h2></div>
+    <div class="card">
+      <h3 style="font-size:17px;">Defective/DOA appliance recovery — harvest, verify, price-and-post, with a real three-actor segregation of duties</h3>
+      <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
+        Second of the three post-MVP modules you asked for (AMC → Dismantling →
+        Reports/Dashboards). A <span class="mono">DismantlingRecord</span> tracks a
+        write-off appliance already in Damage Location through strip-down, logged
+        components (a jsonb snapshot, cross-checked against the existing
+        <span class="mono">ComponentYieldMatrix</span> BOM/yield master data),
+        supervisor verification, and finally the Service Manager's manual pricing +
+        posting — which atomically increases live spare-part stock and posts a GL
+        entry (AC-30). The three steps must be three different people: the API
+        rejects (400, not just a role check) if the same account tries to verify
+        its own harvest, or price-and-post something it harvested or verified.
+      </p>
+
+      <div class="stat-tiles">
+        <div class="tile"><span class="n mono">26</span><span class="l">New tests</span></div>
+        <div class="tile"><span class="n mono">3</span><span class="l">Segregation-of-duties gates</span></div>
+        <div class="tile"><span class="n mono">7</span><span class="l">New endpoints</span></div>
+        <div class="tile"><span class="n mono">1</span><span class="l">New module (dismantling)</span></div>
+      </div>
+
+      <h3 style="margin-top:4px;">Design gap called out explicitly, not silently guessed</h3>
+      <ul class="findings">
+        <li>
+          <span class="tag">01</span>
+          <div><b>AC-30's "reduce the appliance asset count in Damage Location" has no ledger to check against.</b>
+          <p>Nothing anywhere in this codebase tracks whole-appliance counts by location — only spare-<i>part</i> quantities (<span class="mono">InventoryStock</span>). Rather than invent a parallel entity nothing else references, a <span class="mono">DismantlingRecord</span>'s own existence is treated as the audit trail that a physical appliance is being dismantled — documented in the entity's own comment, with a note on how a real ledger could be added later if a genuine "how many DOA units are in Damage Location right now" report is ever needed.</p></div>
+        </li>
+      </ul>
+
+      <h3 style="margin-top:22px;">Live-verified end to end against your real server</h3>
+      <div class="verified">
+        <span>Three separate seeded accounts, not mocks, exercise the AC-31 chain</span>
+        <span>Consumable-category component correctly excluded from conversion</span>
+        <span>Verify-by-harvester rejected at the service layer</span>
+        <span>Post-by-harvester and post-by-verifier both rejected, isolated separately</span>
+        <span>Successful post increases MAIN_STORE stock by the exact quantity</span>
+        <span>DISMANTLING_RECOVERY GL entry lands with the right amount</span>
+        <span>AC-17-style unlinked-spare-part block on posting</span>
+        <span>Re-posting an already-POSTED record rejected</span>
+        <span>Cancel allowed pre-verify, blocked after — both proven</span>
+        <span>118 total Swagger paths confirmed, up from 111</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head"><h2>Worth knowing</h2></div>
+    <div class="alert" style="border-color:var(--pending); background:var(--pending-wash);">
+      <h3 style="color:var(--ink);">The same two doc files are still locked on your machine — GitHub is unaffected</h3>
+      <p>
+        <span class="mono">STATUS_TRACKER.md</span> and <span class="mono">TESTING_GUIDE.md</span>
+        remain inaccessible locally (this has now recurred across sessions) — your Defender
+        exclusion for the project folder didn't clear it, since an exclusion stops future scans,
+        it doesn't release a handle a process is already holding. Deleting the files now
+        succeeds without error, but recreating them under the same name still fails, which
+        points at a genuine lingering Windows-level delete-pending handle (Search Indexer or
+        an editor/preview, most likely) rather than a permissions problem. Both docs' correct,
+        current content lives in <span class="mono">STATUS_TRACKER.md.new</span> and a new
+        <span class="mono">TESTING_GUIDE.md.new</span> stopgap, and is fully committed and
+        pushed to <span class="mono">master</span>/<span class="mono">main</span> on GitHub.
+        Once whatever's holding the handle closes, <span class="mono">git checkout --
+        docs/planning/STATUS_TRACKER.md docs/testing/TESTING_GUIDE.md</span> will restore both
+        in one shot.
+      </p>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="next">
+      <div>
+        <h3>Next up · Post-MVP (Phase 2)</h3>
+        <h2>Reports / Dashboards</h2>
+        <p>AMC and Dismantling are both shipped. The only item left in your sequencing is real-time Reports/Dashboards (WebSocket Kanban — Job Status Board, Pending Approval Aging, Service Efficiency, First-Time Fix Rate, plus the Finance/Quality dashboards).</p>
+      </div>
+      <div class="go">Say the word to start →</div>
+    </div>
+  </div>
+
+  <footer>
+    <span>github.com/vysakhraju/jackys-service-portal</span>
+    <span>master + main synced at a5d58ed</span>
+  </footer>
+
+</div>
