@@ -32,6 +32,14 @@ export class InvoicingController {
     return this.invoicingService.getOrCreateForJobCard(jobCardId);
   }
 
+  @Get('b2b-aging')
+  @Roles(...INVOICING_ROLES)
+  @ApiOperation({ summary: 'AC-16: B2B Credit aging/recharge report, bucketed 0-30/31-60/61-90/90+ days past due' })
+  @ApiResponse({ status: 200, description: 'Aging buckets and total outstanding' })
+  async getB2bAging() {
+    return this.invoicingService.getB2bAgingReport();
+  }
+
   @Get(':id')
   @Roles(...INVOICING_ROLES)
   @ApiOperation({ summary: 'Get one invoice by id' })
@@ -39,6 +47,15 @@ export class InvoicingController {
   @ApiResponse({ status: 404, description: 'Not found' })
   async findById(@Param('id', ParseUUIDPipe) id: string) {
     return this.invoicingService.findById(id);
+  }
+
+  @Get(':id/payments')
+  @Roles(...INVOICING_ROLES)
+  @ApiOperation({ summary: 'List every payment recorded against this invoice, oldest first' })
+  @ApiResponse({ status: 200, description: 'Payment history' })
+  @ApiResponse({ status: 404, description: 'Invoice not found' })
+  async findPayments(@Param('id', ParseUUIDPipe) id: string) {
+    return this.invoicingService.findPayments(id);
   }
 
   @Post(':id/record-payment')
@@ -50,9 +67,9 @@ export class InvoicingController {
     getEntityId: (req) => req.params.id,
     getNewValues: (result) => ({ id: result?.id, status: result?.status, paymentMethod: result?.paymentMethod, amountReceived: result?.amountReceived }),
   })
-  @ApiOperation({ summary: 'FR-14: record a Cash/Card/Bank Transfer/B2B Credit payment against an invoice (no online gateway)' })
-  @ApiResponse({ status: 200, description: 'Payment recorded, invoice is now PAID' })
-  @ApiResponse({ status: 400, description: 'Already paid/cancelled, or amountReceived does not match the invoice amount' })
+  @ApiOperation({ summary: 'FR-14: record a Cash/Card/Bank Transfer/B2B Credit payment against an invoice (no online gateway). Supports partial payments.' })
+  @ApiResponse({ status: 200, description: 'Payment recorded - invoice is now PARTIALLY_PAID or PAID' })
+  @ApiResponse({ status: 400, description: 'Already fully paid/cancelled, or amount exceeds the remaining balance' })
   @ApiResponse({ status: 403, description: 'B2B_CREDIT used on a non-B2B customer' })
   async recordPayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RecordPaymentDto, @CurrentUser() user: User) {
     return this.invoicingService.recordPayment(id, dto.method, dto.amountReceived, user.id, dto.reference);

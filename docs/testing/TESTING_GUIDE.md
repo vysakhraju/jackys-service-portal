@@ -921,14 +921,37 @@ that's the signal to update this guide.
 | `POST /delivery/:id/pod` | 13d |
 | `POST /delivery/:id/cancel` | 13f |
 
-### invoicing (3)
+### invoicing (5)
 | Endpoint | Section |
 |---|---|
-| `GET /invoicing/job-card/:jobCardId` | 13e |
+| `GET /invoicing/job-card/:jobCardId` | 13e, 14a |
+| `GET /invoicing/b2b-aging` | 14c |
 | `GET /invoicing/:id` | 13e |
-| `POST /invoicing/:id/record-payment` | 13e |
+| `GET /invoicing/:id/payments` | 14b |
+| `POST /invoicing/:id/record-payment` | 13e, 14b |
 
-**Total: 100 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 3 invoicing.)
+### debit-notes (5)
+| Endpoint | Section |
+|---|---|
+| `GET /debit-notes/job-card/:jobCardId` | 14d |
+| `GET /debit-notes/recharge-report` | 14d |
+| `GET /debit-notes` | 14d |
+| `GET /debit-notes/:id` | 14d |
+| `POST /debit-notes/:id/post` | 14d |
+
+### gl-postings (1)
+| Endpoint | Section |
+|---|---|
+| `GET /gl-postings` (`?sourceType=`) | 14e |
+
+### customer-portal/public (3)
+| Endpoint | Section |
+|---|---|
+| `GET /customer-portal/public/track/:token` | 14f |
+| `GET /customer-portal/public/invoice/:token` | 14f |
+| `GET /customer-portal/public/job-card/:token/summary` | 14f |
+
+**Total: 111 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal.)
 
 
 ## 12. QC gate + admin-assignable permissions + inventory consumption (Phase 6)
@@ -1138,11 +1161,13 @@ POST /invoicing/:invoiceId/record-payment
 { "method": "CASH", "amountReceived": 493.5, "reference": "receipt-001" }
 ```
 `method` is one of `CASH`/`CARD`/`BANK_TRANSFER`/`B2B_CREDIT` (FR-14 - no online gateway
-yet). `amountReceived` must match the invoice amount **exactly** - a mismatch is
-**`400`** (no silent partial "paid"). `B2B_CREDIT` is rejected with **`403`** unless the
-Job Card's appointment is an actual `customerType: B2B` - it can't be used as a free
-payment-bypass for a B2C customer who won't pay. Once paid, retry `POST /delivery` (13b) -
-it now succeeds. As a defense-in-depth measure, `POST /delivery/:id/pod` (13d) re-checks
+yet). **As of Phase 8**, `amountReceived` no longer has to match the invoice amount
+exactly - partial payments are supported (see Section 14b); it just has to be `> 0` and
+`<=` the remaining balance, or you get **`400`** (no overpayment). `B2B_CREDIT` is
+rejected with **`403`** unless the Job Card's appointment is an actual `customerType:
+B2B` - it can't be used as a free payment-bypass for a B2C customer who won't pay. Once
+the invoice's balance reaches zero (one full payment, or several partial ones), retry
+`POST /delivery` (13b) - it now succeeds. As a defense-in-depth measure, `POST /delivery/:id/pod` (13d) re-checks
 the same paid/B2B-Credit gate right before the irreversible `DELIVERED` flip, in case
 anything changed in between.
 
@@ -1185,6 +1210,150 @@ attempt-history table, not a workaround bolted onto this one.
 
 ---
 
+## 14. Finance extension + Customer Portal (Phase 8)
+
+Phase 7 built `Invoice` as a deliberate stopgap (amount only, DRAFT/PAID/CANCELLED, one
+all-or-nothing payment) purely so FR-12/AC-11's OOW-paid delivery block had a real
+Paid/not-Paid signal. Phase 8 extends that entity in place - adds a VAT breakdown,
+partial payments, a B2B aging report, and a new Debit Note (FR-15/AC-15) + internal GL
+posting log for interdepartment recharges - plus the read-only Customer Portal
+(EPIC-005: track a job, view what's owed, download a summary - approving an Estimate
+already has its own public flow from Section 9c, unchanged here).
+
+Login roles: everything in this section uses the same roles as Section 13 -
+`ACCOUNTANT`/`FINANCE_MANAGER`/`SUPER_ADMIN`/`SERVICE_HEAD` for invoicing/debit-notes/
+gl-postings. The `customer-portal/public/*` routes need **no login at all** - they're
+gated by a per-Job-Card token instead (see 14f).
+
+### 14a. VAT breakdown on the invoice
+
+```
+GET /invoicing/job-card/:jobCardId
+```
+Same lazy-create-on-first-read behavior as Phase 7, but the response now also carries
+`subtotal`, `vatRate`, and `vatAmount` (all copied from the Job Card's already-approved
+Estimate - the Estimate did the real VAT math back in Section 9a using the Job Card's
+Service Centre `vatRate`, so this is a snapshot, not a recomputation), plus a `dueDate`
+(created-at + 30 days - only meaningful for B2B Credit's terms, see 14c).
+
+### 14b. Partial payments
+
+```
+POST /invoicing/:id/record-payment
+{ "method": "CASH", "amountReceived": 200, "reference": "partial-1" }
+```
+You can now record less than the full amount - the invoice moves to
+`PARTIALLY_PAID` (not `PAID`) until the balance actually reaches zero across one or more
+payments. Send an `amountReceived` greater than the remaining balance and expect
+**`400`** (no overpayment). Send another payment for the rest and the invoice flips to
+`PAID`. See every payment recorded against an invoice, oldest first:
+```
+GET /invoicing/:id/payments
+```
+
+### 14c. B2B aging report
+
+```
+GET /invoicing/b2b-aging
+```
+Lists every still-open (`DRAFT`/`PARTIALLY_PAID`) invoice belonging to a `B2B` customer,
+bucketed by days past `dueDate`: `0-30 days` / `31-60 days` / `61-90 days` / `90+ days`,
+each with its own `totalOutstanding`, plus a grand `totalOutstanding` across all buckets.
+A brand-new unpaid B2B invoice (dueDate 30 days out) shows up in `0-30 days` immediately -
+that's expected, not a bug (a "not yet due" invoice is still open, just not yet late).
+
+### 14d. Interdepartment Debit Notes (FR-15/AC-15)
+
+Only for a Job Card whose appointment is `customerType: B2B_SALES_CHANNEL` **and** whose
+warranty status is `IN_WARRANTY` - a warranty repair done for an internal sales channel,
+recharged internally instead of billed to an external customer. Everything else
+(B2C/B2B of either warranty status, or a B2B_SALES_CHANNEL job that's OOW) still goes
+through Invoice as before.
+
+Before you can generate one, a `REPAIR` row must exist in the Service Price List (Section
+3e) with an `interdepartmentLaborCost` set - either matching the Job Card's exact
+`modelId`, or a model-agnostic default row (`modelId` left blank). Skip this and you get a
+clear **`400`** rather than a silently-wrong 0.
+```
+GET /debit-notes/job-card/:jobCardId
+```
+Lazily creates a `DRAFT` Debit Note (`DN-####`) the first time it's asked for -
+`sparePartsCost` is the real cost (not customer price) of every spare consumed at QC for
+this job, `laborCost` comes from the price list row above, `totalAmount` is their sum.
+```
+POST /debit-notes/:id/post
+```
+Moves it to `POSTED` (terminal - posting twice is **`400`**) and generates its GL entry
+(14e). List everything, or just the summary:
+```
+GET /debit-notes
+GET /debit-notes/recharge-report
+```
+The recharge report (AC-16) splits count/total between `posted` and `draft` notes.
+
+### 14e. GL postings (internal ledger stopgap)
+
+```
+GET /gl-postings
+```
+(optionally `?sourceType=INVOICE_PAYMENT` or `?sourceType=DEBIT_NOTE`). There is
+deliberately no endpoint to create one by hand - every row here is generated
+automatically, one per payment recorded (14b) and one per Debit Note posted (14d). This
+is an internal-only journal log, not a real accounting-system export - the discovery doc
+lists the actual GL/ERP integration format as an open, unresolved dependency, so fixed
+account-code strings (e.g. `1000-CASH`, `4000-SERVICE-REVENUE`) stand in for a real chart
+of accounts until that's defined.
+
+### 14f. Customer Portal (public, no login)
+
+Every Job Card gets a `publicToken` the moment it's created (see its `GET /job-cards/:id`
+response, Section 8f) - a 180-day link a customer could use to check on their own repair
+without an account. Three read-only routes, none of which need an `Authorization` header:
+```
+GET /customer-portal/public/track/:token
+GET /customer-portal/public/invoice/:token
+GET /customer-portal/public/job-card/:token/summary
+```
+`track` returns a customer-safe status timeline (no internal ids or staff notes).
+`invoice` shows what's owed (VAT breakdown, amount paid, amount due) for an OOW job, or
+`{"applicable": false}` for an in-warranty one - it's deliberately **view-only**: the BRD
+confirms no online payment gateway is in scope (FR-14/S2), so a real payment still has to
+go through staff via 14b, not a checkout button here. `summary` is the "download job
+card" view - job card + estimate + invoice + delivery essentials in one payload, meant for
+the (not-yet-built) React frontend to render as a printable page. An unknown or expired
+token gets a plain **`404`** on all three - it never reveals which.
+
+### 14g. Prove the guardrails work
+- Record a payment larger than the remaining balance → expect **`400`**.
+- Record a payment against an already fully-`PAID` invoice → expect **`400`**.
+- `B2B_CREDIT` on a B2C customer's invoice → expect **`403`**.
+- Try to generate an Invoice for an in-warranty Job Card → expect **`400`** (nothing to
+  bill - it should be a Debit Note instead, if it's also B2B_SALES_CHANNEL).
+- Try to generate a Debit Note for an out-of-warranty Job Card, or a non-
+  `B2B_SALES_CHANNEL` one → expect **`400`** either way.
+- Generate a Debit Note with no matching (or default) `REPAIR` price list row → expect
+  **`400`**, not a silent 0.
+- Post an already-`POSTED` Debit Note again → expect **`400`**.
+- Hit any `customer-portal/public/*` route with a made-up token → expect **`404`**.
+
+**Live-verified**: `scripts/phase8-e2e-test.ps1` runs this entire section end to end
+against a real server - a B2C OOW job through a partial payment then a completing
+payment (with the overpayment and already-paid guards both proven), a B2B OOW job left
+deliberately unpaid and confirmed to surface in the aging report's `0-30 days` bucket,
+the B2B_CREDIT-on-a-B2C-invoice rejection, a full interdepartment job through Debit Note
+creation (labor cost checked against the seeded price list row) and posting (with the
+double-post guard proven), the recharge report, exactly 3 GL postings appearing for this
+run's 2 payments + 1 debit note, and all three Customer Portal routes (including the
+unknown-token 404). Run it yourself with `powershell -ExecutionPolicy Bypass -File
+scripts\phase8-e2e-test.ps1` while the dev server is up.
+
+One deliberate scope limit to be aware of: GL posting here is a simplified two-line
+journal entry against fixed account-code strings, not a real chart-of-accounts-backed
+export - see 14e. If/when a real accounting system integration is scoped, this log is
+meant to be the ready-made source list to replay from, not something to throw away.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1207,14 +1376,12 @@ attempt-history table, not a workaround bolted onto this one.
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 7** (Auth, Master Data, Appointments, Technician Mobile API,
+Everything through **Phase 8** (Auth, Master Data, Appointments, Technician Mobile API,
 Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
-+ POD + OOW invoicing block) is real, working code you can exercise exactly as above — all
-100 endpoints in Section 11 are live. Phase 8 (the full Finance module: VAT breakdown, GL
-posting, interdepartment debit notes, partial payments, B2B aging) isn't built yet — the
-Phase 7 `Invoice` entity is a deliberately minimal stopgap (DRAFT/PAID/CANCELLED, no VAT
-line, no GL) that Phase 8 will substantially extend, not replace. AMC, Dismantling,
-Reports, and Customer Portal also remain unbuilt.
++ POD + OOW invoicing block, Finance extension + Customer Portal) is real, working code
+you can exercise exactly as above — all 111 endpoints in Section 11 are live. AMC,
+Dismantling, and Reports/Dashboards remain unbuilt (Phase 2/post-MVP per the
+implementation plan).
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

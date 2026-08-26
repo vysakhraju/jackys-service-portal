@@ -107,6 +107,20 @@ describe('JobCardsService', () => {
       expect(result).toEqual(expect.objectContaining({ jobCardNumber: 'JC-0001' }));
     });
 
+    it('Phase 8: generates a 64-char hex public tracking token, valid ~180 days', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(null);
+      technicianService.getVisit.mockResolvedValue(visit());
+
+      await service.create(dto, 'user-1');
+
+      const createCall = jobCardRepository.create.mock.calls[0][0];
+      expect(createCall.publicToken).toMatch(/^[0-9a-f]{64}$/);
+      const daysUntilExpiry = (createCall.publicTokenExpiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+      expect(daysUntilExpiry).toBeGreaterThan(179);
+      expect(daysUntilExpiry).toBeLessThan(181);
+    });
+
     it('numbers sequentially from the last Job Card number', async () => {
       appointmentsService.findById.mockResolvedValue(appointment());
       jobCardRepository.findOne.mockResolvedValue(null);
@@ -583,6 +597,38 @@ describe('JobCardsService', () => {
         expect(jobCardRepository.find).toHaveBeenCalledWith({ where: { deliveryId: 'dlv-1' } });
         expect(result).toBe(members);
       });
+    });
+  });
+
+  describe('Phase 8: findByPublicToken', () => {
+    it('returns the Job Card for a valid, unexpired token', async () => {
+      const futureExpiry = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ publicToken: 'abc123', publicTokenExpiresAt: futureExpiry }));
+
+      const result = await service.findByPublicToken('abc123');
+
+      expect(result?.publicToken).toBe('abc123');
+      expect(jobCardRepository.findOne).toHaveBeenCalledWith({
+        where: { publicToken: 'abc123' },
+        relations: { appointment: true },
+      });
+    });
+
+    it('returns null (not a throw) for an unknown token', async () => {
+      jobCardRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.findByPublicToken('unknown');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null for an expired token, even though the row exists', async () => {
+      const pastExpiry = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ publicToken: 'abc123', publicTokenExpiresAt: pastExpiry }));
+
+      const result = await service.findByPublicToken('abc123');
+
+      expect(result).toBeNull();
     });
   });
 });

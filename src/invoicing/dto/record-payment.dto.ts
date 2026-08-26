@@ -7,7 +7,9 @@ export class RecordPaymentDto {
   @IsEnum(PaymentMethod)
   method: PaymentMethod;
 
-  @ApiProperty({ example: 470.0, description: 'Must equal the invoice amount exactly - partial payments are not supported yet.' })
+  // Phase 8: partial payments are now supported - amount only needs to be <= the
+  // remaining balance, not equal to the full invoice amount. See InvoicingService.addPayment.
+  @ApiProperty({ example: 200.0, description: 'Must be > 0 and <= the invoice\'s remaining balance.' })
   @IsNumber()
   @Min(0.01)
   amountReceived: number;

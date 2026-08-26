@@ -9,8 +9,10 @@ import { CustomerType } from '../appointments/entities/appointment.entity';
 describe('InvoicingService', () => {
   let service: InvoicingService;
   let invoiceRepository: any;
+  let paymentRepository: any;
   let estimateRepository: any;
   let jobCardsService: any;
+  let glLedgerService: any;
   let queryBuilder: any;
 
   const invoice = (overrides: any = {}) =>
@@ -19,12 +21,17 @@ describe('InvoicingService', () => {
       invoiceNumber: 'INV-0001',
       jobCardId: 'jc-1',
       amount: 1500,
+      subtotal: 1428.57,
+      vatRate: 5,
+      vatAmount: 71.43,
+      dueDate: new Date('2026-09-01'),
       status: InvoiceStatus.DRAFT,
       paymentMethod: null,
       amountReceived: null,
       paymentReference: null,
       paidAt: null,
       recordedByUserId: null,
+      createdAt: new Date('2026-08-01'),
       ...overrides,
     } as any);
 
@@ -34,7 +41,7 @@ describe('InvoicingService', () => {
       jobCardNumber: 'JC-0001',
       status: JobCardStatus.QC_PASSED,
       warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY,
-      appointment: { customerType: CustomerType.B2C },
+      appointment: { customerType: CustomerType.B2C, serviceCentre: { vatRate: 5 } },
       ...overrides,
     } as any);
 
@@ -43,8 +50,22 @@ describe('InvoicingService', () => {
       id: 'est-1',
       jobCardId: 'jc-1',
       status: EstimateStatus.APPROVED,
+      subtotal: 1428.57,
+      vatAmount: 71.43,
       totalAmount: 1500,
       createdAt: new Date('2026-08-01'),
+      ...overrides,
+    } as any);
+
+  const payment = (overrides: any = {}) =>
+    ({
+      id: 'pay-1',
+      invoiceId: 'inv-1',
+      method: PaymentMethod.CASH,
+      amount: 500,
+      reference: null,
+      recordedByUserId: 'user-1',
+      recordedAt: new Date('2026-08-02'),
       ...overrides,
     } as any);
 
@@ -56,9 +77,15 @@ describe('InvoicingService', () => {
     };
     invoiceRepository = {
       findOne: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
       create: jest.fn((data: any) => data),
       save: jest.fn((data: any) => Promise.resolve({ ...data, id: data.id || 'inv-1' })),
       createQueryBuilder: jest.fn(() => queryBuilder),
+    };
+    paymentRepository = {
+      find: jest.fn().mockResolvedValue([]),
+      create: jest.fn((data: any) => data),
+      save: jest.fn((data: any) => Promise.resolve({ ...data, id: data.id || 'pay-1' })),
     };
     estimateRepository = {
       find: jest.fn(),
@@ -66,8 +93,12 @@ describe('InvoicingService', () => {
     jobCardsService = {
       findById: jest.fn(),
     };
+    glLedgerService = {
+      postInvoicePayment: jest.fn().mockResolvedValue({}),
+      postDebitNote: jest.fn().mockResolvedValue({}),
+    };
 
-    service = new InvoicingService(invoiceRepository, estimateRepository, jobCardsService);
+    service = new InvoicingService(invoiceRepository, paymentRepository, estimateRepository, jobCardsService, glLedgerService);
   });
 
   describe('findById', () => {
@@ -93,6 +124,41 @@ describe('InvoicingService', () => {
       const result = await service.findByJobCardId('jc-1');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('getAmountPaid / findPayments', () => {
+    it('sums all payment amounts for the invoice', async () => {
+      paymentRepository.find.mockResolvedValue([payment({ amount: 500 }), payment({ id: 'pay-2', amount: 300 })]);
+
+      const result = await service.getAmountPaid('inv-1');
+
+      expect(result).toBe(800);
+    });
+
+    it('returns 0 when no payments exist yet', async () => {
+      paymentRepository.find.mockResolvedValue([]);
+
+      const result = await service.getAmountPaid('inv-1');
+
+      expect(result).toBe(0);
+    });
+
+    it('findPayments 404s for an unknown invoice before touching the payment table', async () => {
+      invoiceRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.findPayments('missing')).rejects.toThrow(NotFoundException);
+      expect(paymentRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('findPayments returns the oldest-first payment history for a known invoice', async () => {
+      invoiceRepository.findOne.mockResolvedValue(invoice());
+      paymentRepository.find.mockResolvedValue([payment()]);
+
+      const result = await service.findPayments('inv-1');
+
+      expect(result).toHaveLength(1);
+      expect(paymentRepository.find).toHaveBeenCalledWith({ where: { invoiceId: 'inv-1' }, order: { recordedAt: 'ASC' } });
     });
   });
 
@@ -136,18 +202,33 @@ describe('InvoicingService', () => {
       await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('creates a DRAFT invoice snapshotting the approved Estimate.totalAmount, with a generated INV-#### number', async () => {
+    it('creates a DRAFT invoice snapshotting the approved Estimate totals (VAT breakdown included) and a generated INV-#### number', async () => {
       invoiceRepository.findOne.mockResolvedValue(null);
       jobCardsService.findById.mockResolvedValue(jobCard());
-      estimateRepository.find.mockResolvedValue([approvedEstimate({ totalAmount: 2450 })]);
+      estimateRepository.find.mockResolvedValue([approvedEstimate({ subtotal: 2333.33, vatAmount: 116.67, totalAmount: 2450 })]);
       queryBuilder.getOne.mockResolvedValue(null);
 
       const result = await service.getOrCreateForJobCard('jc-1');
 
       expect(result.invoiceNumber).toBe('INV-0001');
       expect(result.amount).toBe(2450);
+      expect(result.subtotal).toBe(2333.33);
+      expect(result.vatAmount).toBe(116.67);
+      expect(result.vatRate).toBe(5);
       expect(result.status).toBe(InvoiceStatus.DRAFT);
       expect(result.jobCardId).toBe('jc-1');
+      expect(result.dueDate).toBeInstanceOf(Date);
+    });
+
+    it('falls back to a 5% vatRate when the Service Centre has none on record', async () => {
+      invoiceRepository.findOne.mockResolvedValue(null);
+      jobCardsService.findById.mockResolvedValue(jobCard({ appointment: { customerType: CustomerType.B2C, serviceCentre: {} } }));
+      estimateRepository.find.mockResolvedValue([approvedEstimate()]);
+      queryBuilder.getOne.mockResolvedValue(null);
+
+      const result = await service.getOrCreateForJobCard('jc-1');
+
+      expect(result.vatRate).toBe(5);
     });
 
     it('increments the sequence off the highest existing INV-####', async () => {
@@ -187,7 +268,7 @@ describe('InvoicingService', () => {
   });
 
   describe('recordPayment', () => {
-    it('rejects recording payment against an already-PAID invoice', async () => {
+    it('rejects recording payment against an already fully-PAID invoice', async () => {
       invoiceRepository.findOne.mockResolvedValue(invoice({ status: InvoiceStatus.PAID }));
 
       await expect(service.recordPayment('inv-1', PaymentMethod.CASH, 1500, 'user-1')).rejects.toThrow(BadRequestException);
@@ -216,14 +297,16 @@ describe('InvoicingService', () => {
       expect(result.paymentMethod).toBe(PaymentMethod.B2B_CREDIT);
     });
 
-    it('rejects an amountReceived that does not match the invoice amount exactly', async () => {
+    it('rejects an amount that exceeds the remaining balance (no overpayment)', async () => {
       invoiceRepository.findOne.mockResolvedValue(invoice({ amount: 1500 }));
+      paymentRepository.find.mockResolvedValue([payment({ amount: 1000 })]);
 
-      await expect(service.recordPayment('inv-1', PaymentMethod.CASH, 1000, 'user-1')).rejects.toThrow(BadRequestException);
+      await expect(service.recordPayment('inv-1', PaymentMethod.CASH, 600, 'user-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('records a matching Cash payment and marks the invoice PAID', async () => {
+    it('records a full Cash payment and marks the invoice PAID, posting a GL entry', async () => {
       invoiceRepository.findOne.mockResolvedValue(invoice({ amount: 1500 }));
+      paymentRepository.find.mockResolvedValue([]);
 
       const result = await service.recordPayment('inv-1', PaymentMethod.CASH, 1500, 'user-1', 'receipt-99');
 
@@ -233,6 +316,28 @@ describe('InvoicingService', () => {
       expect(result.paymentReference).toBe('receipt-99');
       expect(result.recordedByUserId).toBe('user-1');
       expect(result.paidAt).toBeInstanceOf(Date);
+      expect(paymentRepository.save).toHaveBeenCalled();
+      expect(glLedgerService.postInvoicePayment).toHaveBeenCalledWith(
+        expect.objectContaining({ invoiceId: 'inv-1', method: PaymentMethod.CASH, amount: 1500 }),
+      );
+    });
+
+    it('records a partial payment, leaving the invoice PARTIALLY_PAID', async () => {
+      invoiceRepository.findOne.mockResolvedValue(invoice({ amount: 1500 }));
+      paymentRepository.find.mockResolvedValue([]);
+
+      const result = await service.recordPayment('inv-1', PaymentMethod.CASH, 500, 'user-1');
+
+      expect(result.status).toBe(InvoiceStatus.PARTIALLY_PAID);
+    });
+
+    it('a second partial payment that completes the balance marks the invoice PAID', async () => {
+      invoiceRepository.findOne.mockResolvedValue(invoice({ amount: 1500, status: InvoiceStatus.PARTIALLY_PAID }));
+      paymentRepository.find.mockResolvedValue([payment({ amount: 500 })]);
+
+      const result = await service.recordPayment('inv-1', PaymentMethod.CASH, 1000, 'user-1');
+
+      expect(result.status).toBe(InvoiceStatus.PAID);
     });
   });
 
@@ -251,6 +356,61 @@ describe('InvoicingService', () => {
       const result = await service.isPayableForDelivery('jc-1');
 
       expect(result.payable).toBe(false);
+    });
+
+    it('is not payable while PARTIALLY_PAID', async () => {
+      invoiceRepository.findOne.mockResolvedValue(invoice({ status: InvoiceStatus.PARTIALLY_PAID }));
+
+      const result = await service.isPayableForDelivery('jc-1');
+
+      expect(result.payable).toBe(false);
+    });
+  });
+
+  describe('getB2bAgingReport', () => {
+    it('buckets an outstanding B2B invoice by days past its dueDate', async () => {
+      const overdueInvoice = invoice({
+        id: 'inv-b2b',
+        amount: 1000,
+        dueDate: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+        status: InvoiceStatus.DRAFT,
+        jobCard: { appointment: { customerType: CustomerType.B2B } },
+      } as any);
+      invoiceRepository.find.mockResolvedValue([overdueInvoice]);
+      paymentRepository.find.mockResolvedValue([]);
+
+      const result = await service.getB2bAgingReport();
+
+      const bucket31to60 = result.buckets.find((b) => b.label === '31-60 days');
+      expect(bucket31to60?.invoices).toHaveLength(1);
+      expect(bucket31to60?.totalOutstanding).toBe(1000);
+      expect(result.totalOutstanding).toBe(1000);
+    });
+
+    it('excludes non-B2B invoices from the report', async () => {
+      const b2cInvoice = invoice({
+        amount: 1000,
+        jobCard: { appointment: { customerType: CustomerType.B2C } },
+      } as any);
+      invoiceRepository.find.mockResolvedValue([b2cInvoice]);
+      paymentRepository.find.mockResolvedValue([]);
+
+      const result = await service.getB2bAgingReport();
+
+      expect(result.totalOutstanding).toBe(0);
+    });
+
+    it('excludes an invoice that is already fully paid off', async () => {
+      const fullyPaidInvoice = invoice({
+        amount: 1000,
+        jobCard: { appointment: { customerType: CustomerType.B2B } },
+      } as any);
+      invoiceRepository.find.mockResolvedValue([fullyPaidInvoice]);
+      paymentRepository.find.mockResolvedValue([payment({ amount: 1000 })]);
+
+      const result = await service.getB2bAgingReport();
+
+      expect(result.totalOutstanding).toBe(0);
     });
   });
 });

@@ -189,6 +189,20 @@ export class JobCard {
   @Column({ type: 'uuid', nullable: true })
   deliveryId: string | null;
 
+  // Phase 8: the public, no-login tracking token for the Customer Portal
+  // (`/customer-portal/public/track/:token`). Generated once, at Job Card creation
+  // (JobCardsService.create) - unlike Estimate.accessToken (only generated when send()
+  // is explicitly called, because a customer has nothing to approve until then), a
+  // tracking link is useful from day one of any job, so there's no separate "generate"
+  // step. Long-lived (180 days from creation - a repair's whole lifecycle, plus a safety
+  // margin) rather than short-lived like the Estimate link, since this is read-only
+  // (no state-changing action happens through this token, unlike Estimate's respond()).
+  @Column({ type: 'varchar', length: 64, unique: true, nullable: true })
+  publicToken: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  publicTokenExpiresAt: Date | null;
+
   @ManyToOne(() => User)
   @JoinColumn({ name: 'createdById' })
   createdBy: User;

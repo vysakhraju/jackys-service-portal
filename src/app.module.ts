@@ -13,11 +13,13 @@ import { InventoryModule } from './inventory/inventory.module';
 import { PermissionsModule } from './permissions/permissions.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { InvoicingModule } from './invoicing/invoicing.module';
+import { DebitNotesModule } from './debit-notes/debit-notes.module';
+import { GlLedgerModule } from './gl-ledger/gl-ledger.module';
+import { CustomerPortalModule } from './customer-portal/customer-portal.module';
 // import { FinanceModule } from './finance/finance.module';
 // import { AmcModule } from './amc/amc.module';
 // import { DismantlingModule } from './dismantling/dismantling.module';
 // import { ReportsModule } from './reports/reports.module';
-// import { CustomerPortalModule } from './customer-portal/customer-portal.module';
 
 @Module({
   imports: [
@@ -51,11 +53,13 @@ import { InvoicingModule } from './invoicing/invoicing.module';
     PermissionsModule,
     DeliveryModule,
     InvoicingModule,
+    DebitNotesModule,
+    GlLedgerModule,
+    CustomerPortalModule,
     // FinanceModule,
     // AmcModule,
     // DismantlingModule,
     // ReportsModule,
-    // CustomerPortalModule,
   ],
 })
 export class AppModule {}

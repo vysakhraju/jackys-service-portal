@@ -1,8 +1,8 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-25 (Phase 7)
+**Last updated:** 2026-08-26 (Phase 8)
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 27 commits on `master`, latest `fc92781`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 29 commits on `master`, latest — see the commit right after this doc update)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 **Known issue:** the real `docs/planning/STATUS_TRACKER.md` file is currently inaccessible on your `D:` drive (confirmed genuine exFAT-level corruption, not a process lock - "Access is denied" from every tool tried, including a full container restart). This file, `STATUS_TRACKER.md.new`, is the current, accurate, git-committed source of truth until that's resolved (a disk check or restart on your end should clear it) and the real file can be restored from this one.
 
@@ -23,7 +23,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | — | Test-master audit + full testing guide rewrite | ✅ Done — every endpoint (100, as of Phase 7) now documented and indexed, see below |
 | 6 | QC + Inventory auto-deduct | ✅ Done — QC gate, admin-assignable permissions, negative-inventory hard gate, rework approval, live-verified (new, this session) |
 | 7 | Delivery + POD + OOW block | ✅ Done — batch/normal delivery (`DLV-####`), dispatch, POD (signature/photo), OOW-paid block + minimal invoicing (Cash/Card/Bank Transfer/B2B Credit), live-verified (new, this session) |
-| 8 | Finance + Customer Portal | ⬜ Not started |
+| 8 | Finance + Customer Portal | ✅ Done — VAT breakdown, partial payments, B2B aging, interdepartment Debit Notes + GL posting log, read-only Customer Portal, live-verified (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -604,6 +604,146 @@ case was testing) - fixed by generating a real random v4 UUID instead.
 
 ---
 
+## Phase 8: Finance extension + Customer Portal — done this session
+
+Extends Phase 7's deliberately-minimal `Invoice` stopgap in place (never replaced) and
+adds the two remaining post-MVP pieces the implementation plan scopes to this week:
+FR-13/AC-13's VAT breakdown, FR-14's partial payments, AC-16's B2B aging/recharge
+reporting, FR-15/AC-15's interdepartment Debit Notes, an internal GL posting log, and
+EPIC-005's read-only Customer Portal (track/view-invoice/download-summary - Estimate
+approval already had its own public flow since Phase 4, untouched here).
+
+**Design decisions made before writing code** (a self-directed pre-mortem pass covering
+the same ground `the-fool` would - the areas most likely to hide a real gap):
+
+1. **VAT breakdown is a copy, not a recomputation.** The Estimate already computed
+   `subtotal`/`vatAmount`/`totalAmount` correctly using the Job Card's Service Centre
+   `vatRate` back in Phase 4 - Invoice's new `subtotal`/`vatRate`/`vatAmount` columns
+   snapshot those values at the same moment `amount` is snapshotted, rather than
+   recomputing anything. One number, one source of truth.
+2. **Partial payments replace Phase 7's all-or-nothing `recordPayment`.** A new `Payment`
+   entity (one row per payment, append-only like `AuditLog`) replaces "amountReceived
+   must equal the invoice exactly" with "amount must be `> 0` and `<=` the remaining
+   balance" - `Invoice.status` becomes `PARTIALLY_PAID` until the balance actually hits
+   zero. `Invoice.amountReceived`/`paymentMethod`/`paidAt` stay on the entity as a
+   latest-payment display convenience, but the real source of truth for "how much has
+   been paid" is `SUM(Payment.amount)`.
+3. **B2B aging looks at customer type, not payment method.** A `DRAFT` invoice has no
+   `paymentMethod` yet (nothing's been paid), so bucketing by "invoices already tagged
+   B2B_CREDIT" would miss every not-yet-touched B2B invoice - exactly the ones a recharge
+   report most needs to surface. Instead it looks at the Job Card's
+   `Appointment.customerType === B2B` directly, buckets by days past a new `dueDate`
+   (createdAt + 30 days, B2B Credit's term), and only ever looks at still-open
+   (`DRAFT`/`PARTIALLY_PAID`) invoices.
+4. **Debit Notes are scoped narrowly: `B2B_SALES_CHANNEL` + `IN_WARRANTY` only.**
+   Everything else (any warranty status for B2C/B2B, or an out-of-warranty
+   B2B_SALES_CHANNEL job) still goes through Invoice exactly as before - an OOW job
+   always means "someone external owes money," which Invoice already models; a Debit
+   Note is specifically for recharging a *warranty* repair *internally* between
+   departments, where no external customer bill exists at all.
+5. **Interdepartment labor rate: a documented assumption, guarded against silent 0.**
+   There's no existing link from a Job Card to a specific Service Price List row, so
+   `DebitNotesService.resolveLaborCost()` looks for a `REPAIR`-activity row matching the
+   job's exact model, falling back to a model-agnostic default `REPAIR` row. If neither
+   exists, it throws a clear `400` rather than silently charging 0 labor - a silent 0
+   would understate every recharge and is exactly the kind of gap a real Finance audit
+   would flag.
+6. **GL posting is an honest internal-only stopgap, flagged as such - same philosophy as
+   Phase 7's Invoice.** The discovery doc lists the real GL/accounting-system integration
+   format as an open, unresolved external dependency (no chart of accounts exists). Built
+   a `GlPosting` journal log instead - system-generated only (no manual-entry endpoint, so
+   every row is traceable to a real payment or posted Debit Note), fixed account-code
+   strings standing in for a real chart of accounts. Meant to be the ready-made source
+   list a real integration replays from later, not thrown away when that's built.
+7. **"Pay invoice" in the Customer Portal is view-only, not a checkout.** The discovery
+   doc's own scope question S2 ("Payment gateway explicitly out of scope?") is
+   Closed/Confirmed, and FR-14 is manual-only payment. So the portal shows what's owed
+   and its status, with a message pointing the customer to contact staff - it never
+   pretends to take a payment.
+8. **Customer Portal tokens are per-Job-Card, generated at creation, long-lived (180
+   days)** - unlike Estimate's `accessToken` (generated only when `send()` is explicitly
+   called, since there's nothing to approve before then), a tracking link is useful from
+   day one of any job, so `JobCardsService.create()` now sets `publicToken`/
+   `publicTokenExpiresAt` directly. Mirrors `EstimatesPublicController`'s existing
+   pattern exactly: a separate, guard-free controller (`CustomerPortalController`), not a
+   per-route bypass on the staff one.
+
+**New `payments` table** (`src/invoicing/entities/payment.entity.ts`) - one row per
+payment, `invoiceId`/`method`/`amount`/`reference`/`recordedByUserId`/`recordedAt`.
+`Invoice` gains `subtotal`/`vatRate`/`vatAmount`/`dueDate` and a new
+`PARTIALLY_PAID` status.
+
+**New `debit-notes` module** - `DebitNote` (`DN-####`, lazily created exactly like
+`Invoice`, same unique-index + `23505`-retry race safety) with `sparePartsCost` (summed
+from every `CONSUMED` `InventoryReservation` for the job, at `unitCost`, not the
+customer-facing price), `laborCost` (resolved per decision #5 above),
+`status` (`DRAFT`/`POSTED`, terminal once posted). Five endpoints:
+`GET /debit-notes/job-card/:jobCardId` (lazy-create), `POST /debit-notes/:id/post`,
+`GET /debit-notes`, `GET /debit-notes/:id`, `GET /debit-notes/recharge-report` (AC-16 -
+posted vs. draft counts/totals).
+
+**New `gl-ledger` module** - `GlPosting` log, `GlLedgerService.postInvoicePayment()`
+(called by every `InvoicingService.recordPayment()`) and `postDebitNote()` (called by
+`DebitNotesService.post()`), one `GET /gl-postings` (`?sourceType=`) list endpoint, no
+write endpoint at all (decision #6 above).
+
+**New `customer-portal` module** - `CustomerPortalController` at `/customer-portal/public`
+(no guards, mirrors `EstimatesPublicController`), three routes:
+`GET /customer-portal/public/track/:token`, `GET /customer-portal/public/invoice/:token`
+(decision #7), `GET /customer-portal/public/job-card/:token/summary`. All three treat an
+unknown or expired token identically (`404`, no distinction) so a token-guessing attempt
+can't learn anything from the difference.
+
+**Extended `invoicing` module** - `recordPayment()` now enforces "amount `<=` remaining
+balance" instead of "amount === full amount" (decision #2), posts a GL entry on every
+call, and two new endpoints: `GET /invoicing/:id/payments` (payment history) and
+`GET /invoicing/b2b-aging` (decision #3).
+
+**Automated tests**: `src/invoicing/invoicing.service.spec.ts` rewritten for the new
+constructor/behavior (partial payments, VAT-breakdown snapshot, aging report - 33 tests,
+up from 21), new `src/debit-notes/debit-notes.service.spec.ts` (16 tests, including the
+"no REPAIR price list row exists" hard-stop from decision #5), new
+`src/gl-ledger/gl-ledger.service.spec.ts` (7 tests, one per account-code branch), new
+`src/customer-portal/customer-portal.service.spec.ts` (10 tests, including the
+customer-safe-shape assertion that no internal id leaks through `trackByToken`), and
+additions to `job-cards.service.spec.ts` (the new `publicToken` generation at `create()`,
+and `findByPublicToken()`'s unknown/expired-token null-return behavior) - net +44 tests
+this phase (some of the +33 on invoicing supersede Phase 7-era tests rather than adding
+alongside them).
+
+```
+Test Suites: 18 passed, 18 total
+Tests:       412 passed, 412 total
+```
+
+`tsc --noEmit` clean (same local-copy build-verify technique as every phase since 6).
+
+**Live end-to-end verification - actually run against your server, all green**:
+`scripts/phase8-e2e-test.ps1` ran start to finish against `localhost:3000` and your real
+Postgres (the same server this session verified was already up and serving Swagger at
+`http://localhost:3000/api/docs`, so you can look at any of this yourself right now) - a
+B2C OOW job through a partial Cash payment (checked it lands on `PARTIALLY_PAID`), an
+over-the-remaining-balance rejection, a completing payment (checked it lands on `PAID`),
+a rejected payment-after-already-paid, and a full 2-entry payment history; a B2B OOW job
+deliberately left unpaid, confirmed to appear in the B2B aging report's `0-30 days`
+bucket with the correct outstanding total; a `B2B_CREDIT` payment attempt on the B2C
+invoice correctly rejected (`403`); a full interdepartment (B2B_SALES_CHANNEL,
+in-warranty) job correctly blocked from getting an Invoice (`400` - "nothing to invoice"),
+its Debit Note created with the labor cost matching a seeded Service Price List row
+exactly, posted successfully, a second post attempt rejected (`400`), and the recharge
+report reflecting it; exactly 3 GL postings traced back to this run's 2 payments + 1
+posted Debit Note (proving nothing extra or missing was posted); and all three Customer
+Portal routes against a real Job Card's real `publicToken` (track, view-invoice showing
+`amountDue: 0` once fully paid, and the consolidated summary), plus the unknown-token
+`404`. One test-script bug found and fixed during the live run (not an app bug, confirmed
+by inspecting the real response before treating it as one): the B2B_CREDIT-rejection
+check was originally placed after the same invoice had already been fully paid off by an
+earlier step in the script, so it hit "already paid" (`400`) instead of the
+customer-type check (`403`) it was meant to exercise - fixed by moving that check earlier
+in the script, right after the invoice is first drafted and still unpaid.
+
+---
+
 ## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
@@ -617,13 +757,15 @@ case was testing) - fixed by generating a real random v4 UUID instead.
 - **No admin UI yet for the Permissions module (Phase 6)** — granting/revoking `QC_APPROVAL`/`REWORK_APPROVAL` only works via the raw `POST /permissions/grant` / `POST /permissions/revoke` endpoints through Swagger or a script; there's no screen for an admin to browse users and click-to-grant. Fine for now with a handful of users, worth a real UI once there's a frontend.
 
 - **Delivery doesn't track failed-delivery-attempt history (Phase 7, deliberate)** — a driver-arrives-customer-not-home retry scenario currently has no representation; the `the-fool` pre-mortem flagged this and it was deliberately left out as genuinely out of what FR-11/FR-12/AC-10-12 ask for. If this comes up in practice, it wants a proper `DeliveryAttempt` history table, not a field bolted onto `Delivery`.
-- **`Invoice` (Phase 7) is a deliberate Phase 8 stopgap, not the real Finance module** — no VAT breakdown, no GL posting, no interdepartment debit notes, no partial payments, no B2B aging. It exists only so FR-12/AC-11's OOW-paid delivery block has a real Paid/not-Paid signal to check. Phase 8 will substantially extend this entity.
+- **GL posting (Phase 8) is a deliberate internal-only stopgap, not a real accounting-system integration** — fixed account-code strings stand in for a real chart of accounts, and postings are a simplified two-line entry (no separate COGS/revenue split). The discovery doc lists the real GL/ERP integration format as an open, unresolved external dependency. Meant to be the ready-made list a real integration replays from, not thrown away once that's built.
+- **Interdepartment labor rate (Phase 8) relies on a documented assumption** — since no direct link exists from a Job Card to a specific Service Price List row, `DebitNotesService.resolveLaborCost()` matches on `activityType=REPAIR` (model-specific, falling back to a model-agnostic default row). Worth a real link if a Job Card's actual "activity type" ever needs to be something other than REPAIR.
+- **Customer Portal's "pay invoice" is deliberately view-only (Phase 8)** — no online payment gateway exists (confirmed out of scope, S2 in the discovery doc), so a customer sees what's owed but a real payment still has to go through staff via `record-payment`. Revisit only if a gateway integration is ever explicitly scoped.
 
 ---
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 100 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, and Delivery + Invoicing (Phase 7) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 111 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, Delivery + Invoicing, and the Finance extension + Customer Portal (Phase 8) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
 
 Also new this session: `npm run seed:technician` now accepts `SEED_TECH_ROLE` (e.g. `TECHNICIAN_WORKSHOP`, `WAREHOUSE_CLERK`) so you can seed a test login for any role, not just `TECHNICIAN_FIELD` — same pattern as `npm run seed:admin`.
 
@@ -726,16 +868,43 @@ B2B Credit loophole rejection, the amount-mismatch rejection, POD validation, a 
 concurrent-dispatcher race, and batch cancel. Run it with `powershell -ExecutionPolicy
 Bypass -File scripts\phase7-e2e-test.ps1` while the dev server is up.
 
-All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`).
+To try the Finance extension + Customer Portal (needs a Job Card at `QC_PASSED` as above;
+for a Debit Note, needs `customerType: B2B_SALES_CHANNEL` + an `IN_WARRANTY` job, plus a
+`REPAIR` row in the Service Price List with `interdepartmentLaborCost` set):
+```
+GET  /invoicing/job-card/:jobCardId                                                 (now includes subtotal/vatRate/vatAmount/dueDate)
+POST /invoicing/:id/record-payment               { "method": "CASH", "amountReceived": 200 }   (partial amounts now OK - just <= the remaining balance)
+GET  /invoicing/:id/payments
+GET  /invoicing/b2b-aging
+GET  /debit-notes/job-card/:jobCardId                                               (lazy-creates the DRAFT debit note)
+POST /debit-notes/:id/post
+GET  /debit-notes
+GET  /debit-notes/recharge-report
+GET  /gl-postings?sourceType=INVOICE_PAYMENT                                        (or DEBIT_NOTE - system-generated only, no write endpoint)
+GET  /customer-portal/public/track/:token                                           (no login - token comes from GET /job-cards/:id's publicToken field)
+GET  /customer-portal/public/invoice/:token                                         (no login)
+GET  /customer-portal/public/job-card/:token/summary                                (no login)
+```
+There's also a ready-made PowerShell smoke-test script covering the whole flow at once:
+`scripts/phase8-e2e-test.ps1` — the partial-payment sequence with the overpayment guard,
+the B2B aging report, a full interdepartment Debit Note through creation and posting, the
+GL posting count check, and all three Customer Portal routes. Run it with
+`powershell -ExecutionPolicy Bypass -File scripts\phase8-e2e-test.ps1` while the dev
+server is up.
+
+All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`, `customer-portal`).
 
 ---
 
-## Next: Phase 8 — Finance + Customer Portal
+## Next: Phase 2 (post-MVP) — AMC, Dismantling, Reports/Dashboards, Warranty Claims
 
-What it covers, from the implementation plan: the real Finance module (VAT breakdown,
-GL posting, interdepartment debit notes, partial payments, B2B aging — substantially
-extending the deliberately-minimal `Invoice` entity Phase 7 built as a stopgap) and the
-Customer Portal. Not started — ready to begin whenever you are, just say the word.
+The 8-week MVP scope from the implementation plan (weeks 1–8, Foundation through Finance
++ Customer Portal) is now fully built and live-verified. What's left is explicitly
+Phase 2/post-MVP per that plan: AMC Management (contracts, PM scheduling, 30-day renewal
+reminders, RWR upsell), the Dismantling module (BOM→spare conversion, v2.1), and
+Reports/Dashboards (real-time WebSocket Kanban). None started yet — ready to begin
+whenever you say the word, and happy to help scope which one makes sense to tackle first
+if that's not obvious.
 
 ---
 

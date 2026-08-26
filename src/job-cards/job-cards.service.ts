@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
@@ -62,6 +63,26 @@ export class JobCardsService {
     const jobCard = await this.jobCardRepository.findOne({ where: { id } });
     if (!jobCard) {
       throw new NotFoundException(`Job Card ${id} not found`);
+    }
+    return jobCard;
+  }
+
+  /**
+   * Phase 8 Customer Portal: look up a Job Card by its public tracking token (no login).
+   * Returns null (not a thrown 404) on an unknown or expired token - the controller
+   * decides how to shape that into a customer-safe response, exactly mirroring how
+   * EstimatesService.getPublicView() treats an unknown/expired accessToken.
+   */
+  async findByPublicToken(token: string): Promise<JobCard | null> {
+    const jobCard = await this.jobCardRepository.findOne({
+      where: { publicToken: token },
+      relations: { appointment: true },
+    });
+    if (!jobCard) {
+      return null;
+    }
+    if (jobCard.publicTokenExpiresAt && jobCard.publicTokenExpiresAt.getTime() < Date.now()) {
+      return null;
     }
     return jobCard;
   }
@@ -138,6 +159,11 @@ export class JobCardsService {
       originalWarrantyStatus: visit.warrantyStatus,
       warrantyStatus: visit.warrantyStatus,
       createdById: userId,
+      // Phase 8 Customer Portal: a read-only tracking link, live for this job's whole
+      // lifecycle (see the entity's doc comment on why this differs from Estimate's
+      // shorter-lived, explicitly-generated accessToken).
+      publicToken: randomBytes(32).toString('hex'),
+      publicTokenExpiresAt: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000),
     });
 
     return this.jobCardRepository.save(jobCard);
