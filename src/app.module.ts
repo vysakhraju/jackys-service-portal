@@ -19,7 +19,7 @@ import { CustomerPortalModule } from './customer-portal/customer-portal.module';
 // import { FinanceModule } from './finance/finance.module';
 import { AmcModule } from './amc/amc.module';
 import { DismantlingModule } from './dismantling/dismantling.module';
-// import { ReportsModule } from './reports/reports.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -59,7 +59,7 @@ import { DismantlingModule } from './dismantling/dismantling.module';
     // FinanceModule,
     AmcModule,
     DismantlingModule,
-    // ReportsModule,
+    ReportsModule,
   ],
 })
 export class AppModule {}

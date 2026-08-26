@@ -983,7 +983,17 @@ that's the signal to update this guide.
 | `POST /dismantling/:id/price-and-post` | 16c |
 | `POST /dismantling/:id/cancel` | 16e |
 
-**Total: 134 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc + 7 dismantling.)
+### reports (6)
+| Endpoint | Section |
+|---|---|
+| `GET /reports/dashboard/kanban` | 17a |
+| `GET /reports/dashboard/kanban/summary` | 17a |
+| `GET /reports/dashboard/approval-aging` | 17b |
+| `GET /reports/dashboard/service-efficiency` | 17c |
+| `GET /reports/dashboard/first-time-fix-rate` | 17d |
+| `GET /reports/dashboard/overview` | 17a |
+
+**Total: 140 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc + 7 dismantling + 6 reports.)
 
 
 ## 12. QC gate + admin-assignable permissions + inventory consumption (Phase 6)
@@ -1633,6 +1643,69 @@ sign-off exists and cancelling is blocked (mirrors Delivery's "only while PENDIN
   confirmed against the running server, including the actual inventory increment and the
   GL posting.
 
+## 17. Reports/Dashboards — BRD 18.1 Service Manager Dashboard (Phase 11, post-MVP)
+
+FR-20, NFR-02. Read-only Kanban board + three supporting reports over data every earlier
+phase already produces — no new entity, nothing to create here, just log in as
+SERVICE_HEAD/SUPER_ADMIN/TECHNICAL_TEAM_LEADER and look. 18.2 Finance Dashboard, 18.3
+Quality/Product Dashboard, and 18.4 Operational Reports are out of scope for this phase
+(see `docs/planning/STATUS_TRACKER.md`'s Phase 11 write-up for why).
+
+### 17a. Job Status Board — GET /reports/dashboard/kanban
+```
+GET /reports/dashboard/kanban
+```
+Returns 8 columns in board order (Scheduled, On-Site, WIP, Spare Pending, Approval
+Pending, QC Completed, Out for Delivery, Delivered), each with its job cards and a count.
+`GET /reports/dashboard/kanban/summary` returns just the counts (cheaper, for a polling
+client); `GET /reports/dashboard/overview` bundles this plus the three reports below into
+one payload for a dashboard's first page load.
+
+### 17b. Pending Approval Aging — GET /reports/dashboard/approval-aging
+```
+GET /reports/dashboard/approval-aging
+```
+Lists every OOW Estimate that's been sent (FR-06 link or a staff-recorded contact) but has
+no customer response yet, with `ageHours` and a `breached` flag past the 4-hour threshold
+(BRD 18.1's stated red-alert window). Empty until you have a `SENT` Estimate sitting
+unanswered — see Section 9 to create one.
+
+### 17c. Service Efficiency — GET /reports/dashboard/service-efficiency
+```
+GET /reports/dashboard/service-efficiency
+```
+Average hours from a technician's visit start (`TechnicianVisit.startedAt`, FR-02) to QC
+approval (`JobCard.qcApprovedAt`), grouped by technician and by appliance category. Only
+counts jobs that have actually passed QC (Section 12) — `sampleSize: 0` is normal on a
+freshly-seeded database.
+
+### 17d. First-Time Fix Rate — GET /reports/dashboard/first-time-fix-rate
+```
+GET /reports/dashboard/first-time-fix-rate
+```
+`onSiteOnlyCompletedJobs / totalCompletedJobs` — a completed on-site repair is a Job Card
+whose `section` is still `ON_SITE_REPAIR` when it reaches `QC_PASSED`/`DELIVERED`. Returns
+`rate: null` (not a divide-by-zero error) when nothing's completed yet.
+
+### 17e. The live WebSocket channel
+Not reachable from Swagger — connect a Socket.io client to `ws://localhost:3000/reports`
+with `{ auth: { token: "<your JWT>" } }` in the handshake. A permitted connection
+(same three roles as the REST endpoints) gets an immediate `kanban:update` +
+`approval-aging:update` snapshot, then `kanban:update` again whenever the board actually
+changes (polled every 5 seconds server-side) and `approval-aging:update` every 15 minutes.
+A missing/invalid/wrong-role token gets an `error` event and an immediate disconnect —
+never a silently-open, useless connection.
+
+### 17f. Prove the guardrails work
+- Any of the 6 REST endpoints with no `Authorization` header → 401.
+- Any of them logged in as a role outside `SERVICE_HEAD`/`SUPER_ADMIN`/
+  `TECHNICAL_TEAM_LEADER` (e.g. `TECHNICIAN_FIELD`) → 403, naming the required roles.
+- The same wrong-role account against the WebSocket channel → connects, then immediately
+  gets an `error` event and is disconnected — no snapshot is ever sent.
+- Live-verified via `scripts/reports-e2e-test.ps1` (which drives
+  `scripts/reports-ws-test.js` for the WebSocket half) — zero failures, all of the above
+  confirmed against the running server with real seeded data.
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1655,12 +1728,14 @@ sign-off exists and cancelling is blocked (mirrors Delivery's "only while PENDIN
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 10** (Auth, Master Data, Appointments, Technician Mobile API,
+Everything through **Phase 11** (Auth, Master Data, Appointments, Technician Mobile API,
 Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
 + POD + OOW invoicing block, Finance extension + Customer Portal, AMC Management,
-Dismantling) is real, working code you can exercise exactly as above — all 134 endpoints
-in Section 11 are live. Reports/Dashboards remains unbuilt (last item in Phase 2/post-MVP
-per the implementation plan).
+Dismantling, Reports/Dashboards) is real, working code you can exercise exactly as above —
+all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel (Section
+17e). Your full post-MVP sequencing (AMC → Dismantling → Reports/Dashboards) is complete;
+BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
+out of scope for now (see Section 17's intro).
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider
