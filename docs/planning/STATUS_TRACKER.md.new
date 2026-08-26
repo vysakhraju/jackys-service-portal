@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-26 (Phase 8)
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 29 commits on `master`, latest — see the commit right after this doc update)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, 29 commits on `master`, latest `98d2217`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 **Known issue:** the real `docs/planning/STATUS_TRACKER.md` file is currently inaccessible on your `D:` drive (confirmed genuine exFAT-level corruption, not a process lock - "Access is denied" from every tool tried, including a full container restart). This file, `STATUS_TRACKER.md.new`, is the current, accurate, git-committed source of truth until that's resolved (a disk check or restart on your end should clear it) and the real file can be restored from this one.
 
