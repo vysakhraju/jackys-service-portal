@@ -11,7 +11,13 @@ const ACCOUNTS = {
   BANK: '1010-BANK',
   AR_CREDIT: '1020-AR-B2B-CREDIT',
   INTERDEPT_RECEIVABLE: '1030-INTERDEPT-RECEIVABLE',
+  // Phase 9 (Dismantling): the recovered spare enters live inventory as a real asset
+  // (debit), against a recognized-income credit - the appliance it came from was already
+  // fully written off in Damage Location, so this value is newly realized, not a
+  // transfer between two existing balances.
+  INVENTORY_SPARES: '1040-INVENTORY-SPARES',
   SERVICE_REVENUE: '4000-SERVICE-REVENUE',
+  DISMANTLING_RECOVERY_INCOME: '4010-DISMANTLING-RECOVERY',
 };
 
 function debitAccountForPaymentMethod(method: PaymentMethod): string {
@@ -66,6 +72,24 @@ export class GlLedgerService {
       description: `Interdepartment recharge posted for ${params.debitNoteNumber}`,
       debitAccount: ACCOUNTS.INTERDEPT_RECEIVABLE,
       creditAccount: ACCOUNTS.SERVICE_REVENUE,
+      amount: params.amount,
+    });
+    return this.glPostingRepository.save(posting);
+  }
+
+  /** Called by DismantlingService.priceAndPost() - one posting per DismantlingRecord,
+   * for the total recovered value across every converted component (AC-30). */
+  async postDismantlingRecovery(params: {
+    dismantlingRecordId: string;
+    recordNumber: string;
+    amount: number;
+  }): Promise<GlPosting> {
+    const posting = this.glPostingRepository.create({
+      sourceType: GlSourceType.DISMANTLING_RECOVERY,
+      sourceId: params.dismantlingRecordId,
+      description: `Recovered component value posted for ${params.recordNumber}`,
+      debitAccount: ACCOUNTS.INVENTORY_SPARES,
+      creditAccount: ACCOUNTS.DISMANTLING_RECOVERY_INCOME,
       amount: params.amount,
     });
     return this.glPostingRepository.save(posting);

@@ -1,8 +1,8 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-26 (Phase 9)
+**Last updated:** 2026-08-26 (Phase 10)
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`, latest `66c0ab1`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`, latest `<PENDING_PHASE10_COMMIT>`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
@@ -24,6 +24,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 7 | Delivery + POD + OOW block | ✅ Done — batch/normal delivery (`DLV-####`), dispatch, POD (signature/photo), OOW-paid block + minimal invoicing (Cash/Card/Bank Transfer/B2B Credit), live-verified (new, this session) |
 | 8 | Finance + Customer Portal | ✅ Done — VAT breakdown, partial payments, B2B aging, interdepartment Debit Notes + GL posting log, read-only Customer Portal, live-verified (new, this session) |
 | 9 | AMC Management (post-MVP) | ✅ Done — contracts, auto-generated PM visit schedule, visit completion, renewal/cancellation, billing (full/half-yearly/quarterly split), manual renewal reminder, RWR upsell report, live-verified (new, this session) |
+| 10 | Dismantling (post-MVP) | ✅ Done — defective/DOA appliance recovery, harvest → verify → price-and-post (AC-31 three-actor segregation of duties), inventory adjustment + GL posting, live-verified (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -821,6 +822,100 @@ successful B2B_CREDIT payment against it, a full cancel-cascade (every future vi
 confirmed no longer SCHEDULED), and a full renew (new contract chained via
 `previousContractId`, original confirmed RENEWED). Zero failures on the first clean run.
 
+## Phase 10: Dismantling - done this session
+
+Post-MVP Phase 2, second of three (AMC -> Dismantling -> Reports/Dashboards, per your
+explicit sequencing). Built per BRD Workflow 15 (Defective/DOA Appliance Dismantling &
+Component Recovery), FR-19, AC-29/AC-30/AC-31: `src/dismantling/` (`DismantlingRecord`
+entity with a jsonb `harvestedComponents` snapshot array; `DismantlingService`;
+`DismantlingController`, 7 endpoints under the `dismantling` Swagger tag;
+`DismantlingModule`, wired into `app.module.ts` - a commented-out placeholder for it
+already existed there from the original scaffolding), plus a `GlSourceType.
+DISMANTLING_RECOVERY` source type and `postDismantlingRecovery()` method added to the
+existing `GlLedgerService`.
+
+Design decisions, reasoned through before writing any code:
+
+1. **Standalone from JobCard, on purpose** - the BRD's Workflow 15 pre-condition is "the
+   appliance exists in Damage Location / Return Stock and has been officially flagged as
+   Defective/DOA/DAP," with no mention of an active repair job anywhere in the six-step
+   table. This is recovery of an already-written-off whole appliance, not a repair-flow
+   step, so `DismantlingRecord` has no `jobCardId` anywhere.
+2. **Documented gap, not a silent guess**: the BRD's step 15.1 ("system stock should be
+   available") and AC-30 ("reduce the appliance asset count in the Damage Location") both
+   imply a whole-appliance inventory ledger - no such thing exists anywhere in this
+   codebase (`InventoryStock`/`InventoryLocation.DAMAGE_LOCATION` only ever tracked spare
+   PART quantities, consumed off a repair at QC). Rather than invent a parallel
+   appliance-asset-count entity nothing else in the app references, a `DismantlingRecord`
+   itself is the audit trail that a physical, already-inspected (offline) appliance is
+   being dismantled - explained in the entity's own doc comment, with a note on how a real
+   ledger could be added later if a genuine "how many DOA units are sitting in Damage
+   Location right now" report is ever needed.
+3. **Three DISTINCT actors, enforced at the service layer, not just three columns**:
+   AC-31 names a technician (harvest), a supervisor (verify), and a manager (price+post) -
+   the BRD's own step table blends "Technician/Team Leader" across steps 15.1-15.3, but
+   AC-31 is explicit about three separate people. `DismantlingService.verify()` rejects
+   (400) if the verifier is the same account that harvested; `priceAndPost()` rejects
+   (400) if the poster matches either the harvester or the verifier. This is real
+   segregation-of-duties logic, live-verified against the running server (see below), not
+   just documented as a convention.
+4. **No dedicated "Service Manager" role exists** in `RoleName` (same finding as Phase 9's
+   AMC work) - the BOM-to-spare/pricing/posting step (BRD 15.4-15.6) is gated to
+   `SERVICE_HEAD`/`SUPER_ADMIN`, the same honest mapping AMC's contract-management
+   endpoints already use.
+5. **Consumables are excluded from conversion at harvest time, not just at posting** - each
+   harvested component is looked up against the existing `ComponentYieldMatrix` (BOM/yield
+   master data, already built in an earlier phase and previously unused) by this record's
+   `modelId` + `originalBomItemCode`, and gets an `eligibleForConversion` flag computed
+   right there: `GOOD_WORKING` **and** category `RECOVERABLE_SPARE` **and** has a
+   `convertedSparePartCode`. A `CONSUMABLE`/`SCRAP` item, a `DAMAGED` one, or one with no
+   matching matrix row at all is still logged (visibility - the read model shows
+   everything that was found) but can never be selected for conversion, matching the
+   BRD's explicit "consumables are excluded from selection" (step 15.5).
+6. **AC-39 enforced literally**: nothing gets a financial value or a live-inventory entry
+   until `price-and-post` - the harvest step only ever logs condition/quantity, never a
+   price. `price-and-post` re-validates every conversion line against the harvest log
+   server-side (never trusts a client-supplied price list beyond the manual
+   `recoveryUnitPrice` itself), and re-checks the same AC-17 model-link integrity rule GRN
+   already enforces (a converted spare part with no linked `SparePartModel` blocks
+   posting, same message GRN gives).
+7. **Inventory increment and GL posting happen atomically with the status transition**
+   (one `dataSource.transaction()`, per-record then per-spare-part advisory locks, same
+   locking-order pattern `InventoryService.consumeReservationsOnQcApproval()` established
+   in Phase 6) - AC-30's "simultaneously" is literal here, not just "soon after." The GL
+   posting itself (`DISMANTLING_RECOVERY`, debit `1040-INVENTORY-SPARES` / credit
+   `4010-DISMANTLING-RECOVERY`) happens just after that transaction commits, the same
+   "journal log records what happened, isn't a precondition for it" pattern the AMC
+   billing and Phase 8 invoice-payment postings already use.
+8. **Cancel only before verification** - once a supervisor has signed off (`VERIFIED`),
+   discarding that record with no compensating entry would erase a real audit event, so
+   `cancel()` is blocked past `COMPONENTS_LOGGED`, mirroring `DeliveryService.cancel()`'s
+   "only while PENDING" gate.
+
+**Automated tests**: 26 new tests in `src/dismantling/dismantling.service.spec.ts`
+(sequence-number generation, harvest eligibility for every condition/category
+combination including "no matrix entry found," both AC-31 segregation gates on both verify
+and price-and-post, the excluded-consumable rejection, the quantity-exceeds-harvested
+rejection, the missing-SparePart-record rejection, the AC-17-style unlinked-model
+rejection, a full successful post with the exact stock/GL assertions, a concurrent-post
+conflict guard, and both cancel-allowed/cancel-blocked states) - **466/466 tests passing**
+app-wide (440 carried over + 26 new). `tsc --noEmit` clean, `jest` clean.
+
+**Live-verified** against the real running server with a new
+`scripts/dismantling-e2e-test.ps1`, using three separately seeded, separately logged-in
+accounts (a workshop technician, a team leader, and a service-head) so the AC-31 checks
+are exercised as real distinct people, not mocked: the full happy path (create -> harvest
+two components, one RECOVERABLE_SPARE and one CONSUMABLE -> verify by a different account
+-> price-and-post by a third account, confirming `MAIN_STORE` stock actually increased by
+the posted quantity and a `DISMANTLING_RECOVERY` GL entry landed with the right amount);
+every AC-31 rejection isolated at the service layer specifically (not just caught by the
+role guard first - harvest+verify by the same account, and both the "poster = harvester"
+and "poster = verifier" combinations, each proven with accounts whose roles pass every
+guard involved); the consumable-exclusion rejection; the AC-17-style unlinked-spare-part
+rejection; re-posting an already-`POSTED` record; and the cancel-before-verify /
+cancel-blocked-after-verify pair. Zero failures on the final clean run (118 total Swagger
+paths confirmed, up from 111 after AMC).
+
 ## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
@@ -840,12 +935,14 @@ confirmed no longer SCHEDULED), and a full renew (new contract chained via
 - **No cron/scheduler infrastructure exists anywhere in this app (Phase 9)** - the BRD's "auto-fire a renewal reminder 30 days before AMC expiry" is a manual trigger (`POST /amc/contracts/:id/send-renewal-reminder`) plus a query-based expiring-contracts list, not an actual scheduled job. Revisit if/when `@nestjs/schedule` (or an external scheduler) is ever added to the app.
 - **AMC billing installments are full-amount-only (Phase 9, deliberate)** - unlike the Section 14b Invoice's partial payments, an `AmcBillingInvoice` is a fixed pre-agreed contract line item; there's no "remaining balance" concept for it. Revisit only if a genuine partial-installment-payment need comes up.
 - **RWR-upsell candidates (Phase 9) match by phone number only** - there's no real CRM/customer master to match on, so this is a heuristic lead list, not a guaranteed-accurate "who already has an AMC" check.
+- **No whole-appliance inventory ledger exists (Phase 10, documented, not silently guessed)** - AC-30's "reduce the appliance asset count in Damage Location" has nothing to check against or decrement; a `DismantlingRecord`'s own existence is the audit trail instead. Revisit only if a real "how many DOA units are in Damage Location right now" report is ever needed.
+- **No dedicated "Service Manager" role (Phase 10)** - same finding as Phase 9's AMC work; the BOM-to-spare/pricing/posting step is gated to `SERVICE_HEAD`/`SUPER_ADMIN`.
 
 ---
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 127 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, Delivery + Invoicing, the Finance extension + Customer Portal (Phase 8), and AMC Management (Phase 9) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 134 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, Delivery + Invoicing, the Finance extension + Customer Portal (Phase 8), AMC Management (Phase 9), and Dismantling (Phase 10) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
 
 Also new this session: `npm run seed:technician` now accepts `SEED_TECH_ROLE` (e.g. `TECHNICIAN_WORKSHOP`, `WAREHOUSE_CLERK`) so you can seed a test login for any role, not just `TECHNICIAN_FIELD` — same pattern as `npm run seed:admin`.
 
@@ -992,17 +1089,42 @@ FULL_UPFRONT and QUARTERLY splits) + the B2B Credit guard, cancel-cascade, and r
 Run it with `powershell -ExecutionPolicy Bypass -File scripts\amc-e2e-test.ps1` while the
 dev server is up.
 
-All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`, `customer-portal`, `amc`).
+To try Dismantling (needs a spare part linked to a model, and a `ComponentYieldMatrix`
+entry pointing `originalBomItemCode` -> that spare part's code; any Technician/TL/
+Service-Head login for create+harvest, TL+ for verify, Service-Head/Super-Admin for
+price-and-post - three DIFFERENT accounts, or you'll hit the AC-31 guard):
+```
+POST /dismantling                                { "applianceSerialNumber": "...", "modelId": "...", "damageLocationNotes": "..." }
+POST /dismantling/:id/harvest                     { "components": [{ "originalBomItemCode": "...", "testedCondition": "GOOD_WORKING", "quantity": 1 }] }
+POST /dismantling/:id/verify                      { "notes": "..." }                  (must be a different account from whoever harvested)
+POST /dismantling/:id/price-and-post              { "conversions": [{ "originalBomItemCode": "...", "recoveryUnitPrice": 85.00 }] }   (must differ from both prior actors)
+GET  /dismantling/:id
+GET  /dismantling?status=POSTED
+GET  /dismantling/serial/:applianceSerialNumber
+POST /dismantling/:id/cancel                      { "reason": "..." }                  (only while PENDING_HARVEST or COMPONENTS_LOGGED)
+GET  /inventory/stock/:sparePartId                                                     (confirms AC-30's inventory increase)
+GET  /gl-postings?sourceType=DISMANTLING_RECOVERY
+```
+There's also a ready-made PowerShell smoke-test script covering the whole flow at once:
+`scripts/dismantling-e2e-test.ps1` — the full happy path with real distinct accounts for
+each AC-31 actor, every segregation-of-duties rejection isolated at the service layer
+(not just the role guard), the consumable-exclusion rejection, the AC-17-style
+unlinked-spare-part rejection, and the cancel-before/blocked-after-verify pair. Run it
+with `powershell -ExecutionPolicy Bypass -File scripts\dismantling-e2e-test.ps1` while
+the dev server is up.
+
+All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`, `customer-portal`, `amc`, `dismantling`).
 
 ---
 
-## Next: Phase 2 (post-MVP) — Dismantling, then Reports/Dashboards
+## Next: Phase 2 (post-MVP) — Reports/Dashboards
 
 The 8-week MVP scope (weeks 1–8, Foundation through Finance + Customer Portal) plus AMC
-Management (the first post-MVP module) are now fully built and live-verified. Per your
-explicit sequencing, next up is the **Dismantling module** (BOM→spare conversion, manual
-pricing, inventory adjustment, v2.1), followed by **Reports/Dashboards** (real-time
-WebSocket Kanban). Warranty Claims remains unscoped beyond the implementation plan's
+Management and Dismantling (the first two post-MVP modules) are now fully built and
+live-verified. Per your explicit sequencing, the only item left in that list is
+**Reports/Dashboards** (real-time WebSocket Kanban - Job Status Board, Pending Approval
+Aging, Service Efficiency, First-Time Fix Rate, plus the Finance/Quality dashboards from
+BRD Workflow 14). Warranty Claims remains unscoped beyond the implementation plan's
 mention of it.
 
 ---

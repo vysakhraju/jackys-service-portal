@@ -26,6 +26,10 @@ import {
 export enum GlSourceType {
   INVOICE_PAYMENT = 'INVOICE_PAYMENT',
   DEBIT_NOTE = 'DEBIT_NOTE',
+  // Phase 9 (Dismantling, BRD Workflow 15 / AC-30): posted once per DismantlingRecord,
+  // at the same moment DismantlingService.priceAndPost() commits the inventory increase -
+  // see gl-ledger.service.ts's postDismantlingRecovery() for the account pairing.
+  DISMANTLING_RECOVERY = 'DISMANTLING_RECOVERY',
 }
 
 @Entity('gl_postings')
