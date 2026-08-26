@@ -18,7 +18,7 @@ async function bootstrap() {
   // Security
   app.use(helmet());
   app.use(cors({
-    origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
+    origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173'], // 5173: React dev server (Vite), added alongside the frontend build
     credentials: true,
   }));
 

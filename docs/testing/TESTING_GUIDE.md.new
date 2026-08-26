@@ -1706,6 +1706,48 @@ never a silently-open, useless connection.
   `scripts/reports-ws-test.js` for the WebSocket half) — zero failures, all of the above
   confirmed against the running server with real seeded data.
 
+## 18. Frontend — React app (Frontend Phase 1: Auth)
+
+Everything above is tested through Swagger (no UI). Starting this session, there's also a
+real React app in `frontend/`, being built the same one-module-at-a-time way as the
+backend. So far it only covers login/logout — every other screen is still "Swagger only"
+until its own frontend phase ships (tracked in `docs/planning/STATUS_TRACKER.md`'s
+"Next" section).
+
+**a. Start it** (if it isn't already running in its own window):
+```powershell
+cd "D:\Jackys\jackys service portal\frontend"
+npm run dev
+```
+Leave the backend (`npm run start:dev`, port 3000) running in its own window too — the
+frontend calls it directly and does nothing useful without it.
+
+**b. Open the app**: browse to **http://localhost:5173**. You should land on a sign-in
+form for "Jacky's Service Portal."
+
+**c. Sign in** with the same admin login as everywhere else:
+```
+email:    admin@jackys.com
+password: Admin123!
+```
+On success you land on a dashboard showing your profile (name, email, role, employee ID,
+status, last login) pulled live from `GET /auth/profile` — not hardcoded — plus a list of
+the 12 frontend phases and which ones are done vs. still queued.
+
+**d. Things worth trying**:
+- Log out (button in the bottom-left sidebar) — you should land back on the sign-in form.
+- Try a wrong password — you should see "Incorrect email or password," not a raw error.
+- Refresh the page while signed in — you should stay signed in (the app re-checks who you
+  are via `/auth/profile` on every load, rather than trusting a cached name).
+- Leave the tab open for over 15 minutes (the access token's lifetime, NFR-04), then click
+  something — it should silently refresh your session using the refresh token rather than
+  bouncing you out; if it does bounce you to `/login`, that's a bug worth reporting.
+
+**e. What to report back**: anything that looks wrong, confusing, or ugly — this phase-by-
+phase process only works if real screens get real reactions before the next phase starts.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1736,6 +1778,10 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 17e). Your full post-MVP sequencing (AMC → Dismantling → Reports/Dashboards) is complete;
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
+
+The React frontend (Section 18) now exists at `http://localhost:5173`, but only covers
+sign-in/sign-out so far — everything else in the app still only has a Swagger-based way to
+test it until its own frontend phase ships.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider
