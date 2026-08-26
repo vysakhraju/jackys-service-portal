@@ -779,7 +779,7 @@ the first thing Phase 6 builds.
 
 ---
 
-## 11. Full endpoint index (100 endpoints, all documented above)
+## 11. Full endpoint index (127 endpoints, all documented above)
 
 Every route the app exposes, and exactly where in this guide it's covered. Use this to
 confirm nothing was missed — if you ever add a new endpoint and it doesn't show up here,
@@ -951,7 +951,27 @@ that's the signal to update this guide.
 | `GET /customer-portal/public/invoice/:token` | 14f |
 | `GET /customer-portal/public/job-card/:token/summary` | 14f |
 
-**Total: 111 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal.)
+### amc (16)
+| Endpoint | Section |
+|---|---|
+| `POST /amc/contracts` | 15a |
+| `GET /amc/contracts` (`?status=`) | 15a |
+| `GET /amc/contracts/expiring` (`?withinDays=`) | 15d |
+| `GET /amc/upsell-candidates` | 15g |
+| `GET /amc/contracts/number/:contractNumber` | 15a |
+| `GET /amc/contracts/:id` | 15a |
+| `GET /amc/contracts/:id/schedule` | 15b |
+| `POST /amc/contracts/:id/renew` | 15e |
+| `POST /amc/contracts/:id/cancel` | 15f |
+| `POST /amc/contracts/:id/send-renewal-reminder` | 15d |
+| `POST /amc/visits/:appointmentId/complete` | 15c |
+| `GET /amc/visits/:appointmentId/completion` | 15c |
+| `POST /amc/contracts/:id/billing-invoices` | 15e |
+| `GET /amc/contracts/:id/billing-invoices` | 15e |
+| `GET /amc/billing-invoices/:id` | 15e |
+| `POST /amc/billing-invoices/:id/record-payment` | 15e |
+
+**Total: 127 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc.)
 
 
 ## 12. QC gate + admin-assignable permissions + inventory consumption (Phase 6)
@@ -1354,6 +1374,152 @@ meant to be the ready-made source list to replay from, not something to throw aw
 
 ---
 
+## 15. AMC Management (Phase 9, post-MVP)
+
+Everything here is under the `amc` Swagger tag - login as admin (Section 1a), keep using
+the same `Bearer` header. This is the first post-MVP phase (BRD Workflow 13): Annual
+Maintenance Contracts, their auto-generated Preventive Maintenance visit schedule, visit
+completion, renewal, cancellation, and their own billing cycle (separate from the
+Section 13e/14 out-of-warranty repair Invoice - an AMC installment is a pre-agreed
+contract line item, not a repair bill).
+
+### 15a. Create a contract - auto-generates its PM visit schedule
+`POST /amc/contracts`:
+```json
+{
+  "customerName": "Al Futtaim Facilities LLC",
+  "customerPhone": "+971501234567",
+  "customerEmail": "facilities@example.com",
+  "customerType": "B2C",
+  "serviceCentreId": "<a service centre id from 3a>",
+  "coveredSerialNumbers": ["SN-000123"],
+  "brand": "Samsung",
+  "modelNumber": "M100",
+  "coverageType": "COMPREHENSIVE",
+  "serviceLevel": "Standard",
+  "visitFrequency": "QUARTERLY",
+  "startDate": "2026-09-01T00:00:00.000Z",
+  "endDate": "2027-08-31T00:00:00.000Z",
+  "totalAmount": 4800,
+  "paymentTerms": "FULL_UPFRONT"
+}
+```
+The moment this contract is created, its whole PM visit schedule is generated as
+`Appointment` rows (`type: "AMC"`) at the chosen `visitFrequency` (`MONTHLY`/`QUARTERLY`/
+`HALF_YEARLY`) between `startDate` and `endDate` - a quarterly, 12-month contract like the
+example above generates 4 visits. This deliberately bypasses the ordinary appointment
+capacity-check gate (Section 5a) - a signed contract's obligatory maintenance cadence
+should never be spuriously rejected by an unrelated day's booking load. There's a
+defensive 60-visit safety cap (not a business rule) - a mistakenly huge date range or a
+too-frequent schedule gets a **`400`** instead of silently creating hundreds of rows.
+`GET /amc/contracts` (`?status=`), `GET /amc/contracts/:id`, and
+`GET /amc/contracts/number/:contractNumber` all work as you'd expect.
+
+### 15b. View the generated schedule
+`GET /amc/contracts/:id/schedule` - lists the PM-visit Appointments in date order. Copy
+one `id` from here for the next section.
+
+### 15c. Complete a PM visit
+`POST /amc/visits/:appointmentId/complete`:
+```json
+{ "checklistNotes": "Filter cleaned, all normal" }
+```
+Marks that Appointment `COMPLETED` and records a checklist entry. To record an extra
+charge on the spot (e.g. a replacement part not covered by the contract), you must also
+set `extraChargeApprovedByCustomer: true` in the same call:
+```json
+{
+  "extraChargeDescription": "Replacement belt",
+  "extraChargeAmount": 150,
+  "extraChargeApprovedByCustomer": true
+}
+```
+Sending `extraChargeAmount` without the approval flag is rejected (**`400`**) - an AMC is
+pre-paid; nothing extra gets billed silently. `GET /amc/visits/:appointmentId/completion`
+fetches the completion record back.
+
+### 15d. Expiring contracts + renewal reminder
+`GET /amc/contracts/expiring?withinDays=30` lists `ACTIVE` contracts ending within the
+given window. There is no scheduler in this app (no cron infrastructure exists anywhere),
+so the BRD's "auto-fire 30 days before expiry" isn't actually automated - this list is the
+manual companion a human (or a future scheduler) uses to decide what needs the next
+endpoint: `POST /amc/contracts/:id/send-renewal-reminder`, which fires the
+`AMC_RENEWAL_REMINDER` notification trigger to the customer (same stubbed WhatsApp/Email/
+SMS channels as everywhere else in this app - Section 9b's note about no real provider
+being wired up applies here too).
+
+### 15e. Billing - installments, payment, B2B Credit
+`POST /amc/contracts/:id/billing-invoices`:
+```json
+{ "periodLabel": "Full Term" }
+```
+The amount charged depends on the contract's `paymentTerms`: `FULL_UPFRONT` bills the
+whole `totalAmount` in one invoice, `HALF_YEARLY` splits it into 2, `QUARTERLY` into 4.
+`GET /amc/contracts/:id/billing-invoices` lists them; `GET /amc/billing-invoices/:id`
+fetches one. To pay: `POST /amc/billing-invoices/:id/record-payment`:
+```json
+{ "method": "BANK_TRANSFER", "reference": "TXN-1001" }
+```
+`method` is one of `CASH`/`CARD`/`BANK_TRANSFER`/`B2B_CREDIT` (same universe as Section
+13e). Unlike the Section 14b Invoice, this is **full-amount-only** - there's no partial-
+payment support for an AMC installment (it's a fixed pre-agreed figure, not a running
+balance). `B2B_CREDIT` is rejected (**`403`**) unless the contract's own `customerType`
+is `B2B`.
+
+### 15f. Renew or cancel a contract
+`POST /amc/contracts/:id/renew`:
+```json
+{ "startDate": "2027-09-01T00:00:00.000Z", "endDate": "2028-08-31T00:00:00.000Z", "totalAmount": 5000 }
+```
+Creates a brand-new contract (its own new schedule, its own `AMC-####` number) with
+`previousContractId` pointing back at the original, and marks the original `RENEWED` - a
+forward-only chain, same pattern as an Estimate's `revise()` (Section 9e). A `CANCELLED`
+or already-`RENEWED` contract can't be renewed again (**`400`**).
+
+`POST /amc/contracts/:id/cancel`:
+```json
+{ "reason": "Customer requested early termination" }
+```
+Only works on an `ACTIVE` contract (**`400`** otherwise) and also cancels every
+still-future `SCHEDULED` PM visit tied to it, so cancelled contracts don't leave stray
+appointments on anyone's calendar.
+
+### 15g. Upsell candidates (bonus report)
+`GET /amc/upsell-candidates` - out-of-warranty customers who've just proven they'll pay
+for a repair (an `APPROVED` Estimate exists) and whose phone number isn't already covered
+by an `ACTIVE` AMC contract. This is a heuristic phone-number match, not a real CRM
+lookup (no customer master exists to match on precisely) - useful as a lead list, not as
+a guarantee of who is or isn't already covered.
+
+### 15h. Prove the guardrails work
+- Try to create a contract with `endDate` before `startDate` → expect **`400`**.
+- Try to create a contract whose date range/frequency would generate more than 60 PM
+  visits → expect **`400`**, and confirm no Appointments were created.
+- Complete the same PM visit twice → expect **`400`** on the second call.
+- Record an extra charge without `extraChargeApprovedByCustomer: true` → expect **`400`**.
+- Use `B2B_CREDIT` to pay a B2C contract's billing invoice → expect **`403`**.
+- Record payment against an already-`PAID` AMC billing invoice → expect **`400`**.
+- Cancel an already-`CANCELLED` contract, or renew an already-`RENEWED` one → expect
+  **`400`** either way.
+
+**Live-verified**: `scripts/amc-e2e-test.ps1` runs this entire section end to end against
+a real server - a quarterly 6-month contract generating exactly 3 PM visits, both the
+bad-date-range and the 60-visit-cap rejections, completing one visit plain and a second
+with an approved extra charge (plus the double-completion and unapproved-extra-charge
+guards both proven), the expiring-contracts list and a manual renewal-reminder trigger, a
+`FULL_UPFRONT` invoice charging the exact contract total, the B2B_CREDIT-on-a-B2C-
+contract rejection, a `QUARTERLY` invoice on a separate B2B contract correctly billing
+1/4 of the total and a `B2B_CREDIT` payment succeeding against it, a full cancel-cascade
+(every future visit confirmed no longer `SCHEDULED`), and a full renew (new contract
+chained via `previousContractId`, original confirmed `RENEWED`). Run it yourself with
+`powershell -ExecutionPolicy Bypass -File scripts\amc-e2e-test.ps1` while the dev server
+is up.
+
+Known limitation, same honesty pattern as the GL-posting/notification stubs elsewhere in
+this guide: there is no cron/scheduler infrastructure in this app, so the 30-days-before-
+expiry renewal reminder is a manual trigger (15d), not an automatic one.
+
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1376,11 +1542,11 @@ meant to be the ready-made source list to replay from, not something to throw aw
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 8** (Auth, Master Data, Appointments, Technician Mobile API,
+Everything through **Phase 9** (Auth, Master Data, Appointments, Technician Mobile API,
 Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
-+ POD + OOW invoicing block, Finance extension + Customer Portal) is real, working code
-you can exercise exactly as above — all 111 endpoints in Section 11 are live. AMC,
-Dismantling, and Reports/Dashboards remain unbuilt (Phase 2/post-MVP per the
++ POD + OOW invoicing block, Finance extension + Customer Portal, AMC Management) is real,
+working code you can exercise exactly as above — all 127 endpoints in Section 11 are
+live. Dismantling and Reports/Dashboards remain unbuilt (rest of Phase 2/post-MVP per the
 implementation plan).
 
 One known, deliberate gap to be aware of while testing:

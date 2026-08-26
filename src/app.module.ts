@@ -17,7 +17,7 @@ import { DebitNotesModule } from './debit-notes/debit-notes.module';
 import { GlLedgerModule } from './gl-ledger/gl-ledger.module';
 import { CustomerPortalModule } from './customer-portal/customer-portal.module';
 // import { FinanceModule } from './finance/finance.module';
-// import { AmcModule } from './amc/amc.module';
+import { AmcModule } from './amc/amc.module';
 // import { DismantlingModule } from './dismantling/dismantling.module';
 // import { ReportsModule } from './reports/reports.module';
 
@@ -57,7 +57,7 @@ import { CustomerPortalModule } from './customer-portal/customer-portal.module';
     GlLedgerModule,
     CustomerPortalModule,
     // FinanceModule,
-    // AmcModule,
+    AmcModule,
     // DismantlingModule,
     // ReportsModule,
   ],

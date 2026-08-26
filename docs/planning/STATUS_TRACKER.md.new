@@ -1,10 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-26 (Phase 8)
+**Last updated:** 2026-08-26 (Phase 9)
 **Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, 29 commits on `master`, latest `98d2217`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`, latest commit hash: PENDING_COMMIT_HASH)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
-**Resolved this session:** the real `docs/planning/STATUS_TRACKER.md` file, previously stuck (genuine exFAT-level "Access is denied" across every tool, for several sessions), came back readable/writable again once a plain `git checkout` deleted and recreated it from scratch - whatever had it wedged is now cleared. It's been overwritten with this file's full current content and both are kept in sync going forward; `STATUS_TRACKER.md.new` stays around as a duplicate/fallback rather than being deleted, in case the same issue ever recurs.
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -24,6 +23,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 6 | QC + Inventory auto-deduct | ✅ Done — QC gate, admin-assignable permissions, negative-inventory hard gate, rework approval, live-verified (new, this session) |
 | 7 | Delivery + POD + OOW block | ✅ Done — batch/normal delivery (`DLV-####`), dispatch, POD (signature/photo), OOW-paid block + minimal invoicing (Cash/Card/Bank Transfer/B2B Credit), live-verified (new, this session) |
 | 8 | Finance + Customer Portal | ✅ Done — VAT breakdown, partial payments, B2B aging, interdepartment Debit Notes + GL posting log, read-only Customer Portal, live-verified (new, this session) |
+| 9 | AMC Management (post-MVP) | ✅ Done — contracts, auto-generated PM visit schedule, visit completion, renewal/cancellation, billing (full/half-yearly/quarterly split), manual renewal reminder, RWR upsell report, live-verified (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -744,6 +744,83 @@ in the script, right after the invoice is first drafted and still unpaid.
 
 ---
 
+## Phase 9: AMC Management - done this session
+
+Post-MVP Phase 2, first of three (AMC -> Dismantling -> Reports/Dashboards, per your
+explicit sequencing). Built per BRD Workflow 13: `src/amc/` (`AmcContract`,
+`AmcVisitCompletion`, `AmcBillingInvoice` entities; `AmcService`; `AmcController`, 16
+endpoints under the `amc` Swagger tag; `AmcModule`, wired into `app.module.ts`), plus a
+plain nullable `amcContractId` column added onto the existing `Appointment` entity.
+
+Design decisions, reasoned through before writing any code:
+
+1. **PM visit schedule is auto-generated as real `Appointment` rows (`type: AMC`) at
+   contract-creation time**, at the contract's chosen frequency (MONTHLY/QUARTERLY/
+   HALF_YEARLY) between its start/end dates - not a separate scheduling concept. This
+   deliberately bypasses `AppointmentsService.create()`'s capacity-check gate (`AmcService`
+   injects the `Appointment` repository directly, mirroring the cross-module direct-
+   entity-manipulation pattern from Phases 6-7) - a signed contract's obligatory
+   maintenance cadence should never be spuriously rejected by an unrelated day's booking
+   load. A defensive 60-visit safety cap (not a business rule) guards against a
+   mistakenly huge date range or too-frequent schedule silently creating hundreds of rows.
+2. **Circular-import bug found and fixed during this session's first build**: the original
+   design gave `Appointment` a full `@ManyToOne` relation back to `AmcContract`. Since
+   `AmcContract` already imports `CustomerType` from `appointment.entity.ts`, that made a
+   genuine circular module dependency - not just a type-only one. First `jest` run showed
+   `CustomerType` coming back `undefined` inside `amc-contract.entity.ts`'s own `@Column`
+   decorator (12 suites failed to even load). Fixed by making `Appointment.amcContractId`
+   a plain column with no relation object back to `AmcContract` - `AmcService` queries
+   `Appointment` by `amcContractId` directly instead. `tsc`/`jest` both went clean
+   immediately after.
+3. **An extra charge raised during a PM visit requires explicit, same-call customer
+   approval** (`extraChargeApprovedByCustomer: true`) or the completion is rejected
+   (400) - an AMC is pre-paid; nothing extra gets billed silently on top of it.
+4. **AMC billing is deliberately separate from the Section 13e/14 out-of-warranty
+   Invoice**, and deliberately full-amount-only (no partial-payment reinvention) - an
+   installment (`AmcBillingInvoice`, split 1/2/4 ways by `paymentTerms`) is a fixed
+   pre-agreed contract line item, not a running repair balance. Reuses `PaymentMethod`
+   from the Invoicing module rather than inventing a parallel enum, and the same
+   B2B_CREDIT-must-be-a-B2B-customer guard from Phase 8's `InvoicingService`.
+5. **Renewal is a forward-only chain** (`previousContractId`), mirroring
+   `Estimate.previousEstimateId` - the old contract is marked `RENEWED`, never mutated in
+   place, so history stays intact. Cancellation cascades to every still-future
+   `SCHEDULED` PM visit tied to the contract (direct repository update, symmetric with how
+   they were generated).
+6. **Renewal reminder is a manual trigger, not automatic** - same honesty pattern as the
+   GL-posting and notification stubs: there is no cron/scheduler infrastructure anywhere
+   in this app, so the BRD's "auto-fire 30 days before expiry" isn't actually
+   automatable this pass. `GET /amc/contracts/expiring?withinDays=` is the companion
+   query-based list; `POST /amc/contracts/:id/send-renewal-reminder` fires
+   `NotificationTrigger.AMC_RENEWAL_REMINDER` (an enum value that already existed, unused,
+   before this session) through the same stubbed WhatsApp/Email/SMS channels as every
+   other notification in this app.
+7. **No dedicated "Sales" role exists** in `RoleName` (confirmed by reading the enum this
+   session), so the BRD's "email to Sales Team" renewal alert goes straight to the
+   customer instead - the honest option given what actually exists, not a made-up role.
+8. **Bonus RWR-upsell report** (`GET /amc/upsell-candidates`), reusing existing JobCard/
+   Estimate data rather than a new report entity: out-of-warranty customers with an
+   `APPROVED` Estimate whose phone number isn't already on an `ACTIVE` AMC contract.
+   Heuristic phone-number matching only (no CRM/customer master exists to match on
+   precisely) - documented as such, not presented as a precise lookup.
+
+**Automated tests**: 28 new tests in `src/amc/amc.service.spec.ts` (contract creation +
+schedule generation + date/cap validation, visit completion + double-completion +
+unapproved-extra-charge guards, renew/cancel state-machine guards + cascade, expiring
+contracts, renewal reminder, billing split-by-terms + payment + B2B Credit guard, upsell
+dedup/exclusion) - **440/440 tests passing** app-wide (412 carried over + 28 new).
+`tsc --noEmit` clean, `jest` clean.
+
+**Live-verified** against the real running server with a new `scripts/amc-e2e-test.ps1`:
+a quarterly 6-month contract generating exactly 3 PM visits, the bad-date-range and
+60-visit-cap rejections, one visit completed plain and a second with an approved extra
+charge (plus the double-completion and unapproved-extra-charge guards both proven), the
+expiring-contracts list and a manual renewal-reminder trigger, a FULL_UPFRONT invoice
+charging the exact contract total, the B2B_CREDIT-on-a-B2C-contract rejection, a
+QUARTERLY invoice on a separate B2B contract correctly billing 1/4 of the total plus a
+successful B2B_CREDIT payment against it, a full cancel-cascade (every future visit
+confirmed no longer SCHEDULED), and a full renew (new contract chained via
+`previousContractId`, original confirmed RENEWED). Zero failures on the first clean run.
+
 ## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
@@ -760,12 +837,15 @@ in the script, right after the invoice is first drafted and still unpaid.
 - **GL posting (Phase 8) is a deliberate internal-only stopgap, not a real accounting-system integration** — fixed account-code strings stand in for a real chart of accounts, and postings are a simplified two-line entry (no separate COGS/revenue split). The discovery doc lists the real GL/ERP integration format as an open, unresolved external dependency. Meant to be the ready-made list a real integration replays from, not thrown away once that's built.
 - **Interdepartment labor rate (Phase 8) relies on a documented assumption** — since no direct link exists from a Job Card to a specific Service Price List row, `DebitNotesService.resolveLaborCost()` matches on `activityType=REPAIR` (model-specific, falling back to a model-agnostic default row). Worth a real link if a Job Card's actual "activity type" ever needs to be something other than REPAIR.
 - **Customer Portal's "pay invoice" is deliberately view-only (Phase 8)** — no online payment gateway exists (confirmed out of scope, S2 in the discovery doc), so a customer sees what's owed but a real payment still has to go through staff via `record-payment`. Revisit only if a gateway integration is ever explicitly scoped.
+- **No cron/scheduler infrastructure exists anywhere in this app (Phase 9)** - the BRD's "auto-fire a renewal reminder 30 days before AMC expiry" is a manual trigger (`POST /amc/contracts/:id/send-renewal-reminder`) plus a query-based expiring-contracts list, not an actual scheduled job. Revisit if/when `@nestjs/schedule` (or an external scheduler) is ever added to the app.
+- **AMC billing installments are full-amount-only (Phase 9, deliberate)** - unlike the Section 14b Invoice's partial payments, an `AmcBillingInvoice` is a fixed pre-agreed contract line item; there's no "remaining balance" concept for it. Revisit only if a genuine partial-installment-payment need comes up.
+- **RWR-upsell candidates (Phase 9) match by phone number only** - there's no real CRM/customer master to match on, so this is a heuristic lead list, not a guaranteed-accurate "who already has an AMC" check.
 
 ---
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 111 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, Delivery + Invoicing, and the Finance extension + Customer Portal (Phase 8) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 127 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, Delivery + Invoicing, the Finance extension + Customer Portal (Phase 8), and AMC Management (Phase 9) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
 
 Also new this session: `npm run seed:technician` now accepts `SEED_TECH_ROLE` (e.g. `TECHNICIAN_WORKSHOP`, `WAREHOUSE_CLERK`) so you can seed a test login for any role, not just `TECHNICIAN_FIELD` — same pattern as `npm run seed:admin`.
 
@@ -892,19 +972,38 @@ GL posting count check, and all three Customer Portal routes. Run it with
 `powershell -ExecutionPolicy Bypass -File scripts\phase8-e2e-test.ps1` while the dev
 server is up.
 
-All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`, `customer-portal`).
+To try AMC Management (any admin/CCE/SERVICE_HEAD login; billing endpoints need a Finance role):
+```
+POST /amc/contracts                              { "customerName": "...", "customerPhone": "...", "customerType": "B2C", "serviceCentreId": "...", "coveredSerialNumbers": ["..."], "coverageType": "COMPREHENSIVE", "visitFrequency": "QUARTERLY", "startDate": "...", "endDate": "...", "totalAmount": 4800, "paymentTerms": "FULL_UPFRONT" }
+GET  /amc/contracts/:id/schedule                                                    (the auto-generated PM visits)
+POST /amc/visits/:appointmentId/complete         { "checklistNotes": "..." }        (add extraChargeAmount + extraChargeApprovedByCustomer:true for an on-the-spot charge)
+GET  /amc/contracts/expiring?withinDays=30
+POST /amc/contracts/:id/send-renewal-reminder
+POST /amc/contracts/:id/billing-invoices         { "periodLabel": "Full Term" }
+POST /amc/billing-invoices/:id/record-payment    { "method": "BANK_TRANSFER", "reference": "..." }
+POST /amc/contracts/:id/renew                    { "startDate": "...", "endDate": "...", "totalAmount": 5000 }
+POST /amc/contracts/:id/cancel                   { "reason": "..." }
+GET  /amc/upsell-candidates
+```
+There's also a ready-made PowerShell smoke-test script covering the whole flow at once:
+`scripts/amc-e2e-test.ps1` — schedule generation + the date/cap guards, visit completion
++ the extra-charge-approval guard, the expiring list + renewal reminder, billing (both
+FULL_UPFRONT and QUARTERLY splits) + the B2B Credit guard, cancel-cascade, and renew.
+Run it with `powershell -ExecutionPolicy Bypass -File scripts\amc-e2e-test.ps1` while the
+dev server is up.
+
+All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`, `customer-portal`, `amc`).
 
 ---
 
-## Next: Phase 2 (post-MVP) — AMC, Dismantling, Reports/Dashboards, Warranty Claims
+## Next: Phase 2 (post-MVP) — Dismantling, then Reports/Dashboards
 
-The 8-week MVP scope from the implementation plan (weeks 1–8, Foundation through Finance
-+ Customer Portal) is now fully built and live-verified. What's left is explicitly
-Phase 2/post-MVP per that plan: AMC Management (contracts, PM scheduling, 30-day renewal
-reminders, RWR upsell), the Dismantling module (BOM→spare conversion, v2.1), and
-Reports/Dashboards (real-time WebSocket Kanban). None started yet — ready to begin
-whenever you say the word, and happy to help scope which one makes sense to tackle first
-if that's not obvious.
+The 8-week MVP scope (weeks 1–8, Foundation through Finance + Customer Portal) plus AMC
+Management (the first post-MVP module) are now fully built and live-verified. Per your
+explicit sequencing, next up is the **Dismantling module** (BOM→spare conversion, manual
+pricing, inventory adjustment, v2.1), followed by **Reports/Dashboards** (real-time
+WebSocket Kanban). Warranty Claims remains unscoped beyond the implementation plan's
+mention of it.
 
 ---
 

@@ -147,6 +147,21 @@ export class Appointment {
   @Column({ nullable: true })
   createdById: string;
 
+  // Post-MVP AMC phase: set when this appointment is a system-generated PM visit
+  // belonging to an AMC contract's schedule (AmcService.createContract()/renewContract()),
+  // rather than a customer-booked appointment. Null for every ordinary appointment.
+  //
+  // Deliberately a PLAIN column, no @ManyToOne relation/JoinColumn to AmcContract - the
+  // amc module's entities already import CustomerType from THIS file, so a relation
+  // pointing back the other way (importing AmcContract's class here) would be a real
+  // circular module dependency, not just a type-only one: at require-time, whichever
+  // file loads second sees the other's exports as still-undefined (this bit Phase 9's
+  // first build - CustomerType came back undefined inside amc-contract.entity.ts's own
+  // decorator). AmcService queries Appointment by amcContractId directly instead of
+  // relying on a loaded relation.
+  @Column({ type: 'uuid', nullable: true })
+  amcContractId: string | null;
+
   @OneToOne(() => JobCard, (jobCard) => jobCard.appointment)
   jobCard: JobCard;
 
