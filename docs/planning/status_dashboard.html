@@ -380,10 +380,10 @@
       <h1>Build Status</h1>
     </div>
     <div class="stat-row">
-      <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Phases done (Reports/Dashboards live)</span></div>
-      <div class="stat"><span class="n mono">489</span><span class="l">Tests passing</span></div>
-      <div class="stat"><span class="n mono">140</span><span class="l">Endpoints live</span></div>
-      <div class="stat"><span class="n mono">99e6786</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
+      <div class="stat"><span class="n mono">1 / 12</span><span class="l">Frontend phases live (Auth)</span></div>
+      <div class="stat"><span class="n mono">489</span><span class="l">Backend tests passing</span></div>
+      <div class="stat"><span class="n mono">33ad667</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -445,54 +445,56 @@
         <div><div class="phase-name">Dismantling (post-MVP)</div><div class="phase-sub">Live-verified</div></div>
         <span class="chip done">Done</span>
       </div>
-      <div class="phase current">
+      <div class="phase done">
         <span class="phase-num mono">11</span>
-        <div><div class="phase-name">Reports/Dashboards (post-MVP)</div><div class="phase-sub">Live-verified today — details below</div></div>
+        <div><div class="phase-name">Reports/Dashboards (post-MVP)</div><div class="phase-sub">Live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase current">
+        <span class="phase-num mono">FE·1</span>
+        <div><div class="phase-name">Frontend Phase 1: Auth</div><div class="phase-sub">React app scaffolded, live-verified today — details below</div></div>
         <span class="chip current">Shipped today</span>
       </div>
     </div>
   </div>
 
   <div class="section">
-    <div class="section-head"><h2>Phase 11, in detail</h2></div>
+    <div class="section-head"><h2>Frontend Phase 1, in detail</h2></div>
     <div class="card">
-      <h3 style="font-size:17px;">BRD 18.1 Service Manager Dashboard — real-time Kanban + three supporting reports</h3>
+      <h3 style="font-size:17px;">React app scaffolded — Authentication &amp; Authorization is the first working screen</h3>
       <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
-        Third and last of the three post-MVP modules you asked for, in your own order
-        (AMC → Dismantling → Reports/Dashboards). Pure read/query over data every
-        earlier phase already produces — no new entity, no migration. The Job Status
-        Board maps <span class="mono">JobCardStatus</span> onto the BRD's 8 named
-        columns; Pending Approval Aging flags OOW estimates the customer hasn't
-        responded to past 4 hours; Service Efficiency and First-Time Fix Rate round
-        out the four 18.1 widgets. 18.2 Finance, 18.3 Quality/Product, and 18.4
-        Operational dashboards are explicitly out of scope for this phase, not
-        silently dropped.
+        First of twelve frontend phases, same one-module-at-a-time order the backend
+        itself was built in. Stack matches the implementation plan's own Architecture
+        Decisions exactly: React + TypeScript (Vite), TanStack Query, React Hook Form,
+        React Router — plus Axios and Tailwind CSS to actually wire and style it. Login,
+        logout, session restore, and silent access-token refresh are all wired to the
+        real backend, not mocked.
       </p>
 
       <div class="stat-tiles">
-        <div class="tile"><span class="n mono">23</span><span class="l">New tests</span></div>
-        <div class="tile"><span class="n mono">6</span><span class="l">New REST endpoints</span></div>
-        <div class="tile"><span class="n mono">1</span><span class="l">WebSocket gateway</span></div>
-        <div class="tile"><span class="n mono">0</span><span class="l">New tables</span></div>
+        <div class="tile"><span class="n mono">frontend/</span><span class="l">New project folder</span></div>
+        <div class="tile"><span class="n mono">1 / 12</span><span class="l">Frontend phases done</span></div>
+        <div class="tile"><span class="n mono">1</span><span class="l">Backend bug fixed (CORS)</span></div>
+        <div class="tile"><span class="n mono">:5173</span><span class="l">Dev server port</span></div>
       </div>
 
-      <h3 style="margin-top:4px;">Simplification called out explicitly, not silently shipped</h3>
+      <h3 style="margin-top:4px;">A real gap this phase caught, not simulated</h3>
       <ul class="findings">
         <li>
           <span class="tag">01</span>
-          <div><b>The WebSocket layer polls and diffs every 5 seconds — it doesn't push on every mutation.</b>
-          <p>FR-20 read literally wants a push fired from inside every status-changing method across ~6 already-shipped modules (Appointments, TechnicianVisit, JobCards, Workshop, Delivery, Estimates) — far more invasive than any prior phase's purely-additive work. What's built instead: a cheap counts-only poll every 5s, broadcasting the full board only when something actually changed, plus a separate 15-minute refresh for Pending Approval Aging matching the BRD's own stated cadence. NFR-02's "&lt;100ms" holds for the broadcast fan-out itself, not for change detection — a real gap, tracked as a follow-up, same honest-simplification pattern as AMC's manual renewal reminders.</p></div>
+          <div><b>The backend's CORS list never included the React dev server's origin.</b>
+          <p><span class="mono">src/main.ts</span> only ever allowed <span class="mono">localhost:3000</span>/<span class="mono">3001</span> — fine for every prior phase, since all testing so far was same-origin Swagger UI or CORS-blind curl/PowerShell calls. <span class="mono">localhost:5173</span> (the Vite dev server) is a genuinely different origin, and the very first real browser request would have been silently blocked by the browser itself — not by curl, which doesn't enforce CORS, so nothing in 11 backend phases of testing would ever have caught it. Fixed by adding 5173 to both <span class="mono">.env</span> and the code fallback, verified by checking the actual <span class="mono">Access-Control-Allow-Origin</span> response header, not just that a request "worked."</p></div>
         </li>
       </ul>
 
       <h3 style="margin-top:22px;">Live-verified end to end against your real server</h3>
       <div class="verified">
-        <span>All 6 REST endpoints return 200 with cross-consistent payloads</span>
-        <span>59 real active jobs correctly bucketed across 8 Kanban columns</span>
-        <span>No-token request rejected 401, wrong-role request rejected 403</span>
-        <span>WebSocket accepts a permitted JWT, sends an immediate snapshot</span>
-        <span>WebSocket rejects a wrong-role JWT with an error + forced disconnect</span>
-        <span>Snapshot payload matches the REST payload exactly</span>
+        <span><span class="mono">tsc -b && vite build</span> compiles clean, zero errors</span>
+        <span>Real CORS preflight from localhost:5173 now allowed (confirmed missing before the fix)</span>
+        <span>Real POST /auth/login from that origin returns the exact shape the app expects</span>
+        <span>GET /auth/profile with the resulting token returns the same sanitized user</span>
+        <span>Both dev servers (backend :3000, frontend :5173) confirmed running and reachable</span>
+        <span>Not yet done: a human clicking through a real browser — that's the next step</span>
       </div>
     </div>
   </div>
@@ -522,17 +524,17 @@
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · nothing queued</h3>
-        <h2>Your sequencing is complete</h2>
-        <p>AMC → Dismantling → Reports/Dashboards — all three shipped, tested, and live-verified. Optional follow-ups, not yet requested: the Finance Dashboard (BRD 18.2), Quality/Product Dashboard (18.3), Operational Reports (18.4), and genuine push-on-mutation WebSocket updates in place of the current 5s poll-and-diff. Say the word whenever you want one started.</p>
+        <h3>Next up · Frontend Phase 2</h3>
+        <h2>Master Data Management screens</h2>
+        <p>Backend is fully shipped; the React app now has a working sign-in. Next comes admin screens for service centres, fault/symptom codes, spare parts, price lists and the rest of Master Data — then Appointments, Job Cards, Estimates, and the remaining nine phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
       </div>
-      <div class="go">Standing by</div>
+      <div class="go">Building next →</div>
     </div>
   </div>
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced at 99e6786</span>
+    <span>master + main synced at 33ad667</span>
   </footer>
 
 </div>
