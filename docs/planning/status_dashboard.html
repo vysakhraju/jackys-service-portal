@@ -495,7 +495,7 @@
         <div class="tile"><span class="n mono">4</span><span class="l">Pre-mortem findings, fixed pre-build</span></div>
         <div class="tile"><span class="n mono">5 / 12</span><span class="l">Frontend phases built</span></div>
         <div class="tile"><span class="n mono">20</span><span class="l">New automated tests (Vitest + RTL)</span></div>
-        <div class="tile"><span class="n mono">2</span><span class="l">Screens (staff + public, isolated clients)</span></div>
+        <div class="tile"><span class="n mono">28 / 28</span><span class="l">Live checks passed</span></div>
       </div>
 
       <h3 style="margin-top:4px;">What the pre-mortem caught before it shipped</h3>
@@ -522,32 +522,35 @@
         </li>
       </ul>
 
-      <h3 style="margin-top:22px;">Verification status</h3>
+      <h3 style="margin-top:22px;">Live-verified against your real running backend</h3>
       <div class="verified">
         <span><span class="mono">tsc -b && vite build</span> compiles clean, zero errors</span>
         <span>20/20 new Vitest + React Testing Library tests passing</span>
-        <span>Public client verified to carry zero interceptors</span>
-        <span>All 4 pre-mortem findings have a dedicated regression test</span>
+        <span>VAT math exact: 470 subtotal → 493.50 total at the real 5% rate</span>
+        <span>Duplicate active estimate on one Job Card correctly 409'd</span>
+        <span>Public view showed only customer-safe fields — no internal ids</span>
+        <span>Wrong contact value on record-response correctly 400'd</span>
+        <span>Double-respond and viewing an already-decided link correctly 409/410'd</span>
+        <span>Reject → RWR → revise → SN_VALIDATED → approve → customerApproved, full loop</span>
       </div>
       <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
-        <span class="mono">verify-phase5.ps1</span> has been generated but not yet run
-        against your real backend — this card will update with those results once you've
-        run it and pasted the output back, same as every prior phase.
+        All 28 checks passed on the first run — no fixes needed. See "Worth knowing" below.
       </p>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--info); background:var(--info-wash);">
-      <h3 style="color:var(--info);">Two new standing practices start this phase</h3>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
+      <h3 style="color:var(--success);">Two new standing practices, both held up on the first real run</h3>
       <p>
-        First, <span class="mono">the-fool</span> now runs as a design pre-mortem before
-        any phase with tricky logic gets built, not after — this phase's four findings
-        (above) were all fixed before a single screen existed. Second,
-        <span class="mono">test-master</span> coverage starts here rather than being
-        backfilled onto Phases 1-4 — the frontend had zero automated tests before this
-        phase; it now has 20, and every phase from here on ships with its own.
+        <span class="mono">the-fool</span> now runs as a design pre-mortem before any
+        phase with tricky logic gets built, not after — this phase's four findings
+        (above) were all fixed before a single screen existed, and none of them showed up
+        as bugs once tested against the real backend. <span class="mono">test-master</span>
+        coverage also starts here rather than being backfilled onto Phases 1-4 — the
+        frontend had zero automated tests before this phase; it now has 20, all passing,
+        and every phase from here on ships with its own.
       </p>
       <p>
         Also as before: this build session has no network path to anything running on
@@ -555,9 +558,10 @@
         phase ships with a small PowerShell script (<span class="mono">verify-phaseN.ps1</span>)
         you run yourself with both dev servers up; you paste back the output and anything
         that fails gets fixed from that. Same pattern <span class="mono">git push</span>
-        already uses — <span class="mono">verify-phase5.ps1</span> is generated and
-        waiting on you to run it.
+        already uses — <span class="mono">verify-phase5.ps1</span> passed all 28 checks on
+        the first try.
       </p>
+      <span class="resolved-tag">Live-verified this phase</span>
     </div>
   </div>
 

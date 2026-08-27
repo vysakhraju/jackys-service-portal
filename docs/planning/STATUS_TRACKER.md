@@ -1655,15 +1655,23 @@ nav item flips from "soon" to a real link; Dashboard's build-progress list flips
 "Estimates (approval flow)" to Done; Job Cards' manual approval card now links to the
 real Estimate flow.
 
-**Live-verification status:** `verify-phase5.ps1` has been generated (same
-run-it-yourself-and-paste-back pattern as Phases 3-4 — this cloud session has no network
-path to your machine) but has not yet been run against your real backend. It exercises
-the full lifecycle end to end: create → duplicate-create blocked 409 → send → wrong-
-contact-value blocked 400 → public view → public reject → double-respond blocked 409 →
-expired-view blocked 410 → Job Card flips to `RWR` → revise → Job Card revives to
-`SN_VALIDATED` → send → staff-recorded approval → Job Card's `customerApproved` flips
-true → history shows both estimates. This section will be updated with the real results
-once you've run it.
+**Live-verified against your real running backend** (`verify-phase5.ps1`, the same
+run-it-yourself-and-paste-back pattern Phases 3-4 established — 28/28 checks passed on
+the first run): create → VAT math confirmed exact (470 subtotal → 493.50 total at the
+service centre's real 5% rate) → a second active estimate on the same Job Card correctly
+`409`'d → send generated a real `accessToken` → an out-of-warranty S/N with no matching
+Warranty Master row correctly came back `OOW` → a wrong contact value on record-response
+correctly `400`'d → the public view (no auth) showed only customer-safe fields, no
+`createdById`/`recordedByUserId`/`contactValue` → a customer rejection via the public
+link correctly moved the estimate to `REJECTED` → responding to the same link twice
+correctly `409`'d → viewing an already-responded link correctly `410`'d → the Job Card
+correctly flipped to `RWR` on rejection → `revise()` correctly created a linked `DRAFT`
+and revived the Job Card back to `SN_VALIDATED` → a staff-recorded approval on the
+revised estimate correctly flipped it `APPROVED` and set the Job Card's
+`customerApproved` flag → the by-job-card history correctly showed both estimates
+(the original `REJECTED` one and the revised `APPROVED` one). No fixes were needed - the
+design held up exactly as the-fool's pre-mortem and the pre-build reading of
+`estimates.service.ts` predicted.
 
 ---
 
