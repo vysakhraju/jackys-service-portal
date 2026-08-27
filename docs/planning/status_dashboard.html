@@ -381,9 +381,9 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">2 / 12</span><span class="l">Frontend phases live (Auth + Master Data)</span></div>
+      <div class="stat"><span class="n mono">3 / 12</span><span class="l">Frontend phases built (Auth + Master Data + Appointments)</span></div>
       <div class="stat"><span class="n mono">489</span><span class="l">Backend tests passing</span></div>
-      <div class="stat"><span class="n mono">1b533a3</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">328d579</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -455,81 +455,87 @@
         <div><div class="phase-name">Frontend Phase 1: Auth</div><div class="phase-sub">React app scaffolded, login/logout, silent refresh</div></div>
         <span class="chip done">Done</span>
       </div>
-      <div class="phase current">
+      <div class="phase done">
         <span class="phase-num mono">FE·2</span>
-        <div><div class="phase-name">Frontend Phase 2: Master Data Management</div><div class="phase-sub">9 sub-module screens, live-verified today — details below</div></div>
-        <span class="chip current">Shipped today</span>
+        <div><div class="phase-name">Frontend Phase 2: Master Data Management</div><div class="phase-sub">9 sub-module screens, live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase current">
+        <span class="phase-num mono">FE·3</span>
+        <div><div class="phase-name">Frontend Phase 3: Appointments + Technician Field View</div><div class="phase-sub">Built today — live-verification pending, details below</div></div>
+        <span class="chip current">Built today</span>
       </div>
     </div>
   </div>
 
   <div class="section">
-    <div class="section-head"><h2>Frontend Phase 2, in detail</h2></div>
+    <div class="section-head"><h2>Frontend Phase 3, in detail</h2></div>
     <div class="card">
-      <h3 style="font-size:17px;">All 9 Master Data sub-modules, one shared list+form pattern</h3>
+      <h3 style="font-size:17px;">Admin scheduling console + the technician's own 3-step field capture flow</h3>
       <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
-        A shared <span class="mono">DataTable</span> + <span class="mono">Modal</span> +
-        <span class="mono">Field</span> component set backs all 9 screens, but each screen
-        follows the backend's real REST surface exactly, including its gaps — not a
-        uniform CRUD assumption. Service Centres is the only sub-module with full
-        create/update/delete (with a per-weekday schedule editor); four sub-modules are
-        create-and-list only because no update/delete endpoint exists; Spare Parts,
-        Service Price List, Warranty Master, and Component Yield Matrix each get their
-        own shape (link-to-model action, activity-type picker, check-by-serial lookup,
-        by-model/by-category toggle) because their backend routes don't offer a plain
-        list. Bulk Import stays Swagger-only — no file-upload UX has been designed yet.
+        Two screens: <span class="mono">SchedulePage</span> (create/filter/assign/cancel,
+        with row actions driven by an <span class="mono">availableActions(status)</span>
+        helper that mirrors the backend's own transition guards exactly) and
+        <span class="mono">FieldVisitsPage</span> (a technician's own day, with an
+        expandable card per appointment walking Start Visit → Serial Number + warranty
+        check → Fault/Symptom). Assign Technician is a pasted user id, not a dropdown —
+        the backend has no "list users" endpoint, confirmed by reading <span class="mono">src/auth</span>
+        directly, matching the precedent Warranty Master and Spare Parts already set.
       </p>
 
       <div class="stat-tiles">
-        <div class="tile"><span class="n mono">9 / 9</span><span class="l">Sub-modules screened</span></div>
-        <div class="tile"><span class="n mono">2 / 12</span><span class="l">Frontend phases done</span></div>
-        <div class="tile"><span class="n mono">1</span><span class="l">Repo-hygiene fix (stale git lock)</span></div>
-        <div class="tile"><span class="n mono">1</span><span class="l">Enum sets copied verbatim from entities</span></div>
+        <div class="tile"><span class="n mono">16</span><span class="l">Real endpoints wrapped</span></div>
+        <div class="tile"><span class="n mono">3 / 12</span><span class="l">Frontend phases built</span></div>
+        <div class="tile"><span class="n mono">2</span><span class="l">Screens (Schedule + Field Visits)</span></div>
+        <div class="tile"><span class="n mono">0</span><span class="l">Role restrictions invented beyond the guard</span></div>
       </div>
 
       <h3 style="margin-top:4px;">A real gap this phase caught, not simulated</h3>
       <ul class="findings">
         <li>
           <span class="tag">01</span>
-          <div><b>A stale <span class="mono">.git/index.lock</span> from an earlier interrupted git operation was blocking every git command.</b>
-          <p>Left behind by a previous session's interrupted commit, it silently made every subsequent <span class="mono">git</span> call fail with "Another git process seems to be running." Alongside it: <span class="mono">STATUS_TRACKER.md.new</span> and <span class="mono">TESTING_GUIDE.md.new</span> had been committed as scratch working copies in an earlier session but never promoted to replace the real tracked docs — meaning the tracked docs were several phases stale even though the correct content already existed in the repo. Both are fixed as part of this phase's doc update: the lock is cleared, and the <span class="mono">.new</span> files are removed in the same commit that promotes their content into <span class="mono">STATUS_TRACKER.md</span>/<span class="mono">TESTING_GUIDE.md</span>.</p></div>
+          <div><b><span class="mono">RolesGuard</span> returns <span class="mono">true</span> unconditionally when a controller method has no <span class="mono">@Roles()</span> decorator.</b>
+          <p>Confirmed by reading <span class="mono">roles.guard.ts</span> directly rather than assuming symmetry with the write endpoints — which means <span class="mono">GET /appointments</span>, its by-id/by-number/schedule variants, and both <span class="mono">/technician/*</span> GETs have no role restriction at all: any authenticated user can call them. The frontend doesn't add a restriction the backend doesn't actually enforce.</p></div>
         </li>
       </ul>
 
-      <h3 style="margin-top:22px;">Live-verified against your real running backend</h3>
+      <h3 style="margin-top:22px;">Verified so far — live-verification is the one open item</h3>
       <div class="verified">
-        <span><span class="mono">tsc -b && vite build</span> compiles clean, zero errors</span>
-        <span>Real POST /service-centres with a nested weekday schedule created a real row</span>
-        <span>Real GET /price-lists?activityType=REPAIR returned real rows (query-param-only route)</span>
-        <span>Real GET /warranty-master/check/:serialNumber returned the expected shape</span>
-        <span>Real GET /spare-parts returned the real catalog</span>
-        <span>Not yet done: a human clicking through the rendered screens in a browser</span>
+        <span><span class="mono">tsc -b</span> (project-wide typecheck) compiles clean, zero errors</span>
+        <span><span class="mono">npm run build</span> (tsc -b && vite build) produces a clean production bundle</span>
       </div>
+      <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
+        Not yet done, unlike Phases 1 and 2: hitting the real running backend with these
+        screens' exact payloads. Neither Postgres nor <span class="mono">npm run start:dev</span>
+        was running on your machine this session — see "Worth knowing" below.
+      </p>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
-      <h3 style="color:var(--success);">The locked STATUS_TRACKER.md / TESTING_GUIDE.md files are fixed</h3>
+    <div class="alert" style="border-color:var(--pending); background:var(--pending-wash);">
+      <h3 style="color:var(--ink);">Frontend Phase 3 hasn't been live-verified yet — needs your backend running</h3>
       <p>
-        Both docs are now overwritten directly with their correct, current content —
-        <span class="mono">STATUS_TRACKER.md</span> and <span class="mono">TESTING_GUIDE.md</span>
-        no longer need the <span class="mono">.new</span> stopgap files, which are deleted in
-        the same commit. A separate stale <span class="mono">.git/index.lock</span> from an
-        earlier interrupted git operation (blocking every git command) was cleared in the same
-        pass — see Frontend Phase 2's "real gap this phase caught" above.
+        Phases 1 and 2 were both checked against the real running backend before being
+        called done; this phase wasn't, because neither Postgres nor
+        <span class="mono">npm run start:dev</span> was running on your machine this
+        session, and this environment can't start either one itself (no Docker, no admin
+        rights here). The typecheck and production build are both clean — start Postgres
+        and the backend the way you normally do (Section 0 of the testing guide) and the
+        real-endpoint checks (create an appointment, assign a technician, walk the
+        confirm → on-site → complete lifecycle, and the technician's start-visit → serial
+        → fault/symptom capture) will follow before Phase 4 begins.
       </p>
-      <span class="resolved-tag">Resolved this phase</span>
     </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Frontend Phase 3</h3>
-        <h2>Appointment Scheduling + Technician field view</h2>
-        <p>Backend is fully shipped; the React app now covers sign-in and all 9 Master Data screens. Next comes the admin/CCE appointment calendar and the technician's mobile-style visit flow (start visit, capture serial number, fault/symptom) — then Job Cards, Estimates, and the remaining eight phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
+        <h3>Next up · Frontend Phase 4</h3>
+        <h2>Job Cards + Warranty Override</h2>
+        <p>Once Phase 3 is live-verified, next comes the Job Card screens: S/N validation, section assignment, and the warranty-override approval flow with its audit trail — then Estimates, Workshop + Inventory, and the remaining seven phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
       </div>
       <div class="go">Building next →</div>
     </div>
@@ -537,7 +543,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 1b533a3 — awaiting push from your machine</span>
+    <span>master + main synced locally at 328d579 — awaiting push from your machine</span>
   </footer>
 
 </div>
