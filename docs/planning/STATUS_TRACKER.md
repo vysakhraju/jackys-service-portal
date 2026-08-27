@@ -2,10 +2,32 @@
 
 **Last updated:** 2026-08-27 (Frontend Phase 5)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `4cdea62`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `4cdea62`, 11 commits ahead of origin, awaiting `git push` from your machine
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `7888805`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `7888805`, 15 commits ahead of origin, awaiting `git push` from your machine
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
+
+---
+
+## Standing practices (read this first each session)
+
+- **Skills always loaded where relevant** (confirmed enabled, per your explicit
+  instruction): **the-fool** — run a pre-mortem on tricky design decisions (warranty
+  logic, approval flows, inventory/reservation rules, anything with edge-case state
+  transitions) *before* writing code, not after; **test-master** — every frontend phase
+  from Phase 5 onward ships with its own automated test coverage (Vitest + React
+  Testing Library, `npm test` in `frontend/`) — Phases 1-4 predate this and are covered
+  only by the manual walkthroughs in `TESTING_GUIDE.md`; **typescript-pro** — for
+  advanced TypeScript/type-safety work as it comes up.
+- **Commits are always local-only.** This build session has no network path to push —
+  only a file bridge to your machine. After each phase, commits land on `main`+`master`
+  (kept in sync via `git update-ref refs/heads/master refs/heads/main`, never
+  `git checkout`), and **you push from your own machine**: `git push origin main` then
+  `git push origin master` (or `git push origin main:main master:master` in one line).
+  Check the header above for exactly how many commits are ahead of origin right now.
+- **Live-verification is always run-it-yourself.** Same reason as above — each frontend
+  phase ships a `verify-phaseN.ps1` you run against your real backend and paste the
+  output back.
 
 ---
 
