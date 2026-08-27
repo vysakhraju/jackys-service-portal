@@ -6,6 +6,17 @@ import { AppLayout } from './components/AppLayout';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { MasterDataLayout } from './pages/masterData/MasterDataLayout';
+import { MasterDataHome } from './pages/masterData/MasterDataHome';
+import { ServiceCentresPage } from './pages/masterData/ServiceCentresPage';
+import { FaultSymptomsPage } from './pages/masterData/FaultSymptomsPage';
+import { SparePartsPage } from './pages/masterData/SparePartsPage';
+import { SparePartModelsPage } from './pages/masterData/SparePartModelsPage';
+import { PriceListsPage } from './pages/masterData/PriceListsPage';
+import { KpiRulesPage } from './pages/masterData/KpiRulesPage';
+import { NotificationTemplatesPage } from './pages/masterData/NotificationTemplatesPage';
+import { WarrantyMasterPage } from './pages/masterData/WarrantyMasterPage';
+import { ComponentYieldPage } from './pages/masterData/ComponentYieldPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +38,19 @@ export function App() {
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route path="/" element={<DashboardPage />} />
+
+                <Route path="/master-data" element={<MasterDataLayout />}>
+                  <Route index element={<MasterDataHome />} />
+                  <Route path="service-centres" element={<ServiceCentresPage />} />
+                  <Route path="fault-symptoms" element={<FaultSymptomsPage />} />
+                  <Route path="spare-parts" element={<SparePartsPage />} />
+                  <Route path="spare-part-models" element={<SparePartModelsPage />} />
+                  <Route path="price-lists" element={<PriceListsPage />} />
+                  <Route path="kpi-rules" element={<KpiRulesPage />} />
+                  <Route path="notification-templates" element={<NotificationTemplatesPage />} />
+                  <Route path="warranty-master" element={<WarrantyMasterPage />} />
+                  <Route path="component-yield" element={<ComponentYieldPage />} />
+                </Route>
               </Route>
             </Route>
 

@@ -2,7 +2,7 @@ import { useAuth } from '../lib/auth';
 
 const FRONTEND_PHASES = [
   { name: 'Authentication & Authorization', status: 'done' as const },
-  { name: 'Master Data Management', status: 'planned' as const },
+  { name: 'Master Data Management', status: 'done' as const },
   { name: 'Appointment Scheduling', status: 'planned' as const },
   { name: 'Job Cards & Warranty Override', status: 'planned' as const },
   { name: 'Estimates (approval flow)', status: 'planned' as const },

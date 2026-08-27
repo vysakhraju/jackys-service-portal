@@ -1,4 +1,4 @@
-import { Outlet } from 'react-router-dom';
+import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
 // One row per module in the build plan. `path` is only set once that
@@ -7,7 +7,7 @@ import { useAuth } from '../lib/auth';
 // always-up-to-date progress list as each frontend phase ships.
 const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Dashboard', path: '/' },
-  { label: 'Master Data' },
+  { label: 'Master Data', path: '/master-data' },
   { label: 'Appointments' },
   { label: 'Job Cards' },
   { label: 'Estimates' },
@@ -36,13 +36,18 @@ export function AppLayout() {
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
           {NAV_ITEMS.map((item) =>
             item.path ? (
-              <a
+              <NavLink
                 key={item.label}
-                href={item.path}
-                className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                to={item.path}
+                end={item.path === '/'}
+                className={({ isActive }) =>
+                  `block rounded-md px-3 py-2 text-sm font-medium ${
+                    isActive ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
+                  }`
+                }
               >
                 {item.label}
-              </a>
+              </NavLink>
             ) : (
               <div
                 key={item.label}
