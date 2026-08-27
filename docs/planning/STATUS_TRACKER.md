@@ -1476,14 +1476,32 @@ flips from "soon" to a real link (`AppLayout.tsx`); Dashboard's build-progress l
 "Appointment Scheduling" to Done (`DashboardPage.tsx`) — same honesty pattern as Phases 1
 and 2.
 
-**Verified so far**: `npx tsc -b` (project-wide typecheck) compiles clean; `npm run build`
-(`tsc -b && vite build`) produces a clean production bundle. **Not yet done**:
-live-verification against the real running backend — unlike Phases 1 and 2, neither the
-backend nor Postgres was running on your machine when this phase was built this session,
-so the real-endpoint checks (create an appointment, assign a technician, walk it through
-confirm → on-site → complete, and the technician-side start-visit → serial → fault/symptom
-capture) are still outstanding. Start Postgres and `npm run start:dev` (see Section 0) and
-this gets finished before moving to Phase 4, the same as every prior phase.
+**A process gap this phase caught**: the cloud session that builds this code has no
+network path to your machine at all — it can read/write your files (that's how every
+change in this phase reached your disk), but it cannot open a TCP connection to
+`localhost:3000`, confirmed directly (connection refused from every angle tried, including
+the gateway IP). Phases 1 and 2's "live-verified" curl/PowerShell checks were written as
+if run directly against your machine; this phase is the first to hit that assumption
+squarely. Fixed going forward with a self-contained PowerShell script
+(`verify-phase3.ps1`) that you run yourself with both dev servers up, printing PASS/FAIL
+per endpoint — you run it, paste back the output, issues get fixed from that, repeat.
+Future frontend phases will use the same pattern rather than assuming a curl call
+happens on the cloud side.
+
+**Live-verified against your real running backend** (via that script, all 17 checks,
+16 passed on the second run — the one failure was a re-used test fault/symptom code
+colliding with a leftover row from an earlier run, not a real bug): `POST /auth/login`
+as admin; `POST /master-data/service-centres`, `POST /master-data/fault-symptoms`,
+`POST /master-data/warranty-master` all created real rows; `POST /appointments` created
+a real appointment (`APT-20260827-0001`, status `SCHEDULED`); `PUT .../confirm` →
+`CONFIRMED`; `PUT .../assign-technician` → `TECHNICIAN_ASSIGNED`; `GET /appointments`
+with filters returned the real `{data, total, page, limit}` shape; technician login,
+`GET /technician/schedule`, `POST .../start` (GPS capture), `POST .../serial-number`
+(returned a real `IW` warranty badge + supplier from the warranty master row just
+created), and `POST .../fault-symptom` all succeeded in sequence; `PUT .../complete` →
+`COMPLETED`; the cancel guardrail correctly rejected a 2-character reason with `400`,
+then accepted a real reason → `CANCELLED`. `npx tsc -b` and `npm run build`
+(`tsc -b && vite build`) both compile clean, as before.
 
 ---
 

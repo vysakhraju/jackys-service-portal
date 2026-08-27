@@ -1877,11 +1877,9 @@ out of scope for now (see Section 17's intro).
 
 The React frontend (Sections 18–20) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, and Appointment Scheduling + the
-technician's Field View (Section 20) — everything else in the app still only has a
-Swagger-based way to test it until its own frontend phase ships. Section 20's own
-live-verification against your running backend is still outstanding (see
-`docs/planning/STATUS_TRACKER.md`'s Frontend Phase 3 section) — the steps in Section 20
-are the same steps that verification will follow.
+technician's Field View (Section 20, live-verified against the real backend) —
+everything else in the app still only has a Swagger-based way to test it until its own
+frontend phase ships.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider
