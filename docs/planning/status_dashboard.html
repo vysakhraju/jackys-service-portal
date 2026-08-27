@@ -381,9 +381,9 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">4 / 12</span><span class="l">Frontend phases live (+ Job Cards)</span></div>
-      <div class="stat"><span class="n mono">489</span><span class="l">Backend tests passing</span></div>
-      <div class="stat"><span class="n mono">62afeee</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">5 / 12</span><span class="l">Frontend phases live (+ Estimates)</span></div>
+      <div class="stat"><span class="n mono">489 + 20</span><span class="l">Backend + frontend tests passing</span></div>
+      <div class="stat"><span class="n mono">28d48a5</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -467,82 +467,106 @@
       </div>
       <div class="phase done">
         <span class="phase-num mono">FE·4</span>
-        <div><div class="phase-name">Frontend Phase 4: Job Cards + Warranty Override</div><div class="phase-sub">Live-verified today — details below</div></div>
+        <div><div class="phase-name">Frontend Phase 4: Job Cards + Warranty Override</div><div class="phase-sub">Live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">FE·5</span>
+        <div><div class="phase-name">Frontend Phase 5: Estimates + Public Approval Link</div><div class="phase-sub">the-fool pre-mortem + test-master coverage — details below</div></div>
         <span class="chip done">Done</span>
       </div>
     </div>
   </div>
 
   <div class="section">
-    <div class="section-head"><h2>Frontend Phase 4, in detail</h2></div>
+    <div class="section-head"><h2>Frontend Phase 5, in detail</h2></div>
     <div class="card">
-      <h3 style="font-size:17px;">A lookup screen, not a table — because the backend has no list endpoint for this</h3>
+      <h3 style="font-size:17px;">Designed with a the-fool pre-mortem before any screen was built</h3>
       <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
-        <span class="mono">GET /job-cards/:id</span> and <span class="mono">GET /job-cards/by-appointment/:id</span>
-        are the only reads the backend exposes — no "list all." So the screen is paste-an-
-        appointment-id-to-find-or-create, with a direct link from a completed appointment's
-        detail view, same pasted-id precedent Warranty Master and Spare Parts already set.
-        Every action panel — validate S/N, assign section, record customer approval,
-        Warranty Override, cancel — only appears when the backend's own status guard
-        would actually allow it, read directly from <span class="mono">job-cards.service.ts</span>
-        rather than assumed.
+        First phase built under the standing commitment to always load
+        <span class="mono">the-fool</span>, <span class="mono">test-master</span> and
+        <span class="mono">typescript-pro</span> where relevant, rather than reaching for
+        them inconsistently. A pre-mortem on the Estimate + public-link design ran
+        <em>before</em> any code — four failure modes were found and fixed up front
+        instead of discovered later.
       </p>
 
       <div class="stat-tiles">
-        <div class="tile"><span class="n mono">6</span><span class="l">Real endpoints wrapped</span></div>
-        <div class="tile"><span class="n mono">4 / 12</span><span class="l">Frontend phases built</span></div>
-        <div class="tile"><span class="n mono">1</span><span class="l">Screen (lookup + 5 action panels)</span></div>
-        <div class="tile"><span class="n mono">21 / 21</span><span class="l">Live checks passed</span></div>
+        <div class="tile"><span class="n mono">4</span><span class="l">Pre-mortem findings, fixed pre-build</span></div>
+        <div class="tile"><span class="n mono">5 / 12</span><span class="l">Frontend phases built</span></div>
+        <div class="tile"><span class="n mono">20</span><span class="l">New automated tests (Vitest + RTL)</span></div>
+        <div class="tile"><span class="n mono">2</span><span class="l">Screens (staff + public, isolated clients)</span></div>
       </div>
 
-      <h3 style="margin-top:4px;">A real gap this phase caught, not simulated</h3>
+      <h3 style="margin-top:4px;">What the pre-mortem caught before it shipped</h3>
       <ul class="findings">
         <li>
           <span class="tag">01</span>
-          <div><b><span class="mono">approveCustomer()</span> has no status gate at all — it's a bare flag flip, by design (an FR-06 stopgap until the real Estimate approval flow exists).</b>
-          <p>Confirmed by reading <span class="mono">job-cards.service.ts</span> directly rather than assuming every mutation checks status the way validate-sn/assign-section/warranty-override do. The screen adds exactly one guardrail of its own beyond the letter of the API — hiding the panel once a job is <span class="mono">CANCELLED</span> — rather than inventing a status machine the backend doesn't actually enforce.</p></div>
+          <div><b>An EXPIRED estimate has no resend/extend endpoint on the backend — gating "Create" on an empty list, not on "no active estimate", would have been a dead end.</b>
+          <p>Fixed: "Create Estimate" now keys off whether a DRAFT/SENT/APPROVED estimate exists, not whether the list is empty — an EXPIRED or REJECTED-with-no-revise-yet row no longer blocks a fresh one.</p></div>
+        </li>
+        <li>
+          <span class="tag">02</span>
+          <div><b>The staff API client's bearer-token + redirect-to-login behavior had no business anywhere near a customer's browser.</b>
+          <p>Fixed: the public link page (<span class="mono">/estimate/:token</span>) now runs on a brand-new, zero-interceptor axios client — asserted by its own test to carry no auth header and no redirect logic at all.</p></div>
+        </li>
+        <li>
+          <span class="tag">03</span>
+          <div><b>The anti-consent-laundering contact check is exact-format — a staff member guessing at phone formatting would 400 every time with no hint why.</b>
+          <p>Fixed: the Record Response form prefills the exact on-file phone/email as one-click buttons instead of a blank field.</p></div>
+        </li>
+        <li>
+          <span class="tag">04</span>
+          <div><b>A customer responding via the link at the same moment staff records a phone decision produces a 409 — a raw error would look like a broken form.</b>
+          <p>Fixed: both response forms now refetch on a 409 and show the real, current decision instead of a stale form.</p></div>
         </li>
       </ul>
 
-      <h3 style="margin-top:22px;">Live-verified against your real running backend</h3>
+      <h3 style="margin-top:22px;">Verification status</h3>
       <div class="verified">
         <span><span class="mono">tsc -b && vite build</span> compiles clean, zero errors</span>
-        <span>In-warranty job: OPEN → SN_VALIDATED → SECTION_ASSIGNED, no approval needed</span>
-        <span>Warranty override to OOW succeeded; same-status override correctly 400'd</span>
-        <span>Out-of-warranty job correctly 400'd on assign-section before customer approval</span>
-        <span>Re-validating an already-SN_VALIDATED S/N correctly 400'd</span>
-        <span>Job Card creation correctly 400'd with no invoice number on file (FR-05)</span>
+        <span>20/20 new Vitest + React Testing Library tests passing</span>
+        <span>Public client verified to carry zero interceptors</span>
+        <span>All 4 pre-mortem findings have a dedicated regression test</span>
       </div>
       <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
-        All 21 checks passed on the first run — see "Worth knowing" below for how this
-        actually got run.
+        <span class="mono">verify-phase5.ps1</span> has been generated but not yet run
+        against your real backend — this card will update with those results once you've
+        run it and pasted the output back, same as every prior phase.
       </p>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
-      <h3 style="color:var(--success);">The run-it-yourself verification script, now confirmed working twice</h3>
+    <div class="alert" style="border-color:var(--info); background:var(--info-wash);">
+      <h3 style="color:var(--info);">Two new standing practices start this phase</h3>
       <p>
-        The build session has no network path to anything running on your machine — only
-        a file bridge, confirmed directly back in Phase 3 (connection refused from every
-        angle tried). Each frontend phase now ships with a small PowerShell script
-        (<span class="mono">verify-phaseN.ps1</span>) that you run yourself with both dev
-        servers up — it prints PASS/FAIL per real endpoint, you paste back the output,
-        anything that fails gets fixed from that. Same pattern <span class="mono">git
-        push</span> already uses. Phase 4's script passed all 21 checks on the first try.
+        First, <span class="mono">the-fool</span> now runs as a design pre-mortem before
+        any phase with tricky logic gets built, not after — this phase's four findings
+        (above) were all fixed before a single screen existed. Second,
+        <span class="mono">test-master</span> coverage starts here rather than being
+        backfilled onto Phases 1-4 — the frontend had zero automated tests before this
+        phase; it now has 20, and every phase from here on ships with its own.
       </p>
-      <span class="resolved-tag">Live-verified this phase</span>
+      <p>
+        Also as before: this build session has no network path to anything running on
+        your machine — only a file bridge (confirmed back in Phase 3). Each frontend
+        phase ships with a small PowerShell script (<span class="mono">verify-phaseN.ps1</span>)
+        you run yourself with both dev servers up; you paste back the output and anything
+        that fails gets fixed from that. Same pattern <span class="mono">git push</span>
+        already uses — <span class="mono">verify-phase5.ps1</span> is generated and
+        waiting on you to run it.
+      </p>
     </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Frontend Phase 5</h3>
-        <h2>Estimates</h2>
-        <p>Next comes the Estimates screens: the staff-side draft/send/track flow plus the public no-login customer approval link — then Workshop + Inventory, QC + Permissions, and the remaining six phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
+        <h3>Next up · Frontend Phase 6</h3>
+        <h2>Workshop + Inventory</h2>
+        <p>Next comes the Workshop + Inventory screens (spare part reservations, custody, return) — then QC + Permissions, Delivery + Invoicing, and the remaining four phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
       </div>
       <div class="go">Building next →</div>
     </div>
@@ -550,7 +574,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 62afeee — awaiting push from your machine</span>
+    <span>master + main synced locally at 28d48a5 — awaiting push from your machine</span>
   </footer>
 
 </div>
