@@ -38,3 +38,6 @@ Thumbs.db
 
 # Misc
 *.tsbuildinfo
+
+# Claude scratch/working files (see _claude_scratch/README.md)
+_claude_scratch/
