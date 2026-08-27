@@ -381,9 +381,9 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">3 / 12</span><span class="l">Frontend phases live (Auth + Master Data + Appointments)</span></div>
+      <div class="stat"><span class="n mono">4 / 12</span><span class="l">Frontend phases live (+ Job Cards)</span></div>
       <div class="stat"><span class="n mono">489</span><span class="l">Backend tests passing</span></div>
-      <div class="stat"><span class="n mono">4440f87</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">62afeee</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -462,57 +462,60 @@
       </div>
       <div class="phase done">
         <span class="phase-num mono">FE·3</span>
-        <div><div class="phase-name">Frontend Phase 3: Appointments + Technician Field View</div><div class="phase-sub">Live-verified today — details below</div></div>
+        <div><div class="phase-name">Frontend Phase 3: Appointments + Technician Field View</div><div class="phase-sub">Live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">FE·4</span>
+        <div><div class="phase-name">Frontend Phase 4: Job Cards + Warranty Override</div><div class="phase-sub">Live-verified today — details below</div></div>
         <span class="chip done">Done</span>
       </div>
     </div>
   </div>
 
   <div class="section">
-    <div class="section-head"><h2>Frontend Phase 3, in detail</h2></div>
+    <div class="section-head"><h2>Frontend Phase 4, in detail</h2></div>
     <div class="card">
-      <h3 style="font-size:17px;">Admin scheduling console + the technician's own 3-step field capture flow</h3>
+      <h3 style="font-size:17px;">A lookup screen, not a table — because the backend has no list endpoint for this</h3>
       <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
-        Two screens: <span class="mono">SchedulePage</span> (create/filter/assign/cancel,
-        with row actions driven by an <span class="mono">availableActions(status)</span>
-        helper that mirrors the backend's own transition guards exactly) and
-        <span class="mono">FieldVisitsPage</span> (a technician's own day, with an
-        expandable card per appointment walking Start Visit → Serial Number + warranty
-        check → Fault/Symptom). Assign Technician is a pasted user id, not a dropdown —
-        the backend has no "list users" endpoint, confirmed by reading <span class="mono">src/auth</span>
-        directly, matching the precedent Warranty Master and Spare Parts already set.
+        <span class="mono">GET /job-cards/:id</span> and <span class="mono">GET /job-cards/by-appointment/:id</span>
+        are the only reads the backend exposes — no "list all." So the screen is paste-an-
+        appointment-id-to-find-or-create, with a direct link from a completed appointment's
+        detail view, same pasted-id precedent Warranty Master and Spare Parts already set.
+        Every action panel — validate S/N, assign section, record customer approval,
+        Warranty Override, cancel — only appears when the backend's own status guard
+        would actually allow it, read directly from <span class="mono">job-cards.service.ts</span>
+        rather than assumed.
       </p>
 
       <div class="stat-tiles">
-        <div class="tile"><span class="n mono">16</span><span class="l">Real endpoints wrapped</span></div>
-        <div class="tile"><span class="n mono">3 / 12</span><span class="l">Frontend phases built</span></div>
-        <div class="tile"><span class="n mono">2</span><span class="l">Screens (Schedule + Field Visits)</span></div>
-        <div class="tile"><span class="n mono">0</span><span class="l">Role restrictions invented beyond the guard</span></div>
+        <div class="tile"><span class="n mono">6</span><span class="l">Real endpoints wrapped</span></div>
+        <div class="tile"><span class="n mono">4 / 12</span><span class="l">Frontend phases built</span></div>
+        <div class="tile"><span class="n mono">1</span><span class="l">Screen (lookup + 5 action panels)</span></div>
+        <div class="tile"><span class="n mono">21 / 21</span><span class="l">Live checks passed</span></div>
       </div>
 
       <h3 style="margin-top:4px;">A real gap this phase caught, not simulated</h3>
       <ul class="findings">
         <li>
           <span class="tag">01</span>
-          <div><b><span class="mono">RolesGuard</span> returns <span class="mono">true</span> unconditionally when a controller method has no <span class="mono">@Roles()</span> decorator.</b>
-          <p>Confirmed by reading <span class="mono">roles.guard.ts</span> directly rather than assuming symmetry with the write endpoints — which means <span class="mono">GET /appointments</span>, its by-id/by-number/schedule variants, and both <span class="mono">/technician/*</span> GETs have no role restriction at all: any authenticated user can call them. The frontend doesn't add a restriction the backend doesn't actually enforce.</p></div>
+          <div><b><span class="mono">approveCustomer()</span> has no status gate at all — it's a bare flag flip, by design (an FR-06 stopgap until the real Estimate approval flow exists).</b>
+          <p>Confirmed by reading <span class="mono">job-cards.service.ts</span> directly rather than assuming every mutation checks status the way validate-sn/assign-section/warranty-override do. The screen adds exactly one guardrail of its own beyond the letter of the API — hiding the panel once a job is <span class="mono">CANCELLED</span> — rather than inventing a status machine the backend doesn't actually enforce.</p></div>
         </li>
       </ul>
 
       <h3 style="margin-top:22px;">Live-verified against your real running backend</h3>
       <div class="verified">
         <span><span class="mono">tsc -b && vite build</span> compiles clean, zero errors</span>
-        <span>Real POST /appointments created APT-20260827-0001, status SCHEDULED</span>
-        <span>Confirm → assign-technician walked it to TECHNICIAN_ASSIGNED, guards enforced</span>
-        <span>GET /appointments?filters returned the real {data,total,page,limit} shape</span>
-        <span>Start-visit → serial-number returned a real IW warranty badge + supplier</span>
-        <span>Fault/symptom capture → complete walked it to COMPLETED</span>
-        <span>Cancel: 2-char reason correctly rejected (400), valid reason → CANCELLED</span>
+        <span>In-warranty job: OPEN → SN_VALIDATED → SECTION_ASSIGNED, no approval needed</span>
+        <span>Warranty override to OOW succeeded; same-status override correctly 400'd</span>
+        <span>Out-of-warranty job correctly 400'd on assign-section before customer approval</span>
+        <span>Re-validating an already-SN_VALIDATED S/N correctly 400'd</span>
+        <span>Job Card creation correctly 400'd with no invoice number on file (FR-05)</span>
       </div>
       <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
-        16 of 17 checks passed (the one failure was a re-used test fixture colliding with
-        a leftover row, not a real bug) — see "Worth knowing" below for how this actually
-        got run.
+        All 21 checks passed on the first run — see "Worth knowing" below for how this
+        actually got run.
       </p>
     </div>
   </div>
@@ -520,17 +523,15 @@
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
-      <h3 style="color:var(--success);">The build session can't reach your machine's network — verification now runs as a script you execute</h3>
+      <h3 style="color:var(--success);">The run-it-yourself verification script, now confirmed working twice</h3>
       <p>
-        The environment that builds this code can read and write your project files, but
-        it has no network path to anything running on your machine — confirmed directly
-        (connection refused from every angle, including the gateway IP). Phases 1 and 2's
-        write-ups implied a direct curl call from that side; this phase is the first to
-        actually hit that wall. Fixed with <span class="mono">verify-phase3.ps1</span>, a
-        script you run yourself with both dev servers up — it prints PASS/FAIL per real
-        endpoint, you paste back the output, anything that fails gets fixed from that.
-        Same pattern <span class="mono">git push</span> already uses. Future frontend
-        phases will use this from the start instead of assuming otherwise.
+        The build session has no network path to anything running on your machine — only
+        a file bridge, confirmed directly back in Phase 3 (connection refused from every
+        angle tried). Each frontend phase now ships with a small PowerShell script
+        (<span class="mono">verify-phaseN.ps1</span>) that you run yourself with both dev
+        servers up — it prints PASS/FAIL per real endpoint, you paste back the output,
+        anything that fails gets fixed from that. Same pattern <span class="mono">git
+        push</span> already uses. Phase 4's script passed all 21 checks on the first try.
       </p>
       <span class="resolved-tag">Live-verified this phase</span>
     </div>
@@ -539,9 +540,9 @@
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Frontend Phase 4</h3>
-        <h2>Job Cards + Warranty Override</h2>
-        <p>Next comes the Job Card screens: S/N validation, section assignment, and the warranty-override approval flow with its audit trail — then Estimates, Workshop + Inventory, and the remaining seven phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
+        <h3>Next up · Frontend Phase 5</h3>
+        <h2>Estimates</h2>
+        <p>Next comes the Estimates screens: the staff-side draft/send/track flow plus the public no-login customer approval link — then Workshop + Inventory, QC + Permissions, and the remaining six phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
       </div>
       <div class="go">Building next →</div>
     </div>
@@ -549,7 +550,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 4440f87 — awaiting push from your machine</span>
+    <span>master + main synced locally at 62afeee — awaiting push from your machine</span>
   </footer>
 
 </div>
