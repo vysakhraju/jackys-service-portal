@@ -1,8 +1,8 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-26 (Phase 9)
-**Stack:** NestJS + PostgreSQL + JWT + React
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`, latest `66c0ab1`)
+**Last updated:** 2026-08-27 (Frontend Phase 2)
+**Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`, latest `2a4c27d`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
@@ -24,6 +24,8 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 7 | Delivery + POD + OOW block | ✅ Done — batch/normal delivery (`DLV-####`), dispatch, POD (signature/photo), OOW-paid block + minimal invoicing (Cash/Card/Bank Transfer/B2B Credit), live-verified (new, this session) |
 | 8 | Finance + Customer Portal | ✅ Done — VAT breakdown, partial payments, B2B aging, interdepartment Debit Notes + GL posting log, read-only Customer Portal, live-verified (new, this session) |
 | 9 | AMC Management (post-MVP) | ✅ Done — contracts, auto-generated PM visit schedule, visit completion, renewal/cancellation, billing (full/half-yearly/quarterly split), manual renewal reminder, RWR upsell report, live-verified (new, this session) |
+| 10 | Dismantling (post-MVP) | ✅ Done — defective/DOA appliance recovery, harvest → verify → price-and-post (AC-31 three-actor segregation of duties), inventory adjustment + GL posting, live-verified (new, this session) |
+| 11 | Reports/Dashboards (post-MVP) | ✅ Done — BRD 18.1 Service Manager Dashboard: Job Status Board Kanban (REST + WebSocket real-time), Pending Approval Aging, Service Efficiency, First-Time Fix Rate; 18.2/18.3/18.4 explicitly out of scope, live-verified (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -821,6 +823,208 @@ successful B2B_CREDIT payment against it, a full cancel-cascade (every future vi
 confirmed no longer SCHEDULED), and a full renew (new contract chained via
 `previousContractId`, original confirmed RENEWED). Zero failures on the first clean run.
 
+## Phase 10: Dismantling - done this session
+
+Post-MVP Phase 2, second of three (AMC -> Dismantling -> Reports/Dashboards, per your
+explicit sequencing). Built per BRD Workflow 15 (Defective/DOA Appliance Dismantling &
+Component Recovery), FR-19, AC-29/AC-30/AC-31: `src/dismantling/` (`DismantlingRecord`
+entity with a jsonb `harvestedComponents` snapshot array; `DismantlingService`;
+`DismantlingController`, 7 endpoints under the `dismantling` Swagger tag;
+`DismantlingModule`, wired into `app.module.ts` - a commented-out placeholder for it
+already existed there from the original scaffolding), plus a `GlSourceType.
+DISMANTLING_RECOVERY` source type and `postDismantlingRecovery()` method added to the
+existing `GlLedgerService`.
+
+Design decisions, reasoned through before writing any code:
+
+1. **Standalone from JobCard, on purpose** - the BRD's Workflow 15 pre-condition is "the
+   appliance exists in Damage Location / Return Stock and has been officially flagged as
+   Defective/DOA/DAP," with no mention of an active repair job anywhere in the six-step
+   table. This is recovery of an already-written-off whole appliance, not a repair-flow
+   step, so `DismantlingRecord` has no `jobCardId` anywhere.
+2. **Documented gap, not a silent guess**: the BRD's step 15.1 ("system stock should be
+   available") and AC-30 ("reduce the appliance asset count in the Damage Location") both
+   imply a whole-appliance inventory ledger - no such thing exists anywhere in this
+   codebase (`InventoryStock`/`InventoryLocation.DAMAGE_LOCATION` only ever tracked spare
+   PART quantities, consumed off a repair at QC). Rather than invent a parallel
+   appliance-asset-count entity nothing else in the app references, a `DismantlingRecord`
+   itself is the audit trail that a physical, already-inspected (offline) appliance is
+   being dismantled - explained in the entity's own doc comment, with a note on how a real
+   ledger could be added later if a genuine "how many DOA units are sitting in Damage
+   Location right now" report is ever needed.
+3. **Three DISTINCT actors, enforced at the service layer, not just three columns**:
+   AC-31 names a technician (harvest), a supervisor (verify), and a manager (price+post) -
+   the BRD's own step table blends "Technician/Team Leader" across steps 15.1-15.3, but
+   AC-31 is explicit about three separate people. `DismantlingService.verify()` rejects
+   (400) if the verifier is the same account that harvested; `priceAndPost()` rejects
+   (400) if the poster matches either the harvester or the verifier. This is real
+   segregation-of-duties logic, live-verified against the running server (see below), not
+   just documented as a convention.
+4. **No dedicated "Service Manager" role exists** in `RoleName` (same finding as Phase 9's
+   AMC work) - the BOM-to-spare/pricing/posting step (BRD 15.4-15.6) is gated to
+   `SERVICE_HEAD`/`SUPER_ADMIN`, the same honest mapping AMC's contract-management
+   endpoints already use.
+5. **Consumables are excluded from conversion at harvest time, not just at posting** - each
+   harvested component is looked up against the existing `ComponentYieldMatrix` (BOM/yield
+   master data, already built in an earlier phase and previously unused) by this record's
+   `modelId` + `originalBomItemCode`, and gets an `eligibleForConversion` flag computed
+   right there: `GOOD_WORKING` **and** category `RECOVERABLE_SPARE` **and** has a
+   `convertedSparePartCode`. A `CONSUMABLE`/`SCRAP` item, a `DAMAGED` one, or one with no
+   matching matrix row at all is still logged (visibility - the read model shows
+   everything that was found) but can never be selected for conversion, matching the
+   BRD's explicit "consumables are excluded from selection" (step 15.5).
+6. **AC-39 enforced literally**: nothing gets a financial value or a live-inventory entry
+   until `price-and-post` - the harvest step only ever logs condition/quantity, never a
+   price. `price-and-post` re-validates every conversion line against the harvest log
+   server-side (never trusts a client-supplied price list beyond the manual
+   `recoveryUnitPrice` itself), and re-checks the same AC-17 model-link integrity rule GRN
+   already enforces (a converted spare part with no linked `SparePartModel` blocks
+   posting, same message GRN gives).
+7. **Inventory increment and GL posting happen atomically with the status transition**
+   (one `dataSource.transaction()`, per-record then per-spare-part advisory locks, same
+   locking-order pattern `InventoryService.consumeReservationsOnQcApproval()` established
+   in Phase 6) - AC-30's "simultaneously" is literal here, not just "soon after." The GL
+   posting itself (`DISMANTLING_RECOVERY`, debit `1040-INVENTORY-SPARES` / credit
+   `4010-DISMANTLING-RECOVERY`) happens just after that transaction commits, the same
+   "journal log records what happened, isn't a precondition for it" pattern the AMC
+   billing and Phase 8 invoice-payment postings already use.
+8. **Cancel only before verification** - once a supervisor has signed off (`VERIFIED`),
+   discarding that record with no compensating entry would erase a real audit event, so
+   `cancel()` is blocked past `COMPONENTS_LOGGED`, mirroring `DeliveryService.cancel()`'s
+   "only while PENDING" gate.
+
+**Automated tests**: 26 new tests in `src/dismantling/dismantling.service.spec.ts`
+(sequence-number generation, harvest eligibility for every condition/category
+combination including "no matrix entry found," both AC-31 segregation gates on both verify
+and price-and-post, the excluded-consumable rejection, the quantity-exceeds-harvested
+rejection, the missing-SparePart-record rejection, the AC-17-style unlinked-model
+rejection, a full successful post with the exact stock/GL assertions, a concurrent-post
+conflict guard, and both cancel-allowed/cancel-blocked states) - **466/466 tests passing**
+app-wide (440 carried over + 26 new). `tsc --noEmit` clean, `jest` clean.
+
+**Live-verified** against the real running server with a new
+`scripts/dismantling-e2e-test.ps1`, using three separately seeded, separately logged-in
+accounts (a workshop technician, a team leader, and a service-head) so the AC-31 checks
+are exercised as real distinct people, not mocked: the full happy path (create -> harvest
+two components, one RECOVERABLE_SPARE and one CONSUMABLE -> verify by a different account
+-> price-and-post by a third account, confirming `MAIN_STORE` stock actually increased by
+the posted quantity and a `DISMANTLING_RECOVERY` GL entry landed with the right amount);
+every AC-31 rejection isolated at the service layer specifically (not just caught by the
+role guard first - harvest+verify by the same account, and both the "poster = harvester"
+and "poster = verifier" combinations, each proven with accounts whose roles pass every
+guard involved); the consumable-exclusion rejection; the AC-17-style unlinked-spare-part
+rejection; re-posting an already-`POSTED` record; and the cancel-before-verify /
+cancel-blocked-after-verify pair. Zero failures on the final clean run (118 total Swagger
+paths confirmed, up from 111 after AMC).
+
+## Phase 11: Reports/Dashboards (post-MVP)
+
+BRD Workflow 14 has no step-by-step actor table like every other workflow - it's purely
+four report-table sections (18.1 Service Manager Dashboard, 18.2 Finance Dashboard, 18.3
+Quality/Product Dashboard, 18.4 Operational Reports). FR-20 ("real-time Kanban dashboard
+via WebSocket") and NFR-02 ("<100ms latency for dashboard updates") both point at 18.1
+specifically, and the implementation plan budgets exactly this: `Reports/Dashboard | New
+| WebSocket real-time Kanban, aging alerts | Med | NFR-02` and `Reports | 8 | REST +
+WebSocket`. This phase builds 18.1 only; 18.2/18.3/18.4 are explicitly deferred (see
+below), not silently dropped.
+
+1. **Scope is 18.1 only, deliberately** - the Job Status Board Kanban, Pending Approval
+   Aging, Service Efficiency, and First-Time Fix Rate are the four 18.1 widgets and the
+   only ones FR-20/NFR-02 actually name. 18.2 (Finance Dashboard - 10 report rows),
+   18.3 (Quality/Product Dashboard - ties to AC-22/23/24), and 18.4 (Operational Reports -
+   Technician Productivity, SLA Breach, Spare Parts Consumption) are real, useful reports
+   that simply weren't asked for by name in FR-20/NFR-02 or the plan's endpoint budget -
+   tracked as an explicit follow-up, not built preemptively. Read-only REST reports over
+   already-modeled data (Invoice/DebitNote/GlPosting for 18.2, existing warranty-claim
+   ACs for 18.3, TechnicianVisit/JobCard/InventoryStock for 18.4) are the natural next
+   phase whenever they're wanted.
+2. **No new entity, no migration** - this whole module is read/query only, composed from
+   `JobCard`, `Delivery`, `Estimate`, `TechnicianVisit`, and `FaultSymptom`, all already
+   built. `synchronize: true` never touches this phase.
+3. **Kanban column mapping is a documented simplification of `JobCardStatus`** - the BRD
+   names 8 columns (Scheduled/On-Site/WIP/Spare Pending/Approval Pending/QC Completed/Out
+   for Delivery/Delivered) but `JobCardStatus` has 10 values (11 with CANCELLED).
+   `ReportsService.columnForJobCard()` folds `READY_FOR_QC` into WIP (still pre-QC "in the
+   shop" work from a dashboard viewer's perspective - the BRD's list has no separate
+   "Awaiting QC" bucket) and drops `CANCELLED` from the live board entirely (visible via
+   normal Job Card search, just not cluttering real-time ops). `QC_PASSED` splits into "QC
+   Completed" vs. "Out for Delivery" purely on whether `deliveryId` is set yet.
+4. **"Approval Pending" aging maps to the customer's Estimate response, not any internal
+   sign-off** - BRD 18.1's "jobs waiting >4hrs for approval" is read as `Estimate.status =
+   SENT` with no `respondedAt` yet (FR-06's shareable-link flow, or a staff-recorded
+   contact); `ageHours` is computed off `Estimate.sentAt`, flagged `breached` past the
+   4-hour threshold. This is a different (narrower, more concrete) reading than the
+   Kanban's own `RWR` column, which is what happens *after* a rejection, not while waiting
+   for a response.
+5. **Service Efficiency's "Login" is `TechnicianVisit.startedAt`** (FR-02's GPS+timestamp
+   captured at visit start) **to "QC Completed" (`JobCard.qcApprovedAt`)**, grouped by
+   technician (`TechnicianVisit.technicianId`) and by appliance category (via
+   `JobCard.faultCode` → `FaultSymptom.category`, with an `OTHER` fallback for any
+   fault code that isn't in the master-data table). Only jobs that have actually reached
+   QC approval are counted - there's no end timestamp to measure for an in-flight job.
+6. **First-Time Fix Rate is (on-site-only completions) / (total completions), where
+   "on-site-only" means `JobCard.section` is still `ON_SITE_REPAIR` at query time** -
+   `section` is a snapshot of the assigned section, not a change history, so this can't
+   distinguish "never left on-site" from a section change mid-flow after the fact.
+   Documented limitation, matches how `section` is already used everywhere else in this
+   codebase (Delivery, Workshop).
+7. **The WebSocket layer is an honest poll-and-diff simplification of the literal spec,
+   not a hidden one** - FR-20 read literally wants a push fired from inside every
+   status-changing method across Appointments/TechnicianVisit/JobCards/Workshop/Delivery/
+   Estimates, a cross-cutting change to ~6 already-shipped modules. What's built instead:
+   `ReportsGateway` polls a cheap counts-only summary every 5 seconds and only
+   recomputes+broadcasts the full board when the counts actually changed (a signature
+   comparison, not an unconditional re-broadcast); Pending Approval Aging is separately
+   re-broadcast every 15 minutes, matching the BRD's own stated refresh cadence for that
+   widget. NFR-02's "<100ms" genuinely holds for the broadcast fan-out itself (a Socket.io
+   `emit` to a room is well under 100ms) but **not** for change *detection* - a status
+   change can sit undetected for up to 5 seconds before a client sees it. Closing this gap
+   for real means adding an event-emitter call to every status-changing method in every
+   upstream service - a real, tracked follow-up, same honest-simplification pattern as
+   AMC's manual renewal reminders and the notification-channel stubs.
+8. **WebSocket auth can't reuse `JwtAuthGuard`/`RolesGuard`** - both read from
+   `context.switchToHttp().getRequest()`, which doesn't exist for a WS execution context.
+   `ReportsGateway.handleConnection()` verifies the JWT itself (same secret/algorithm as
+   `JwtStrategy`), re-checks the user is `ACTIVE` (a deactivated user's still-valid token
+   shouldn't get dashboard access), and checks the role against the same `VIEW_ROLES` list
+   the REST controller uses (`SERVICE_HEAD`/`SUPER_ADMIN`/`TECHNICAL_TEAM_LEADER` - the
+   18.1 dashboard's actual audience; `ACCOUNTANT`/`FINANCE_MANAGER` have no reason to see
+   this board since 18.2 Finance Dashboard is out of scope) - a failed check disconnects
+   the socket with an `error` event rather than silently dropping messages.
+
+**REST**: 6 endpoints under `/reports` (`GET dashboard/kanban`, `dashboard/kanban/summary`,
+`dashboard/approval-aging`, `dashboard/service-efficiency`, `dashboard/first-time-fix-rate`,
+`dashboard/overview` - the last one composes all four widgets into a single payload for a
+dashboard's initial page load), well under the plan's 8-endpoint budget, gated to
+`VIEW_ROLES` via the same `@Roles()`/`RolesGuard` pattern every other phase uses.
+
+**WebSocket**: `ReportsGateway` at Socket.io namespace `/reports`, room `dashboard` -
+`kanban:update` and `approval-aging:update` events, sent immediately on a permitted
+connection and again whenever the poll detects a change (or every 15 minutes for aging).
+`@nestjs/websockets`/`@nestjs/platform-socket.io` (installed since project scaffolding,
+unused until now) plus `socket.io` (now a direct dependency, previously only transitive).
+
+**Automated tests**: 23 new tests in `src/reports/reports.service.spec.ts` (every
+`columnForJobCard` branch via `it.each`, Kanban board bucketing + CANCELLED exclusion,
+summary/board count parity, approval-aging breach threshold + the sentAt-null-safe empty
+case, service-efficiency grouping + the unmapped-fault-code OTHER fallback + the
+no-completed-work-yet null case, first-time-fix-rate ratio + its divide-by-zero guard, and
+the overview composition) - **489/489 tests passing** app-wide (466 carried over + 23 new).
+`tsc --noEmit` clean, `jest` clean.
+
+**Live-verified** against the real running server with a new
+`scripts/reports-e2e-test.ps1` plus a small `scripts/reports-ws-test.js` (needs
+`socket.io-client`, added as a devDependency): all 6 REST endpoints return 200 with
+shape-sane, cross-consistent payloads against real seeded data (59 active jobs across 8
+columns, 1 aging estimate past the 4-hour threshold); the RBAC gate rejects no-token (401)
+and a seeded `TECHNICIAN_FIELD` account (403, with the exact required-roles message); and
+the WebSocket gateway both accepts a permitted JWT (receiving an immediate `kanban:update`
++ `approval-aging:update` snapshot matching the REST payloads exactly) and rejects/
+disconnects the same not-permitted account with an `Unauthorized` error, proving the role
+gate extends to the WS channel, not just REST. Zero failures on the final run.
+
+---
+
 ## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
@@ -840,12 +1044,16 @@ confirmed no longer SCHEDULED), and a full renew (new contract chained via
 - **No cron/scheduler infrastructure exists anywhere in this app (Phase 9)** - the BRD's "auto-fire a renewal reminder 30 days before AMC expiry" is a manual trigger (`POST /amc/contracts/:id/send-renewal-reminder`) plus a query-based expiring-contracts list, not an actual scheduled job. Revisit if/when `@nestjs/schedule` (or an external scheduler) is ever added to the app.
 - **AMC billing installments are full-amount-only (Phase 9, deliberate)** - unlike the Section 14b Invoice's partial payments, an `AmcBillingInvoice` is a fixed pre-agreed contract line item; there's no "remaining balance" concept for it. Revisit only if a genuine partial-installment-payment need comes up.
 - **RWR-upsell candidates (Phase 9) match by phone number only** - there's no real CRM/customer master to match on, so this is a heuristic lead list, not a guaranteed-accurate "who already has an AMC" check.
+- **No whole-appliance inventory ledger exists (Phase 10, documented, not silently guessed)** - AC-30's "reduce the appliance asset count in Damage Location" has nothing to check against or decrement; a `DismantlingRecord`'s own existence is the audit trail instead. Revisit only if a real "how many DOA units are in Damage Location right now" report is ever needed.
+- **No dedicated "Service Manager" role (Phase 10)** - same finding as Phase 9's AMC work; the BOM-to-spare/pricing/posting step is gated to `SERVICE_HEAD`/`SUPER_ADMIN`.
+- **Reports/Dashboards' WebSocket layer is poll-and-diff, not genuine push-on-mutation (Phase 11, deliberate)** - a 5-second poll interval means a status change can sit undetected for up to 5 seconds before a connected dashboard sees it; NFR-02's "<100ms" holds for the broadcast itself, not for detection. Revisit by adding an event-emitter call to every status-changing method across Appointments/TechnicianVisit/JobCards/Workshop/Delivery/Estimates if true sub-second detection is ever needed.
+- **BRD 18.2 Finance Dashboard, 18.3 Quality/Product Dashboard, and 18.4 Operational Reports are not built (Phase 11, explicitly deferred)** - only 18.1 Service Manager Dashboard was in FR-20/NFR-02's scope and the plan's 8-endpoint budget. All three are read-only reports over already-modeled data and are a natural, low-risk follow-up whenever they're wanted.
 
 ---
 
 ## Full self-test walkthrough
 
-There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 127 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, Delivery + Invoicing, the Finance extension + Customer Portal (Phase 8), and AMC Management (Phase 9) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
+There's now a dedicated step-by-step guide for testing everything yourself through Swagger (no UI exists yet, but Swagger gives you a clickable page for every endpoint): **`docs/testing/TESTING_GUIDE.md`**. As of this session it covers the complete cold start (checking Node/npm, checking and starting Postgres, first-time database creation, `npm install`, seeding the first admin login, starting the server) through all 140 endpoints in the app — auth, the full master-data reference (Section 3, all 29 endpoints), appointments, the Technician Mobile API, Job Cards, Estimates, Workshop + Inventory, QC + Permissions, Delivery + Invoicing, the Finance extension + Customer Portal (Phase 8), AMC Management (Phase 9), Dismantling (Phase 10), and Reports/Dashboards (Phase 11) — plus a troubleshooting table and a **Section 11** full endpoint index you can use to confirm nothing's missing. Every step in it was verified against a live server or the real DTOs before being written down, so it should just work if you follow it in order.
 
 Also new this session: `npm run seed:technician` now accepts `SEED_TECH_ROLE` (e.g. `TECHNICIAN_WORKSHOP`, `WAREHOUSE_CLERK`) so you can seed a test login for any role, not just `TECHNICIAN_FIELD` — same pattern as `npm run seed:admin`.
 
@@ -992,18 +1200,239 @@ FULL_UPFRONT and QUARTERLY splits) + the B2B Credit guard, cancel-cascade, and r
 Run it with `powershell -ExecutionPolicy Bypass -File scripts\amc-e2e-test.ps1` while the
 dev server is up.
 
-All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`, `customer-portal`, `amc`).
+To try Dismantling (needs a spare part linked to a model, and a `ComponentYieldMatrix`
+entry pointing `originalBomItemCode` -> that spare part's code; any Technician/TL/
+Service-Head login for create+harvest, TL+ for verify, Service-Head/Super-Admin for
+price-and-post - three DIFFERENT accounts, or you'll hit the AC-31 guard):
+```
+POST /dismantling                                { "applianceSerialNumber": "...", "modelId": "...", "damageLocationNotes": "..." }
+POST /dismantling/:id/harvest                     { "components": [{ "originalBomItemCode": "...", "testedCondition": "GOOD_WORKING", "quantity": 1 }] }
+POST /dismantling/:id/verify                      { "notes": "..." }                  (must be a different account from whoever harvested)
+POST /dismantling/:id/price-and-post              { "conversions": [{ "originalBomItemCode": "...", "recoveryUnitPrice": 85.00 }] }   (must differ from both prior actors)
+GET  /dismantling/:id
+GET  /dismantling?status=POSTED
+GET  /dismantling/serial/:applianceSerialNumber
+POST /dismantling/:id/cancel                      { "reason": "..." }                  (only while PENDING_HARVEST or COMPONENTS_LOGGED)
+GET  /inventory/stock/:sparePartId                                                     (confirms AC-30's inventory increase)
+GET  /gl-postings?sourceType=DISMANTLING_RECOVERY
+```
+There's also a ready-made PowerShell smoke-test script covering the whole flow at once:
+`scripts/dismantling-e2e-test.ps1` — the full happy path with real distinct accounts for
+each AC-31 actor, every segregation-of-duties rejection isolated at the service layer
+(not just the role guard), the consumable-exclusion rejection, the AC-17-style
+unlinked-spare-part rejection, and the cancel-before/blocked-after-verify pair. Run it
+with `powershell -ExecutionPolicy Bypass -File scripts\dismantling-e2e-test.ps1` while
+the dev server is up.
+
+To try Reports/Dashboards (any SERVICE_HEAD/SUPER_ADMIN/TECHNICAL_TEAM_LEADER login):
+```
+GET  /reports/dashboard/kanban                                                      (full Job Status Board, 8 columns)
+GET  /reports/dashboard/kanban/summary                                              (counts only)
+GET  /reports/dashboard/approval-aging                                              (OOW estimates awaiting response, red past 4hrs)
+GET  /reports/dashboard/service-efficiency                                          (avg Login-to-QC-Completed, by technician/category)
+GET  /reports/dashboard/first-time-fix-rate
+GET  /reports/dashboard/overview                                                    (all four widgets in one call)
+```
+The live real-time channel is a Socket.io connection to `ws://localhost:3000/reports`
+with `{ auth: { token: "<your JWT>" } }` in the handshake - on a permitted connection you
+get an immediate `kanban:update` + `approval-aging:update` snapshot, then `kanban:update`
+again whenever the board actually changes (polled every 5s) and `approval-aging:update`
+every 15 minutes. There's a ready-made smoke test for both the REST endpoints and the
+WebSocket channel: `scripts/reports-e2e-test.ps1` (which itself shells out to
+`scripts/reports-ws-test.js` - needs `socket.io-client`, already added as a devDependency).
+Run it with `powershell -ExecutionPolicy Bypass -File scripts\reports-e2e-test.ps1` while
+the dev server is up.
+
+All endpoints show up in Swagger under their respective tags (`job-cards`, `estimates`, `estimates-public`, `inventory`, `workshop`, `permissions`, `delivery`, `finance`, `customer-portal`, `amc`, `dismantling`, `reports`).
 
 ---
 
-## Next: Phase 2 (post-MVP) — Dismantling, then Reports/Dashboards
+## Frontend Phase 1: Scaffold + Authentication
 
-The 8-week MVP scope (weeks 1–8, Foundation through Finance + Customer Portal) plus AMC
-Management (the first post-MVP module) are now fully built and live-verified. Per your
-explicit sequencing, next up is the **Dismantling module** (BOM→spare conversion, manual
-pricing, inventory adjustment, v2.1), followed by **Reports/Dashboards** (real-time
-WebSocket Kanban). Warranty Claims remains unscoped beyond the implementation plan's
-mention of it.
+With the full backend built (MVP + AMC + Dismantling + Reports/Dashboards), this begins
+the React frontend — the one EPIC-001-through-EPIC-006 piece that had no UI at all until
+now. Same discipline as every backend phase: one module's screens at a time, wired to the
+already-tested real API, live-verified against the real running server before moving on.
+
+**Stack, matching the implementation plan's own "Frontend" row exactly** (Section 8,
+Architecture Decisions): React + TypeScript via Vite, TanStack Query (server state/caching),
+React Hook Form (forms), React Router (role-based routing). Added on top, not specified by
+the plan but needed to actually build anything: Axios (HTTP client, with a request
+interceptor that attaches the JWT and a response interceptor that transparently refreshes
+an expired access token once before giving up), socket.io-client (for Phase 12's live
+Kanban board), and Tailwind CSS v4 (utility-first styling — chosen for speed and for
+having one consistent visual language across ~12 phases of screens, over hand-rolled CSS
+per page).
+
+**Where it lives**: `frontend/` (the folder the original implementation plan's tree
+diagram already reserved for this, left empty until now — see the "Open items" note
+below, now resolved: kept the backend exactly where it already lives, in `src/`, rather
+than moving working code to match the plan's `backend/src/` layout).
+
+**Decisions made before writing code:**
+1. **Tokens live in `localStorage`, read once into React context at startup.**
+   `GET /auth/profile` is called on every page load if a token exists, rather than trusting
+   a cached user object — the backend is the source of truth for who a token actually
+   belongs to (catches a deactivated account immediately, for example).
+2. **One shared axios instance, one shared refresh-in-flight promise.** If several
+   requests 401 around the same moment (a page firing multiple queries at once), they all
+   await the same single `/auth/refresh` call instead of racing multiple refresh attempts
+   against the same refresh token.
+3. **`ProtectedRoute` takes an optional `allowedRoles` list** (matching the backend's
+   `RoleName` enum values exactly, e.g. `SUPER_ADMIN`) so later phases can restrict a
+   screen to specific roles the same way the backend's `@Roles()` guard does, without
+   building a second permissions model on the frontend.
+4. **The sidebar nav is also the honest progress tracker.** Every module gets a row from
+   day one; a row without a working screen yet renders as a disabled "soon" item instead
+   of a broken link — so the nav itself never claims something is built before it is.
+5. **A real bug this phase caught, not simulated**: the backend's CORS config
+   (`src/main.ts`) only ever allowed `http://localhost:3000`/`3001` as origins — fine for
+   every prior phase, since all testing so far was same-origin Swagger UI or CORS-blind
+   `curl`/PowerShell calls. The React dev server runs on `http://localhost:5173`, a
+   genuinely different origin, and the very first real browser-facing request would have
+   been silently blocked by the browser (not by curl, which doesn't enforce CORS) had this
+   not been caught. Fixed by adding `http://localhost:5173` to both the `.env` default and
+   the `src/main.ts` fallback list, verified by checking the actual
+   `Access-Control-Allow-Origin` response header, not just that the request "worked."
+
+**Built**: `src/lib/api.ts` (axios instance + token storage + refresh-on-401), `src/lib/auth.tsx`
+(`AuthProvider`/`useAuth` — login, logout, current user, loading state), `src/lib/types.ts`
+(shared `User`/`Role`/`TokenPair` types mirroring the backend's real entities),
+`src/components/ProtectedRoute.tsx`, `src/components/AppLayout.tsx` (sidebar shell +
+logout), `src/pages/LoginPage.tsx` (React Hook Form, calls the real `/auth/login`),
+`src/pages/DashboardPage.tsx` (profile card sourced from `/auth/profile` + the frontend
+build-progress list), `src/pages/NotFoundPage.tsx`.
+
+**Live-verified against the real running backend** (not mocked): `npm run build` (a real
+`tsc -b && vite build`) compiles clean; the Vite dev server serves on `:5173`; a real
+`OPTIONS` preflight from origin `localhost:5173` now returns
+`Access-Control-Allow-Origin: http://localhost:5173` (confirmed empty/missing before the
+fix); a real `POST /auth/login` from that origin returns `200` with the exact
+`{ accessToken, refreshToken, user }` shape `lib/auth.tsx` expects; `GET /auth/profile`
+with the resulting token returns the same sanitized user shape. Not yet verified: an actual
+human clicking through a real browser window — that's the next step, and the reason this
+phase stops here rather than plowing into Phase 2 first.
+
+**To try it yourself**: both dev servers are already running in their own windows on your
+machine (backend on `:3000` from before, frontend now also on `:5173`, both in watch mode
+— editing a file restarts/reloads automatically). Open **http://localhost:5173** in your
+browser, sign in with `admin@jackys.com` / `Admin123!`, and you should land on a dashboard
+showing your profile (name, role, employee ID, etc.) pulled live from the backend, plus the
+same 12-module progress list this doc tracks. If anything looks wrong, that's exactly the
+kind of feedback this phase-by-phase process is built to catch early.
+
+---
+
+## Frontend Phase 2: Master Data Management
+
+Covers all 9 Master Data sub-modules the backend exposes under `/master-data/*`: Service
+Centres, Fault & Symptoms, Spare Parts, Spare Part Models, Service Price List, Technician
+KPI Rules, Notification Templates, Warranty Master, Component Yield Matrix. Bulk Import
+(`POST /master-data/bulk-import/:entityType`, a generic CSV/Excel-row endpoint) is
+deliberately **not** built as a screen this phase — it has no defined file-upload UX yet
+and no per-entity column mapping spec, so it's left as an explicit gap rather than a
+guessed-at form.
+
+**Decisions made before writing code:**
+1. **One generic list+form pattern, not 9 bespoke pages.** A shared `DataTable` (columns +
+   rows + loading/error/empty states), `Modal`, and `Field`/`Checkbox` input wrapper are
+   used by all 9 pages; each page is its own file (so each has its own route and is easy
+   to find/change) but stays 60–250 lines by not re-inventing table/modal/form chrome.
+2. **The screens follow the backend's real REST surface exactly, including its gaps** —
+   read the full `master-data.controller.ts` and all 10 `create-*.dto.ts`/`link-*.dto.ts`
+   files first, rather than assuming a uniform CRUD API existed. It doesn't:
+   - **Service Centres** is the only sub-module with full create/update/delete. Its form
+     includes a per-weekday (`monday`..`sunday`) schedule editor (open/closed, start/end
+     time, break start/end, max jobs/day) matching the nested `schedule` JSON field.
+   - **Fault & Symptoms, Spare Part Models, Technician KPI Rules, Notification Templates**
+     are create + list only — no update/delete endpoint exists, so no Edit/Delete button is
+     shown (a real Edit button here would silently do nothing).
+   - **Spare Parts** adds a "Link to model" action calling
+     `POST /spare-parts/:id/link-model` (AC-17: a part must be linked to an appliance model
+     before GRN will accept stock for it).
+   - **Service Price List** has no unfiltered list route — `GET /price-lists` requires an
+     `activityType` query param — so the screen has an activity-type picker instead of a
+     plain table.
+   - **Warranty Master** has no list route at all, only create and
+     `GET /warranty-master/check/:serialNumber` (the same lookup a technician's S/N
+     validation step uses) — the screen is a create form plus a "check by serial number"
+     lookup tool, not a table.
+   - **Component Yield Matrix** has no unfiltered list either — only "by model" or "by
+     recovery category" — so the screen offers a toggle between those two lenses.
+3. **Enum values (Country, ApplianceCategory, ServiceActivityType, NotificationChannel/
+   Trigger, RecoveryCategory) were copied verbatim from the entity files**, not
+   re-derived, so every `<select>` matches the backend's `class-validator` `@IsEnum` checks
+   exactly — a mismatched string here would look fine in the UI and fail on submit.
+4. **Master Data got a real nav entry** (`/master-data`, sidebar item no longer says
+   "soon") with its own sub-nav of 9 tabs; the Dashboard's build-progress list also flips
+   "Master Data Management" to Done — same honesty pattern as Frontend Phase 1.
+
+**Built**: `src/lib/masterDataTypes.ts` (entity/DTO interfaces + enum arrays mirrored from
+the backend), `src/lib/masterDataApi.ts` (one function per real endpoint — no invented
+"list all" routes where the backend doesn't have one), `src/components/DataTable.tsx`,
+`src/components/Modal.tsx`, `src/components/Field.tsx` (shared UI), `src/pages/masterData/`
+— `MasterDataLayout.tsx` (sub-nav + outlet), `MasterDataHome.tsx` (redirects to the first
+tab), and one page per sub-module (`ServiceCentresPage.tsx`, `FaultSymptomsPage.tsx`,
+`SparePartsPage.tsx`, `SparePartModelsPage.tsx`, `PriceListsPage.tsx`, `KpiRulesPage.tsx`,
+`NotificationTemplatesPage.tsx`, `WarrantyMasterPage.tsx`, `ComponentYieldPage.tsx`).
+
+**Live-verified against the real running backend**: `tsc -b` (project-wide typecheck) and
+`npm run build` (`tsc -b && vite build`) both compile clean; then, rather than guessing the
+API shapes were right, logged in as `admin@jackys.com` via `POST /auth/login` and hit the
+real endpoints directly with the exact payload shapes the new screens send —
+`POST /service-centres` (with a nested weekday `schedule` object) created a real row and
+returned it with a generated `id`; `POST /spare-part-models` created a real model;
+`GET /price-lists?activityType=REPAIR` (the query-param-only route the Price Lists screen
+depends on) returned real rows; `GET /warranty-master/check/:serialNumber` returned the
+expected `{isUnderWarranty, warrantyPeriodMonths, supplier}` shape; `GET /spare-parts`
+returned the real catalog. The test service centre row was deleted afterward (soft
+delete); the test spare-part-model row (`TST-MODEL-1`) has no delete endpoint in the
+backend so it was left in place — harmless reference data, easy to spot and ignore.
+Not yet verified: a human clicking through the actual rendered screens in a browser (no
+browser automation was available this session) — that's the natural next check before
+moving to Phase 3.
+
+**One repo-hygiene note from this phase**: found a stale `.git/index.lock` left behind by
+an earlier interrupted git operation, blocking every git command with "Another git process
+seems to be running." Removed it, and separately discovered `STATUS_TRACKER.md.new` /
+`TESTING_GUIDE.md.new` (this file, and its testing-guide counterpart) had been committed as
+scratch files in an earlier session but never promoted to replace the real
+`STATUS_TRACKER.md`/`TESTING_GUIDE.md` — meaning the tracked docs were several phases
+stale. Fixed by finishing that promotion as part of this phase's doc update; the `.new`
+files are removed from the repo in this same commit.
+
+---
+
+## Next: Frontend Phase 3 (Appointment Scheduling) — 10 phases queued
+
+The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend Phase 1
+(Auth) and Phase 2 (Master Data) are both live-verified. The remaining 10 frontend phases
+are queued, in the same order the backend itself was built in, so each screen has an
+already-tested, already-stable API to build against:
+
+1. ~~Authentication & Authorization~~ — done.
+2. ~~Master Data Management~~ — done above.
+3. Appointment Scheduling + Technician field view
+4. Job Cards + Warranty Override
+5. Estimates (staff screens + the public customer approval link)
+6. Workshop + Inventory
+7. QC + Permissions admin
+8. Delivery + Invoicing
+9. Finance extension + Customer Portal (public pages)
+10. AMC Management
+11. Dismantling
+12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
+    easiest to get right once the simpler ones establish the patterns)
+
+Known, explicitly-deferred follow-ups, unrelated to the frontend build, if you want them
+at some point instead:
+
+- BRD 18.2 Finance Dashboard, 18.3 Quality/Product Dashboard, 18.4 Operational Reports
+  (see Phase 11 above) — read-only reports over data that already exists, low risk.
+- Warranty Claims — unscoped beyond a mention in the implementation plan; would need its
+  own requirements pass before design.
+- The genuine push-on-mutation WebSocket architecture (vs. the current poll-and-diff
+  simplification) if true sub-second update detection ever becomes a real requirement.
 
 ---
 
@@ -1013,4 +1442,4 @@ mention of it.
 - WhatsApp Business API account approval (2–4 weeks lead time) — now also blocking real Estimate notification delivery (Phase 4)
 - External Warranty API access/documentation
 - Acceptance criteria not yet validated with stakeholders
-- `backend/`/`frontend/` folder layout vs. actual `src/` layout — decide whether to reconcile before the React frontend is scaffolded
+- ~~`backend/`/`frontend/` folder layout vs. actual `src/` layout~~ — resolved: backend stays in `src/` as-is, the React frontend now lives in `frontend/` (Frontend Phase 1).

@@ -779,7 +779,7 @@ the first thing Phase 6 builds.
 
 ---
 
-## 11. Full endpoint index (127 endpoints, all documented above)
+## 11. Full endpoint index (134 endpoints, all documented above)
 
 Every route the app exposes, and exactly where in this guide it's covered. Use this to
 confirm nothing was missed — if you ever add a new endpoint and it doesn't show up here,
@@ -971,7 +971,29 @@ that's the signal to update this guide.
 | `GET /amc/billing-invoices/:id` | 15e |
 | `POST /amc/billing-invoices/:id/record-payment` | 15e |
 
-**Total: 127 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc.)
+### dismantling (7)
+| Endpoint | Section |
+|---|---|
+| `POST /dismantling` | 16a |
+| `GET /dismantling` (`?status=`) | 16a |
+| `GET /dismantling/serial/:applianceSerialNumber` | 16d |
+| `GET /dismantling/:id` | 16d |
+| `POST /dismantling/:id/harvest` | 16b |
+| `POST /dismantling/:id/verify` | 16c |
+| `POST /dismantling/:id/price-and-post` | 16c |
+| `POST /dismantling/:id/cancel` | 16e |
+
+### reports (6)
+| Endpoint | Section |
+|---|---|
+| `GET /reports/dashboard/kanban` | 17a |
+| `GET /reports/dashboard/kanban/summary` | 17a |
+| `GET /reports/dashboard/approval-aging` | 17b |
+| `GET /reports/dashboard/service-efficiency` | 17c |
+| `GET /reports/dashboard/first-time-fix-rate` | 17d |
+| `GET /reports/dashboard/overview` | 17a |
+
+**Total: 140 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc + 7 dismantling + 6 reports.)
 
 
 ## 12. QC gate + admin-assignable permissions + inventory consumption (Phase 6)
@@ -1520,6 +1542,261 @@ this guide: there is no cron/scheduler infrastructure in this app, so the 30-day
 expiry renewal reminder is a manual trigger (15d), not an automatic one.
 
 
+
+## 16. Dismantling — Defective/DOA Appliance Recovery (Phase 10, post-MVP, BRD Workflow 15)
+
+FR-19, AC-29/AC-30/AC-31. Recovers salvageable components from a defective/DOA/DAP
+appliance already sitting in Damage Location, converting them into priced, live spare-part
+stock. Standalone from Job Cards - this is recovery of a written-off whole appliance, not
+a step of an active repair.
+
+Three DISTINCT people are required end to end (AC-31): whoever harvests components can't
+also verify them, and whoever prices+posts can't be either of the other two. The API
+enforces this at the service layer (400, not just a role check) - try it with the same
+account twice and you'll see the exact rejection message.
+
+### 16a. Create a record (step 15.1) — Technician/Team Leader/Service Head/Super Admin
+```
+POST /dismantling
+{
+  "applianceSerialNumber": "SN-000987",
+  "modelId": "M100",
+  "damageLocationNotes": "Confirmed DOA, water damage, Damage Location bay 3"
+}
+```
+Starts `PENDING_HARVEST`. No appliance-stock gate exists to check against (see the
+entity's doc comment in `dismantling-record.entity.ts` for why - there's no whole-appliance
+inventory ledger anywhere in this codebase, only spare-part quantities).
+
+### 16b. Log harvested components (steps 15.2-15.3) — same actor group as 16a
+```
+POST /dismantling/:id/harvest
+{
+  "components": [
+    { "originalBomItemCode": "COMP-COMPRESSOR-01", "testedCondition": "GOOD_WORKING", "quantity": 1 },
+    { "originalBomItemCode": "COMP-GASKET-01", "testedCondition": "GOOD_WORKING", "quantity": 2 }
+  ]
+}
+```
+One-shot (only while `PENDING_HARVEST`). Each `originalBomItemCode` is looked up against
+`ComponentYieldMatrix` (by this record's `modelId`) and snapshotted - `itemName`,
+`category`, `convertedSparePartCode`. A component is only `eligibleForConversion` if it's
+`GOOD_WORKING` **and** category `RECOVERABLE_SPARE` **and** has a converted spare part
+code - consumables/scrap are excluded per step 15.5, and a component with no matching
+matrix row is logged but never convertible. Moves to `COMPONENTS_LOGGED`.
+
+### 16c. Verify, then price-and-post (AC-31's three-actor chain)
+```
+POST /dismantling/:id/verify
+{ "notes": "Confirmed compressor tests good, matches technician log" }
+```
+Requires `COMPONENTS_LOGGED`; the caller must be a **different** account from whoever
+harvested, or you get a 400 ("AC-31 requires the verifier to be different..."). Moves to
+`VERIFIED`.
+
+```
+POST /dismantling/:id/price-and-post
+{
+  "conversions": [
+    { "originalBomItemCode": "COMP-COMPRESSOR-01", "recoveryUnitPrice": 85.00, "quantityToConvert": 1 }
+  ]
+}
+```
+Requires `VERIFIED`; the caller must differ from **both** the harvester and the verifier
+(400 otherwise). This is BRD steps 15.4-15.6 combined (Service Manager role - mapped to
+`SERVICE_HEAD`/`SUPER_ADMIN`, since there's no dedicated "Service Manager" role in this
+system): only components already marked `eligibleForConversion` can be priced - AC-39, no
+financial value or live-inventory entry before this point. On success (one atomic
+transaction, AC-30):
+- The resolved spare part's `MAIN_STORE` stock (`GET /inventory/stock/:sparePartId`)
+  increases by `quantityToConvert`.
+- The record moves to `POSTED` (terminal), `totalRecoveredValue` is set, and a
+  `DISMANTLING_RECOVERY` entry appears in `GET /gl-postings?sourceType=DISMANTLING_RECOVERY`.
+- The same AC-17 integrity rule GRN uses applies here too: if the converted spare part
+  isn't linked to any `SparePartModel` yet, posting is blocked with a 400 naming it - link
+  it via `POST /master-data/spare-parts/:id/link-model` first.
+
+### 16d. Look around
+```
+GET /dismantling                              (?status= filter)
+GET /dismantling/:id
+GET /dismantling/serial/:applianceSerialNumber
+```
+
+### 16e. Cancel (before verification only)
+```
+POST /dismantling/:id/cancel
+{ "reason": "No salvageable components after inspection" }
+```
+Only while `PENDING_HARVEST` or `COMPONENTS_LOGGED` - once `VERIFIED`, a supervisor's
+sign-off exists and cancelling is blocked (mirrors Delivery's "only while PENDING" gate).
+
+### 16f. Prove the guardrails work
+- Try `verify` with the **same** account that just harvested → 400, named error.
+- Try `price-and-post` with the harvester's or the verifier's account → 400, named error.
+- Try `price-and-post` on a `CONSUMABLE`-category or `DAMAGED` component → 400, "not
+  eligible for conversion."
+- Try `price-and-post` where the converted spare part has no linked model → 400, same
+  message GRN gives for AC-17.
+- Try `cancel` on a record that's already `VERIFIED` → 400.
+- Live-verified via `scripts/dismantling-e2e-test.ps1` - zero failures, all of the above
+  confirmed against the running server, including the actual inventory increment and the
+  GL posting.
+
+## 17. Reports/Dashboards — BRD 18.1 Service Manager Dashboard (Phase 11, post-MVP)
+
+FR-20, NFR-02. Read-only Kanban board + three supporting reports over data every earlier
+phase already produces — no new entity, nothing to create here, just log in as
+SERVICE_HEAD/SUPER_ADMIN/TECHNICAL_TEAM_LEADER and look. 18.2 Finance Dashboard, 18.3
+Quality/Product Dashboard, and 18.4 Operational Reports are out of scope for this phase
+(see `docs/planning/STATUS_TRACKER.md`'s Phase 11 write-up for why).
+
+### 17a. Job Status Board — GET /reports/dashboard/kanban
+```
+GET /reports/dashboard/kanban
+```
+Returns 8 columns in board order (Scheduled, On-Site, WIP, Spare Pending, Approval
+Pending, QC Completed, Out for Delivery, Delivered), each with its job cards and a count.
+`GET /reports/dashboard/kanban/summary` returns just the counts (cheaper, for a polling
+client); `GET /reports/dashboard/overview` bundles this plus the three reports below into
+one payload for a dashboard's first page load.
+
+### 17b. Pending Approval Aging — GET /reports/dashboard/approval-aging
+```
+GET /reports/dashboard/approval-aging
+```
+Lists every OOW Estimate that's been sent (FR-06 link or a staff-recorded contact) but has
+no customer response yet, with `ageHours` and a `breached` flag past the 4-hour threshold
+(BRD 18.1's stated red-alert window). Empty until you have a `SENT` Estimate sitting
+unanswered — see Section 9 to create one.
+
+### 17c. Service Efficiency — GET /reports/dashboard/service-efficiency
+```
+GET /reports/dashboard/service-efficiency
+```
+Average hours from a technician's visit start (`TechnicianVisit.startedAt`, FR-02) to QC
+approval (`JobCard.qcApprovedAt`), grouped by technician and by appliance category. Only
+counts jobs that have actually passed QC (Section 12) — `sampleSize: 0` is normal on a
+freshly-seeded database.
+
+### 17d. First-Time Fix Rate — GET /reports/dashboard/first-time-fix-rate
+```
+GET /reports/dashboard/first-time-fix-rate
+```
+`onSiteOnlyCompletedJobs / totalCompletedJobs` — a completed on-site repair is a Job Card
+whose `section` is still `ON_SITE_REPAIR` when it reaches `QC_PASSED`/`DELIVERED`. Returns
+`rate: null` (not a divide-by-zero error) when nothing's completed yet.
+
+### 17e. The live WebSocket channel
+Not reachable from Swagger — connect a Socket.io client to `ws://localhost:3000/reports`
+with `{ auth: { token: "<your JWT>" } }` in the handshake. A permitted connection
+(same three roles as the REST endpoints) gets an immediate `kanban:update` +
+`approval-aging:update` snapshot, then `kanban:update` again whenever the board actually
+changes (polled every 5 seconds server-side) and `approval-aging:update` every 15 minutes.
+A missing/invalid/wrong-role token gets an `error` event and an immediate disconnect —
+never a silently-open, useless connection.
+
+### 17f. Prove the guardrails work
+- Any of the 6 REST endpoints with no `Authorization` header → 401.
+- Any of them logged in as a role outside `SERVICE_HEAD`/`SUPER_ADMIN`/
+  `TECHNICAL_TEAM_LEADER` (e.g. `TECHNICIAN_FIELD`) → 403, naming the required roles.
+- The same wrong-role account against the WebSocket channel → connects, then immediately
+  gets an `error` event and is disconnected — no snapshot is ever sent.
+- Live-verified via `scripts/reports-e2e-test.ps1` (which drives
+  `scripts/reports-ws-test.js` for the WebSocket half) — zero failures, all of the above
+  confirmed against the running server with real seeded data.
+
+## 18. Frontend — React app (Frontend Phase 1: Auth)
+
+Everything above is tested through Swagger (no UI). Starting this session, there's also a
+real React app in `frontend/`, being built the same one-module-at-a-time way as the
+backend. So far it only covers login/logout — every other screen is still "Swagger only"
+until its own frontend phase ships (tracked in `docs/planning/STATUS_TRACKER.md`'s
+"Next" section).
+
+**a. Start it** (if it isn't already running in its own window):
+```powershell
+cd "D:\Jackys\jackys service portal\frontend"
+npm run dev
+```
+Leave the backend (`npm run start:dev`, port 3000) running in its own window too — the
+frontend calls it directly and does nothing useful without it.
+
+**b. Open the app**: browse to **http://localhost:5173**. You should land on a sign-in
+form for "Jacky's Service Portal."
+
+**c. Sign in** with the same admin login as everywhere else:
+```
+email:    admin@jackys.com
+password: Admin123!
+```
+On success you land on a dashboard showing your profile (name, email, role, employee ID,
+status, last login) pulled live from `GET /auth/profile` — not hardcoded — plus a list of
+the 12 frontend phases and which ones are done vs. still queued.
+
+**d. Things worth trying**:
+- Log out (button in the bottom-left sidebar) — you should land back on the sign-in form.
+- Try a wrong password — you should see "Incorrect email or password," not a raw error.
+- Refresh the page while signed in — you should stay signed in (the app re-checks who you
+  are via `/auth/profile` on every load, rather than trusting a cached name).
+- Leave the tab open for over 15 minutes (the access token's lifetime, NFR-04), then click
+  something — it should silently refresh your session using the refresh token rather than
+  bouncing you out; if it does bounce you to `/login`, that's a bug worth reporting.
+
+**e. What to report back**: anything that looks wrong, confusing, or ugly — this phase-by-
+phase process only works if real screens get real reactions before the next phase starts.
+
+---
+
+## 19. Frontend — Master Data Management (Frontend Phase 2)
+
+Adds a **Master Data** section to the sidebar nav, with its own row of 9 tabs — one per
+sub-module the backend exposes under `/master-data/*`. Every screen calls the real
+backend directly; nothing here is mocked. Bulk Import is **not** a screen yet (no
+file-upload UX has been designed) — it stays Swagger-only for now.
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a), then click
+**Master Data** in the sidebar. You should land on the first tab (Service Centres) with
+the other 8 as tabs across the top.
+
+**b. Service Centres** — the only tab with full create/update/delete:
+- Click **New Service Centre**, fill in name/address/contact, and set at least one
+  weekday (e.g. Monday) to open with a start/end time and a max-jobs-per-day number.
+  Save — the new row should appear in the table immediately.
+- Edit that row (change the max-jobs number) and confirm the table updates.
+- Delete it (soft delete) — it should disappear from the list.
+
+**c. Create-and-list-only tabs** (no Edit/Delete button — the backend has no update or
+delete endpoint for these, so none is shown):
+- **Fault & Symptoms** — add a fault, confirm it lists.
+- **Spare Part Models** — add a model (note its name — Component Yield in step d needs an
+  existing model).
+- **Technician KPI Rules** — add a rule for an activity type.
+- **Notification Templates** — add a template for a channel/trigger pair.
+
+**d. The three "shaped differently" tabs** (each mirrors a real backend gap, not a UI
+bug):
+- **Spare Parts**: the list has no create form of its own (parts come from GRN, a later
+  phase) — instead try **Link to model** on an existing part and confirm it succeeds
+  once a real Spare Part Model exists (AC-17: a part must be linked before GRN accepts
+  stock for it).
+- **Service Price List**: there's no plain table — pick an **activity type** from the
+  dropdown first; the list only populates after that, because `GET /price-lists` requires
+  the `activityType` query param.
+- **Warranty Master**: no list at all — use the **create** form to add a warranty rule,
+  then use the separate **check by serial number** box (the same lookup a technician's
+  S/N validation step uses) to confirm it returns `isUnderWarranty`/period/supplier for a
+  serial you'd expect to match.
+- **Component Yield Matrix**: no plain list either — toggle between **by model** and **by
+  recovery category** and confirm both views return rows once at least one entry exists.
+
+**e. What to report back**: same as Phase 1 — anything confusing, broken, or where a
+missing Edit/Delete button looks like a bug rather than the deliberate gap it is (check
+`docs/planning/STATUS_TRACKER.md`'s Frontend Phase 2 section first if unsure which is
+which).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1542,12 +1819,18 @@ expiry renewal reminder is a manual trigger (15d), not an automatic one.
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 9** (Auth, Master Data, Appointments, Technician Mobile API,
+Everything through **Phase 11** (Auth, Master Data, Appointments, Technician Mobile API,
 Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
-+ POD + OOW invoicing block, Finance extension + Customer Portal, AMC Management) is real,
-working code you can exercise exactly as above — all 127 endpoints in Section 11 are
-live. Dismantling and Reports/Dashboards remain unbuilt (rest of Phase 2/post-MVP per the
-implementation plan).
++ POD + OOW invoicing block, Finance extension + Customer Portal, AMC Management,
+Dismantling, Reports/Dashboards) is real, working code you can exercise exactly as above —
+all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel (Section
+17e). Your full post-MVP sequencing (AMC → Dismantling → Reports/Dashboards) is complete;
+BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
+out of scope for now (see Section 17's intro).
+
+The React frontend (Sections 18–19) now exists at `http://localhost:5173` and covers
+sign-in/sign-out plus all 9 Master Data sub-modules — everything else in the app still
+only has a Swagger-based way to test it until its own frontend phase ships.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider
