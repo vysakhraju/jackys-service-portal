@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-27 (Frontend Phase 2)
+**Last updated:** 2026-08-27 (Frontend Phase 3)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`, latest `2a4c27d`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main` and `master` both pushed and in sync
@@ -1403,16 +1403,101 @@ files are removed from the repo in this same commit.
 
 ---
 
-## Next: Frontend Phase 3 (Appointment Scheduling) — 10 phases queued
+## Frontend Phase 3: Appointment Scheduling + Technician Field View
+
+Covers both sides of `/appointments/*` and `/technician/*`: the admin/CCE scheduling
+console (create, filter, assign, and walk an appointment through its full status
+lifecycle) and the technician's own field view (the S/N → warranty → fault/symptom
+capture flow that used to be Swagger-only in Section 6).
+
+**Decisions made before writing code:**
+1. **Read the guard, not just the controller, before assuming a screen needs a role
+   check.** `RolesGuard` returns `true` unconditionally when a controller method has no
+   `@Roles(...)` decorator — confirmed by reading `roles.guard.ts` directly. That means
+   `GET /appointments`, `GET /appointments/:id`, `GET /appointments/number/:id`, the
+   schedule-lookup routes, and both `/technician/*` GETs have **no role restriction at
+   all**: any authenticated user can call them. The frontend doesn't invent a restriction
+   the backend doesn't enforce.
+2. **No "list users" endpoint exists anywhere** (`src/auth` only exposes `GET
+   /auth/profile` — confirmed by grep) — so **Assign Technician** is a plain text input
+   for a pasted user id, not a dropdown, matching the precedent already set by Warranty
+   Master's serial lookup and Spare Parts' link-to-model screens, and matching
+   `TESTING_GUIDE.md`'s own long-standing instruction to "paste the technician user id
+   from Section 4."
+3. **The status-transition buttons on each row are driven by an `availableActions(status)`
+   helper that mirrors the backend's own guards exactly**, read directly from
+   `appointments.service.ts`: Confirm needs `SCHEDULED`; Mark On-site needs `CONFIRMED` or
+   `TECHNICIAN_ASSIGNED`; Complete needs `ON_SITE`; Cancel is blocked only once
+   `COMPLETED`/`CANCELLED`; Assign Technician needs `SCHEDULED` or `CONFIRMED` and is
+   itself validated server-side against the target user's role
+   (`TECHNICIAN_FIELD`/`TECHNICIAN_WORKSHOP`). A button that shouldn't work yet simply
+   isn't shown, rather than being shown and failing.
+4. **The Cancel modal's reason field enforces the same `@MinLength(3)` the backend's
+   `CancelAppointmentDto` enforces** — client-side, before the round trip, not instead of
+   the server check.
+5. **`GET /appointments` and `GET /technician/schedule` both return real paginated/plain
+   shapes, read from the service methods rather than assumed** —
+   `{ data, total, page, limit }` for the admin list (built a real pager, not an
+   infinite-scroll guess) and a plain array for the technician's own schedule.
+6. **A shared `StatusBadge` component was added** (`src/components/StatusBadge.tsx`) —
+   one color-coded pill covering every `AppointmentStatus` and `WarrantyStatus` value, so
+   status always reads the same way across the Schedule table, the visit cards, and (once
+   built) Job Cards.
+7. **The technician's "Start Visit" step captures real GPS via the browser Geolocation
+   API**, wrapped in a promise (`getBrowserPosition()`), since `StartVisitDto` requires
+   `gpsLat`/`gpsLng` either way — with a manual latitude/longitude text-entry fallback
+   shown automatically if the browser denies or lacks geolocation, so the flow never
+   dead-ends on a desktop browser or a "no" click.
+8. **Re-capturing the serial number is flagged in the UI as clearing the fault/symptom
+   below it** — because the backend's `captureSerialNumber` genuinely wipes both on a
+   re-capture — so the warning isn't a guess, it's what the code does.
+9. **Getting a technician's dashboard stats (`getDashboardStats` — today's counts by
+   status, this week's totals) was read from the service and typed
+   (`AppointmentDashboardStats`) but deliberately not built into a screen this phase** —
+   no dashboard widget spec exists yet for it; left as an explicit gap, the same way Bulk
+   Import was left out of Frontend Phase 2.
+
+**Built**: `src/lib/appointmentsTypes.ts` (full type mirror of `Appointment`,
+`TechnicianVisit`, and every request DTO — `as const` arrays for
+`APPOINTMENT_TYPES`/`APPOINTMENT_STATUSES`/`CUSTOMER_TYPES`/`WARRANTY_STATUSES`),
+`src/lib/appointmentsApi.ts` (one function per real endpoint — 16 in total, nothing
+invented), `src/components/StatusBadge.tsx`, `src/pages/appointments/` —
+`AppointmentsLayout.tsx` (2-tab shell: Schedule / My Field Visits, mirroring
+`MasterDataLayout.tsx`), `AppointmentsHome.tsx` (redirects to Schedule),
+`SchedulePage.tsx` (the admin/CCE console: filter bar, create modal covering every
+`CreateAppointmentInput` field, Assign/Cancel modals, per-row status actions, pagination,
+and a View modal that lazily loads the linked `TechnicianVisit` if one exists),
+`FieldVisitsPage.tsx` (the technician's own day, date-pickable, with an expandable
+`VisitCard` per appointment implementing the 3-step Start Visit → Serial Number → Fault/
+Symptom capture flow).
+
+**Wired in**: `/appointments` route (3 sub-routes) added to `App.tsx`; sidebar nav item
+flips from "soon" to a real link (`AppLayout.tsx`); Dashboard's build-progress list flips
+"Appointment Scheduling" to Done (`DashboardPage.tsx`) — same honesty pattern as Phases 1
+and 2.
+
+**Verified so far**: `npx tsc -b` (project-wide typecheck) compiles clean; `npm run build`
+(`tsc -b && vite build`) produces a clean production bundle. **Not yet done**:
+live-verification against the real running backend — unlike Phases 1 and 2, neither the
+backend nor Postgres was running on your machine when this phase was built this session,
+so the real-endpoint checks (create an appointment, assign a technician, walk it through
+confirm → on-site → complete, and the technician-side start-visit → serial → fault/symptom
+capture) are still outstanding. Start Postgres and `npm run start:dev` (see Section 0) and
+this gets finished before moving to Phase 4, the same as every prior phase.
+
+---
+
+## Next: Frontend Phase 4 (Job Cards + Warranty Override) — 9 phases queued
 
 The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend Phase 1
-(Auth) and Phase 2 (Master Data) are both live-verified. The remaining 10 frontend phases
-are queued, in the same order the backend itself was built in, so each screen has an
-already-tested, already-stable API to build against:
+(Auth), Phase 2 (Master Data), and Phase 3 (Appointment Scheduling + Technician Field View)
+are built (Phase 3's live-verification is the one open item — see above). The remaining 9
+frontend phases are queued, in the same order the backend itself was built in, so each
+screen has an already-tested, already-stable API to build against:
 
 1. ~~Authentication & Authorization~~ — done.
-2. ~~Master Data Management~~ — done above.
-3. Appointment Scheduling + Technician field view
+2. ~~Master Data Management~~ — done.
+3. ~~Appointment Scheduling + Technician field view~~ — done above (live-verify pending).
 4. Job Cards + Warranty Override
 5. Estimates (staff screens + the public customer approval link)
 6. Workshop + Inventory
@@ -1433,6 +1518,9 @@ at some point instead:
   own requirements pass before design.
 - The genuine push-on-mutation WebSocket architecture (vs. the current poll-and-diff
   simplification) if true sub-second update detection ever becomes a real requirement.
+- The Appointment dashboard-stats endpoint (`GET /appointments/.../dashboard-stats` —
+  today's counts by status, this week's totals) — typed on the frontend already, no
+  screen built yet; no widget spec exists for it.
 
 ---
 

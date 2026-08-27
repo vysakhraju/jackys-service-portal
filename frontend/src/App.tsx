@@ -17,6 +17,10 @@ import { KpiRulesPage } from './pages/masterData/KpiRulesPage';
 import { NotificationTemplatesPage } from './pages/masterData/NotificationTemplatesPage';
 import { WarrantyMasterPage } from './pages/masterData/WarrantyMasterPage';
 import { ComponentYieldPage } from './pages/masterData/ComponentYieldPage';
+import { AppointmentsLayout } from './pages/appointments/AppointmentsLayout';
+import { AppointmentsHome } from './pages/appointments/AppointmentsHome';
+import { SchedulePage } from './pages/appointments/SchedulePage';
+import { FieldVisitsPage } from './pages/appointments/FieldVisitsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -50,6 +54,12 @@ export function App() {
                   <Route path="notification-templates" element={<NotificationTemplatesPage />} />
                   <Route path="warranty-master" element={<WarrantyMasterPage />} />
                   <Route path="component-yield" element={<ComponentYieldPage />} />
+                </Route>
+
+                <Route path="/appointments" element={<AppointmentsLayout />}>
+                  <Route index element={<AppointmentsHome />} />
+                  <Route path="schedule" element={<SchedulePage />} />
+                  <Route path="field-visits" element={<FieldVisitsPage />} />
                 </Route>
               </Route>
             </Route>

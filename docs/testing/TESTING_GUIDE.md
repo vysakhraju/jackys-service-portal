@@ -1797,6 +1797,53 @@ which).
 
 ---
 
+## 20. Frontend — Appointment Scheduling + Technician Field View (Frontend Phase 3)
+
+Adds an **Appointments** section to the sidebar nav, with two tabs: **Schedule** (the
+admin/CCE console) and **My Field Visits** (the technician's own day). Both call the real
+backend directly.
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a), then click
+**Appointments** in the sidebar. You land on the **Schedule** tab.
+
+**b. Create an appointment**: click **New Appointment**, fill in the customer/service
+centre/date-time/type fields, and save. It should appear in the table with status
+`SCHEDULED`.
+
+**c. Walk it through its lifecycle** (the row's action buttons only show what's actually
+allowed from the current status — same guards the backend enforces):
+- **Confirm** (`SCHEDULED` → `CONFIRMED`).
+- **Assign Technician** — paste the technician user id from Section 4 (there's no user
+  picker — the backend has no "list users" endpoint, so this mirrors the Warranty
+  Master/Spare Parts precedent of a pasted id). The backend rejects a non-technician id.
+- **Mark On-site** (`CONFIRMED`/`TECHNICIAN_ASSIGNED` → `ON_SITE`).
+- **Complete** (`ON_SITE` → `COMPLETED`).
+- **Cancel** — try it with a reason under 3 characters first (should be blocked
+  client-side, matching the backend's `@MinLength(3)`), then with a real reason.
+- Try the filters (service centre, technician, status, type, date range) and confirm the
+  table and pagination update.
+
+**d. Technician Field View**: click **My Field Visits**. This calls
+`GET /technician/schedule` as whoever is logged in — sign in as the technician account
+from Section 4 to see appointments actually assigned to them. Pick a date, expand an
+appointment, and walk the 3-step capture flow:
+- **Start visit** — click **Use my location** (allow the browser's location prompt) or
+  type a latitude/longitude manually if you'd rather not grant it. This should move the
+  appointment to `ON_SITE` if it wasn't already.
+- **Serial number** — enter a serial number that exists in Warranty Master (Section 3's
+  Warranty Master tab) and capture it; you should see the warranty badge
+  (in/out-of-warranty) come back.
+- **Fault/Symptom** — only enabled once a serial number is captured; enter a fault and
+  symptom code that exist in Master Data's Fault & Symptoms tab.
+- Re-capture the serial number and confirm the fault/symptom you just entered is cleared —
+  that's the backend's real behavior, not a UI bug.
+
+**e. What to report back**: same as Phases 1–2 — anything confusing, broken, or where a
+button that should be enabled/disabled looks wrong (check `docs/planning/STATUS_TRACKER.md`'s
+Frontend Phase 3 section first if unsure which behavior is deliberate).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1828,9 +1875,13 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–19) now exists at `http://localhost:5173` and covers
-sign-in/sign-out plus all 9 Master Data sub-modules — everything else in the app still
-only has a Swagger-based way to test it until its own frontend phase ships.
+The React frontend (Sections 18–20) now exists at `http://localhost:5173` and covers
+sign-in/sign-out, all 9 Master Data sub-modules, and Appointment Scheduling + the
+technician's Field View (Section 20) — everything else in the app still only has a
+Swagger-based way to test it until its own frontend phase ships. Section 20's own
+live-verification against your running backend is still outstanding (see
+`docs/planning/STATUS_TRACKER.md`'s Frontend Phase 3 section) — the steps in Section 20
+are the same steps that verification will follow.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

@@ -8,7 +8,7 @@ import { useAuth } from '../lib/auth';
 const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Dashboard', path: '/' },
   { label: 'Master Data', path: '/master-data' },
-  { label: 'Appointments' },
+  { label: 'Appointments', path: '/appointments' },
   { label: 'Job Cards' },
   { label: 'Estimates' },
   { label: 'Workshop & Inventory' },
