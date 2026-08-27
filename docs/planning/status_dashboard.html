@@ -381,9 +381,9 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">3 / 12</span><span class="l">Frontend phases built (Auth + Master Data + Appointments)</span></div>
+      <div class="stat"><span class="n mono">3 / 12</span><span class="l">Frontend phases live (Auth + Master Data + Appointments)</span></div>
       <div class="stat"><span class="n mono">489</span><span class="l">Backend tests passing</span></div>
-      <div class="stat"><span class="n mono">328d579</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">4440f87</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -460,10 +460,10 @@
         <div><div class="phase-name">Frontend Phase 2: Master Data Management</div><div class="phase-sub">9 sub-module screens, live-verified</div></div>
         <span class="chip done">Done</span>
       </div>
-      <div class="phase current">
+      <div class="phase done">
         <span class="phase-num mono">FE·3</span>
-        <div><div class="phase-name">Frontend Phase 3: Appointments + Technician Field View</div><div class="phase-sub">Built today — live-verification pending, details below</div></div>
-        <span class="chip current">Built today</span>
+        <div><div class="phase-name">Frontend Phase 3: Appointments + Technician Field View</div><div class="phase-sub">Live-verified today — details below</div></div>
+        <span class="chip done">Done</span>
       </div>
     </div>
   </div>
@@ -499,34 +499,40 @@
         </li>
       </ul>
 
-      <h3 style="margin-top:22px;">Verified so far — live-verification is the one open item</h3>
+      <h3 style="margin-top:22px;">Live-verified against your real running backend</h3>
       <div class="verified">
-        <span><span class="mono">tsc -b</span> (project-wide typecheck) compiles clean, zero errors</span>
-        <span><span class="mono">npm run build</span> (tsc -b && vite build) produces a clean production bundle</span>
+        <span><span class="mono">tsc -b && vite build</span> compiles clean, zero errors</span>
+        <span>Real POST /appointments created APT-20260827-0001, status SCHEDULED</span>
+        <span>Confirm → assign-technician walked it to TECHNICIAN_ASSIGNED, guards enforced</span>
+        <span>GET /appointments?filters returned the real {data,total,page,limit} shape</span>
+        <span>Start-visit → serial-number returned a real IW warranty badge + supplier</span>
+        <span>Fault/symptom capture → complete walked it to COMPLETED</span>
+        <span>Cancel: 2-char reason correctly rejected (400), valid reason → CANCELLED</span>
       </div>
       <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
-        Not yet done, unlike Phases 1 and 2: hitting the real running backend with these
-        screens' exact payloads. Neither Postgres nor <span class="mono">npm run start:dev</span>
-        was running on your machine this session — see "Worth knowing" below.
+        16 of 17 checks passed (the one failure was a re-used test fixture colliding with
+        a leftover row, not a real bug) — see "Worth knowing" below for how this actually
+        got run.
       </p>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--pending); background:var(--pending-wash);">
-      <h3 style="color:var(--ink);">Frontend Phase 3 hasn't been live-verified yet — needs your backend running</h3>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
+      <h3 style="color:var(--success);">The build session can't reach your machine's network — verification now runs as a script you execute</h3>
       <p>
-        Phases 1 and 2 were both checked against the real running backend before being
-        called done; this phase wasn't, because neither Postgres nor
-        <span class="mono">npm run start:dev</span> was running on your machine this
-        session, and this environment can't start either one itself (no Docker, no admin
-        rights here). The typecheck and production build are both clean — start Postgres
-        and the backend the way you normally do (Section 0 of the testing guide) and the
-        real-endpoint checks (create an appointment, assign a technician, walk the
-        confirm → on-site → complete lifecycle, and the technician's start-visit → serial
-        → fault/symptom capture) will follow before Phase 4 begins.
+        The environment that builds this code can read and write your project files, but
+        it has no network path to anything running on your machine — confirmed directly
+        (connection refused from every angle, including the gateway IP). Phases 1 and 2's
+        write-ups implied a direct curl call from that side; this phase is the first to
+        actually hit that wall. Fixed with <span class="mono">verify-phase3.ps1</span>, a
+        script you run yourself with both dev servers up — it prints PASS/FAIL per real
+        endpoint, you paste back the output, anything that fails gets fixed from that.
+        Same pattern <span class="mono">git push</span> already uses. Future frontend
+        phases will use this from the start instead of assuming otherwise.
       </p>
+      <span class="resolved-tag">Live-verified this phase</span>
     </div>
   </div>
 
@@ -535,7 +541,7 @@
       <div>
         <h3>Next up · Frontend Phase 4</h3>
         <h2>Job Cards + Warranty Override</h2>
-        <p>Once Phase 3 is live-verified, next comes the Job Card screens: S/N validation, section assignment, and the warranty-override approval flow with its audit trail — then Estimates, Workshop + Inventory, and the remaining seven phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
+        <p>Next comes the Job Card screens: S/N validation, section assignment, and the warranty-override approval flow with its audit trail — then Estimates, Workshop + Inventory, and the remaining seven phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
       </div>
       <div class="go">Building next →</div>
     </div>
@@ -543,7 +549,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 328d579 — awaiting push from your machine</span>
+    <span>master + main synced locally at 4440f87 — awaiting push from your machine</span>
   </footer>
 
 </div>
