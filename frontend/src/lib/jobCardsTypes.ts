@@ -1,7 +1,7 @@
 // Shapes mirrored from the backend's Job Cards module (src/job-cards/entities/job-card.entity.ts,
 // src/job-cards/dto/*). Warranty status reuses the same IW/OOW enum Technician Visits use
 // (src/technician/entities/technician-visit.entity.ts) - see appointmentsTypes.ts.
-import type { UserRef, WarrantyStatusValue } from './appointmentsTypes';
+import type { Appointment, UserRef, WarrantyStatusValue } from './appointmentsTypes';
 
 export const JOB_CARD_STATUSES = [
   'OPEN',
@@ -24,6 +24,10 @@ export type JobCardSectionValue = (typeof JOB_CARD_SECTIONS)[number];
 export interface JobCard {
   id: string;
   jobCardNumber: string;
+  // Only present on GET /job-cards/:id (findById loads the appointment relation) - the
+  // by-appointment lookup does not. Estimates screens read customerPhone/customerEmail
+  // from here for the Record Response prefill (the-fool pre-mortem, Phase 5).
+  appointment?: Appointment;
   appointmentId: string;
   status: JobCardStatusValue;
   section: JobCardSectionValue | null;

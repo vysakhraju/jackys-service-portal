@@ -22,6 +22,8 @@ import { AppointmentsHome } from './pages/appointments/AppointmentsHome';
 import { SchedulePage } from './pages/appointments/SchedulePage';
 import { FieldVisitsPage } from './pages/appointments/FieldVisitsPage';
 import { JobCardsPage } from './pages/jobCards/JobCardsPage';
+import { EstimatesPage } from './pages/estimates/EstimatesPage';
+import { EstimatePublicPage } from './pages/estimates/EstimatePublicPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +41,11 @@ export function App() {
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+
+            {/* Public, unauthenticated customer link - deliberately outside ProtectedRoute
+                /AppLayout entirely (no sidebar, no login requirement). See
+                EstimatePublicPage's own doc comment and lib/publicApi.ts. */}
+            <Route path="/estimate/:token" element={<EstimatePublicPage />} />
 
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
@@ -64,6 +71,7 @@ export function App() {
                 </Route>
 
                 <Route path="/job-cards" element={<JobCardsPage />} />
+                <Route path="/estimates" element={<EstimatesPage />} />
               </Route>
             </Route>
 

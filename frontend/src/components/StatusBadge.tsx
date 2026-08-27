@@ -23,6 +23,12 @@ const COLOR_BY_STATUS: Record<string, string> = {
   READY_FOR_QC: 'bg-violet-50 text-violet-700',
   QC_PASSED: 'bg-emerald-50 text-emerald-700',
   DELIVERED: 'bg-emerald-50 text-emerald-700',
+  // Estimates (src/estimates/entities/estimate.entity.ts's EstimateStatus)
+  DRAFT: 'bg-slate-100 text-slate-600',
+  SENT: 'bg-sky-50 text-sky-700',
+  APPROVED: 'bg-emerald-50 text-emerald-700',
+  REJECTED: 'bg-red-50 text-red-600',
+  EXPIRED: 'bg-slate-100 text-slate-400',
 };
 
 export function StatusBadge({ status }: { status: string }) {

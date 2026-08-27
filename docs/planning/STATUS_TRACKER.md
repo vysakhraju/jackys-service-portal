@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-27 (Frontend Phase 4)
+**Last updated:** 2026-08-27 (Frontend Phase 5)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `4291c1d`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `4291c1d`, 8 commits ahead of origin, awaiting `git push` from your machine
@@ -1570,19 +1570,116 @@ file correctly `400`'d (FR-05). `npx tsc -b` and `npm run build`
 
 ---
 
-## Next: Frontend Phase 5 (Estimates) — 8 phases queued
+## Frontend Phase 5: Estimates + Public Approval Link
+
+Covers `/estimates/*` (staff) and the unauthenticated `/estimates/public/*` (customer):
+create a DRAFT estimate for an out-of-warranty, `SN_VALIDATED` Job Card; send it
+(generates a 7-day shareable link + attempts WhatsApp/Email/SMS); the customer's own
+approve/reject via that link; the staff-assisted "recorded over the phone" path with its
+anti-consent-laundering contact-value check; revise after a rejection (FR-08 — `RWR` is
+not a dead end).
+
+**Design review before writing code — the-fool pre-mortem** (run per your request to use
+this skill on tricky logic before building, not after): four failure modes were found and
+fixed before any screen was built, all "Low effort" mitigations baked into the initial
+build rather than patched in afterward:
+
+1. **The dead-end estimate.** An `EXPIRED` estimate has no `resend`/`extend` endpoint on
+   the backend — `send()` only works from `DRAFT`, `revise()` only from `REJECTED`. If
+   "Create Estimate" only appeared when the Job Card's estimate list was completely empty,
+   an expired one would be a genuine dead end. Fixed: the gate is "no *active*
+   (`DRAFT`/`SENT`/`APPROVED`) estimate exists", not "the list is empty" — an `EXPIRED` or
+   `REJECTED`-with-no-revise-yet estimate still leaves "Create Estimate" available.
+2. **A customer's browser inheriting a staff bearer token.** The staff `api` client
+   (`lib/api.ts`) attaches whatever's in `localStorage` to every request and hard-redirects
+   to `/login` on an unrecoverable 401. Fixed: the public `/estimate/:token` page uses a
+   brand-new `lib/publicApi.ts` — a bare axios instance with zero interceptors — so nothing
+   on that page can ever attach a stray auth header or bounce a customer to a staff login
+   screen.
+3. **Record Response becoming unusable.** The backend's anti-consent-laundering check is
+   an exact, format-sensitive match against the phone/email on file — a staff member
+   guessing at formatting (`0501112222` vs `+971501112222`) would 400 every time with no
+   hint why. Fixed: the form prefills the contact value with the exact on-file phone/email
+   (already loaded via the Job Card's `appointment` relation) as one-click buttons, instead
+   of a blank field.
+4. **The response race.** A customer clicking the link at the same moment staff records a
+   phone decision produces a 409 for whichever call lands second (the backend's own
+   `SENT`-only guard). Fixed: both the staff and public respond forms explicitly refetch on
+   a 409 instead of leaving a stale, seemingly-failed form on screen.
+
+**Other decisions made before writing code:**
+1. **No list-all-estimates endpoint either** (confirmed by reading
+   `estimates.controller.ts`) — same paste-the-id lookup pattern as Job Cards, this time
+   keyed on the Job Card's id. The Job Cards screen's manual "Record customer approval"
+   stopgap now links to `/estimates?jobCardId=...` with a note that it bypasses the real
+   audit trail an Estimate provides.
+2. **VAT is never computed client-side.** The create-estimate form shows a subtotal
+   preview only (a plain sum, clearly labeled) — the actual subtotal/VAT/total always come
+   back from the server, which reads the service centre's real VAT rate. No risk of the
+   frontend's math ever disagreeing with the backend's.
+3. **Staff can see and copy the public link directly** (the full `Estimate` staff endpoints
+   return `accessToken`, unlike the redacted customer-safe public view) — a manual fallback
+   since `channelsAttempted`/`channelsDelivered` may not always mean the customer actually
+   received it.
+
+**Test coverage — test-master, starting this phase per your decision to fold the testing
+backlog in from here rather than backfill Phases 1-4 retroactively:** the frontend had
+zero automated tests before this phase. Added Vitest + React Testing Library
+(`vitest.config.ts`, `src/test/setup.ts`, `src/test/fixtures.ts` for reusable
+type-complete `JobCard`/`Estimate`/`Appointment` builders) and 20 tests across 4 files —
+`estimatesApi.test.ts` (every wrapper hits the right endpoint, and the public wrappers
+are asserted to never touch the staff `api` client), `publicApi.test.ts` (asserts the
+public client really does carry zero interceptors), and `EstimatesPage.test.tsx` /
+`EstimatePublicPage.test.tsx` (one test per pre-mortem finding above, plus the happy
+path). All 20 pass; `npx tsc -b` and `npm run build` both compile clean. **Run `npm
+install` once in `frontend/` before `npm test` will work** — the new dev dependencies
+(vitest, jsdom, @testing-library/*) are in `package.json` now, but this session
+deliberately did not run `npm install` against your real `package-lock.json` itself (a
+Linux-VM-resolved install could reintroduce the same cross-platform native-binding
+mismatch the rolldown issue was, this time for esbuild) — every test above was verified
+passing first in an isolated, throwaway sandbox copy before these files were written to
+your project.
+
+**Built**: `src/lib/estimatesTypes.ts` + `src/lib/estimatesApi.ts` (one function per real
+endpoint), `src/lib/publicApi.ts` (the dedicated no-interceptor client),
+`src/pages/estimates/EstimatesPage.tsx` (staff: lookup, create form, active-estimate
+card with Send/Record-Response/Revise, history list), `src/pages/estimates/
+EstimatePublicPage.tsx` (customer-facing, standalone). `jobCardsTypes.ts`'s `JobCard`
+type gained an `appointment?` field (the backend's `findById` already loads that
+relation; the frontend type just hadn't caught up). `StatusBadge` extended with
+`EstimateStatus` colors.
+
+**Wired in**: `/estimates` route (staff, inside `AppLayout`/`ProtectedRoute`) and
+`/estimate/:token` route (public, deliberately outside both) added to `App.tsx`; sidebar
+nav item flips from "soon" to a real link; Dashboard's build-progress list flips
+"Estimates (approval flow)" to Done; Job Cards' manual approval card now links to the
+real Estimate flow.
+
+**Live-verification status:** `verify-phase5.ps1` has been generated (same
+run-it-yourself-and-paste-back pattern as Phases 3-4 — this cloud session has no network
+path to your machine) but has not yet been run against your real backend. It exercises
+the full lifecycle end to end: create → duplicate-create blocked 409 → send → wrong-
+contact-value blocked 400 → public view → public reject → double-respond blocked 409 →
+expired-view blocked 410 → Job Card flips to `RWR` → revise → Job Card revives to
+`SN_VALIDATED` → send → staff-recorded approval → Job Card's `customerApproved` flips
+true → history shows both estimates. This section will be updated with the real results
+once you've run it.
+
+---
+
+## Next: Frontend Phase 6 (Workshop + Inventory) — 7 phases queued
 
 The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
-Phases 1 (Auth), 2 (Master Data), 3 (Appointment Scheduling + Technician Field View), and
-4 (Job Cards + Warranty Override) are all built and live-verified. The remaining 8
-frontend phases are queued, in the same order the backend itself was built in, so each
-screen has an already-tested, already-stable API to build against:
+Phases 1 (Auth), 2 (Master Data), 3 (Appointment Scheduling + Technician Field View), 4
+(Job Cards + Warranty Override), and 5 (Estimates + Public Approval Link) are all built.
+The remaining 7 frontend phases are queued, in the same order the backend itself was
+built in, so each screen has an already-tested, already-stable API to build against:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
 3. ~~Appointment Scheduling + Technician field view~~ — done.
-4. ~~Job Cards + Warranty Override~~ — done above.
-5. Estimates (staff screens + the public customer approval link)
+4. ~~Job Cards + Warranty Override~~ — done.
+5. ~~Estimates (staff screens + the public customer approval link)~~ — done above.
 6. Workshop + Inventory
 7. QC + Permissions admin
 8. Delivery + Invoicing

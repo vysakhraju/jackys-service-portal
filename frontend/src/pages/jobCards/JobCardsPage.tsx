@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import type { AxiosError } from 'axios';
 import { ErrorNotice } from '../../components/DataTable';
@@ -310,9 +310,14 @@ function ApproveCustomerCard({
 }) {
   const { register, handleSubmit, reset } = useForm<{ notes: string }>({ defaultValues: { notes: '' } });
   return (
-    <ActionCard title="Record customer approval (FR-06 stopgap, out-of-warranty jobs)">
+    <ActionCard title="Record customer approval (out-of-warranty jobs)">
       <p className="mb-2 text-xs text-slate-400">
-        Manual flag until the real shareable-link/Estimate approval flow ships. Currently:{' '}
+        Manual flag - sets the same flag an approved Estimate sets, but with no line
+        items, no VAT, and no audit trail of what the customer actually agreed to.{' '}
+        <Link to={`/estimates?jobCardId=${jobCard.id}`} className="font-medium text-slate-600 underline">
+          Use the Estimate flow →
+        </Link>{' '}
+        instead when there's a real quote to send. Currently:{' '}
         {jobCard.customerApproved ? 'approved' : 'not yet approved'}
         {jobCard.customerApprovalNotes ? ` — "${jobCard.customerApprovalNotes}"` : ''}.
       </p>

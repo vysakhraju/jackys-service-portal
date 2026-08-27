@@ -1891,6 +1891,63 @@ unsure).
 
 ---
 
+## 22. Frontend — Estimates + Public Approval Link (Frontend Phase 5)
+
+Adds an **Estimates** section to the sidebar nav (staff), plus a brand-new
+**unauthenticated** page at `/estimate/:token` that only a customer would open (no
+sidebar, no sign-in) — this is the shareable-link side of Section 9's backend flow, now
+with real screens on both ends.
+
+**a. Get there (staff side)**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a).
+The quickest path is from a Job Card: go to **Job Cards** (Section 21), look up an
+out-of-warranty Job Card that's `SN_VALIDATED`, and click **Use the Estimate flow →** next
+to the manual "Record customer approval" note. Alternatively, click **Estimates** in the
+sidebar and paste the Job Card's id yourself.
+
+**b. Create and send it**: click **Create Estimate**, add one or more line items
+(description/quantity/unit price), and submit — this only appears while there's no
+active estimate already on file (an `EXPIRED` or `REJECTED` one doesn't block a fresh
+one; only `DRAFT`/`SENT`/`APPROVED` does). Once created, click **Send Estimate** — this
+generates a 7-day shareable link and shows what channels were attempted/delivered
+(Section 9b's known gap: real delivery isn't wired up yet, so treat the link itself as
+the reliable path). **Copy** the link shown — you'll need it for step c.
+
+**c. Respond as the customer**: open the copied link in a private/incognito window (so
+it's not carrying your staff session) — you should land on a plain, unbranded-for-staff
+approval page showing the job card number, line items, subtotal/VAT/total, and an
+**Approve**/**Decline** choice. Try both an approval and, on a separate estimate, a
+decline, and confirm the Job Card (back in the staff view) reflects it — `customerApproved`
+flips true on approval; the Job Card moves to `RWR` on a decline.
+
+**d. The staff-recorded path (most customers never click the link)**: on a `SENT`
+estimate, use **Record customer decision** instead — note the contact-value buttons that
+prefill the exact phone/email on file; using those instead of typing avoids the
+backend's anti-consent-laundering check rejecting a slightly different format of the
+same number.
+
+**e. Revise after a rejection**: on a `REJECTED` estimate, use **Revise** — leave "reuse
+line items" checked to create an identical fresh `DRAFT` linked to the rejected one, or
+uncheck it to change the numbers. Confirm the Job Card comes back out of `RWR` to
+`SN_VALIDATED`, and that the estimate history below now shows both the old (rejected) and
+new (draft) rows.
+
+**f. Things worth trying**: try opening an already-responded-to or expired link a second
+time and confirm you get a clear "no longer active" message, not a raw error; try
+responding to the same link twice in two tabs and confirm the second one reports it was
+already decided; try recording a response with a contact value that doesn't match what's
+on file and confirm you get a specific rejection, not a silent failure.
+
+**g. What to report back**: same as Phases 1–4 — anything confusing, broken, or where a
+missing action looks like a bug rather than a status the backend genuinely hasn't reached
+yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 5 section if unsure).
+
+**Before testing this section**: run `npm install` once in `frontend/` if you haven't
+since this phase shipped — it adds the test tooling (Vitest, React Testing Library) this
+phase's automated tests use; it doesn't affect the app you run in the browser, only
+`npm test`.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1922,11 +1979,15 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–21) now exists at `http://localhost:5173` and covers
+The React frontend (Sections 18–22) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
-technician's Field View (Section 20), and Job Cards + Warranty Override (Section 21) -
-all live-verified against the real backend — everything else in the app still only has
-a Swagger-based way to test it until its own frontend phase ships.
+technician's Field View (Section 20), Job Cards + Warranty Override (Section 21), and
+Estimates + the public customer approval link (Section 22) - all live-verified against
+the real backend - everything else in the app still only has a Swagger-based way to
+test it until its own frontend phase ships. Starting with Section 22's phase, the
+frontend also has its own automated test suite (Vitest + React Testing Library,
+`npm test` in `frontend/`) - Phases 1-4 predate this and are covered only by the manual
+walkthroughs above.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider
