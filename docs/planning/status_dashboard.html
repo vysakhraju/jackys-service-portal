@@ -381,14 +381,14 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">1 / 12</span><span class="l">Frontend phases live (Auth)</span></div>
+      <div class="stat"><span class="n mono">2 / 12</span><span class="l">Frontend phases live (Auth + Master Data)</span></div>
       <div class="stat"><span class="n mono">489</span><span class="l">Backend tests passing</span></div>
-      <div class="stat"><span class="n mono">33ad667</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">1b533a3</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
   <div class="section">
-    <div class="section-head"><h2>Phase timeline</h2><span class="count mono">master + main in sync</span></div>
+    <div class="section-head"><h2>Phase timeline</h2><span class="count mono">master + main in sync locally, push pending</span></div>
     <div class="rail">
       <div class="phase done">
         <span class="phase-num mono">0</span>
@@ -450,83 +450,86 @@
         <div><div class="phase-name">Reports/Dashboards (post-MVP)</div><div class="phase-sub">Live-verified</div></div>
         <span class="chip done">Done</span>
       </div>
-      <div class="phase current">
+      <div class="phase done">
         <span class="phase-num mono">FE·1</span>
-        <div><div class="phase-name">Frontend Phase 1: Auth</div><div class="phase-sub">React app scaffolded, live-verified today — details below</div></div>
+        <div><div class="phase-name">Frontend Phase 1: Auth</div><div class="phase-sub">React app scaffolded, login/logout, silent refresh</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase current">
+        <span class="phase-num mono">FE·2</span>
+        <div><div class="phase-name">Frontend Phase 2: Master Data Management</div><div class="phase-sub">9 sub-module screens, live-verified today — details below</div></div>
         <span class="chip current">Shipped today</span>
       </div>
     </div>
   </div>
 
   <div class="section">
-    <div class="section-head"><h2>Frontend Phase 1, in detail</h2></div>
+    <div class="section-head"><h2>Frontend Phase 2, in detail</h2></div>
     <div class="card">
-      <h3 style="font-size:17px;">React app scaffolded — Authentication &amp; Authorization is the first working screen</h3>
+      <h3 style="font-size:17px;">All 9 Master Data sub-modules, one shared list+form pattern</h3>
       <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
-        First of twelve frontend phases, same one-module-at-a-time order the backend
-        itself was built in. Stack matches the implementation plan's own Architecture
-        Decisions exactly: React + TypeScript (Vite), TanStack Query, React Hook Form,
-        React Router — plus Axios and Tailwind CSS to actually wire and style it. Login,
-        logout, session restore, and silent access-token refresh are all wired to the
-        real backend, not mocked.
+        A shared <span class="mono">DataTable</span> + <span class="mono">Modal</span> +
+        <span class="mono">Field</span> component set backs all 9 screens, but each screen
+        follows the backend's real REST surface exactly, including its gaps — not a
+        uniform CRUD assumption. Service Centres is the only sub-module with full
+        create/update/delete (with a per-weekday schedule editor); four sub-modules are
+        create-and-list only because no update/delete endpoint exists; Spare Parts,
+        Service Price List, Warranty Master, and Component Yield Matrix each get their
+        own shape (link-to-model action, activity-type picker, check-by-serial lookup,
+        by-model/by-category toggle) because their backend routes don't offer a plain
+        list. Bulk Import stays Swagger-only — no file-upload UX has been designed yet.
       </p>
 
       <div class="stat-tiles">
-        <div class="tile"><span class="n mono">frontend/</span><span class="l">New project folder</span></div>
-        <div class="tile"><span class="n mono">1 / 12</span><span class="l">Frontend phases done</span></div>
-        <div class="tile"><span class="n mono">1</span><span class="l">Backend bug fixed (CORS)</span></div>
-        <div class="tile"><span class="n mono">:5173</span><span class="l">Dev server port</span></div>
+        <div class="tile"><span class="n mono">9 / 9</span><span class="l">Sub-modules screened</span></div>
+        <div class="tile"><span class="n mono">2 / 12</span><span class="l">Frontend phases done</span></div>
+        <div class="tile"><span class="n mono">1</span><span class="l">Repo-hygiene fix (stale git lock)</span></div>
+        <div class="tile"><span class="n mono">1</span><span class="l">Enum sets copied verbatim from entities</span></div>
       </div>
 
       <h3 style="margin-top:4px;">A real gap this phase caught, not simulated</h3>
       <ul class="findings">
         <li>
           <span class="tag">01</span>
-          <div><b>The backend's CORS list never included the React dev server's origin.</b>
-          <p><span class="mono">src/main.ts</span> only ever allowed <span class="mono">localhost:3000</span>/<span class="mono">3001</span> — fine for every prior phase, since all testing so far was same-origin Swagger UI or CORS-blind curl/PowerShell calls. <span class="mono">localhost:5173</span> (the Vite dev server) is a genuinely different origin, and the very first real browser request would have been silently blocked by the browser itself — not by curl, which doesn't enforce CORS, so nothing in 11 backend phases of testing would ever have caught it. Fixed by adding 5173 to both <span class="mono">.env</span> and the code fallback, verified by checking the actual <span class="mono">Access-Control-Allow-Origin</span> response header, not just that a request "worked."</p></div>
+          <div><b>A stale <span class="mono">.git/index.lock</span> from an earlier interrupted git operation was blocking every git command.</b>
+          <p>Left behind by a previous session's interrupted commit, it silently made every subsequent <span class="mono">git</span> call fail with "Another git process seems to be running." Alongside it: <span class="mono">STATUS_TRACKER.md.new</span> and <span class="mono">TESTING_GUIDE.md.new</span> had been committed as scratch working copies in an earlier session but never promoted to replace the real tracked docs — meaning the tracked docs were several phases stale even though the correct content already existed in the repo. Both are fixed as part of this phase's doc update: the lock is cleared, and the <span class="mono">.new</span> files are removed in the same commit that promotes their content into <span class="mono">STATUS_TRACKER.md</span>/<span class="mono">TESTING_GUIDE.md</span>.</p></div>
         </li>
       </ul>
 
-      <h3 style="margin-top:22px;">Live-verified end to end against your real server</h3>
+      <h3 style="margin-top:22px;">Live-verified against your real running backend</h3>
       <div class="verified">
         <span><span class="mono">tsc -b && vite build</span> compiles clean, zero errors</span>
-        <span>Real CORS preflight from localhost:5173 now allowed (confirmed missing before the fix)</span>
-        <span>Real POST /auth/login from that origin returns the exact shape the app expects</span>
-        <span>GET /auth/profile with the resulting token returns the same sanitized user</span>
-        <span>Both dev servers (backend :3000, frontend :5173) confirmed running and reachable</span>
-        <span>Not yet done: a human clicking through a real browser — that's the next step</span>
+        <span>Real POST /service-centres with a nested weekday schedule created a real row</span>
+        <span>Real GET /price-lists?activityType=REPAIR returned real rows (query-param-only route)</span>
+        <span>Real GET /warranty-master/check/:serialNumber returned the expected shape</span>
+        <span>Real GET /spare-parts returned the real catalog</span>
+        <span>Not yet done: a human clicking through the rendered screens in a browser</span>
       </div>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--pending); background:var(--pending-wash);">
-      <h3 style="color:var(--ink);">The same two doc files are still locked on your machine — GitHub is unaffected</h3>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
+      <h3 style="color:var(--success);">The locked STATUS_TRACKER.md / TESTING_GUIDE.md files are fixed</h3>
       <p>
+        Both docs are now overwritten directly with their correct, current content —
         <span class="mono">STATUS_TRACKER.md</span> and <span class="mono">TESTING_GUIDE.md</span>
-        remain inaccessible locally (this has now recurred across sessions) — your Defender
-        exclusion for the project folder didn't clear it, since an exclusion stops future scans,
-        it doesn't release a handle a process is already holding. Deleting the files now
-        succeeds without error, but recreating them under the same name still fails, which
-        points at a genuine lingering Windows-level delete-pending handle (Search Indexer or
-        an editor/preview, most likely) rather than a permissions problem. Both docs' correct,
-        current content lives in <span class="mono">STATUS_TRACKER.md.new</span> and a new
-        <span class="mono">TESTING_GUIDE.md.new</span> stopgap, and is fully committed and
-        pushed to <span class="mono">master</span>/<span class="mono">main</span> on GitHub.
-        Once whatever's holding the handle closes, <span class="mono">git checkout --
-        docs/planning/STATUS_TRACKER.md docs/testing/TESTING_GUIDE.md</span> will restore both
-        in one shot.
+        no longer need the <span class="mono">.new</span> stopgap files, which are deleted in
+        the same commit. A separate stale <span class="mono">.git/index.lock</span> from an
+        earlier interrupted git operation (blocking every git command) was cleared in the same
+        pass — see Frontend Phase 2's "real gap this phase caught" above.
       </p>
+      <span class="resolved-tag">Resolved this phase</span>
     </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Frontend Phase 2</h3>
-        <h2>Master Data Management screens</h2>
-        <p>Backend is fully shipped; the React app now has a working sign-in. Next comes admin screens for service centres, fault/symptom codes, spare parts, price lists and the rest of Master Data — then Appointments, Job Cards, Estimates, and the remaining nine phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
+        <h3>Next up · Frontend Phase 3</h3>
+        <h2>Appointment Scheduling + Technician field view</h2>
+        <p>Backend is fully shipped; the React app now covers sign-in and all 9 Master Data screens. Next comes the admin/CCE appointment calendar and the technician's mobile-style visit flow (start visit, capture serial number, fault/symptom) — then Job Cards, Estimates, and the remaining eight phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
       </div>
       <div class="go">Building next →</div>
     </div>
@@ -534,7 +537,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced at 33ad667</span>
+    <span>master + main synced locally at 1b533a3 — awaiting push from your machine</span>
   </footer>
 
 </div>
