@@ -1844,6 +1844,53 @@ Frontend Phase 3 section first if unsure which behavior is deliberate).
 
 ---
 
+## 21. Frontend — Job Cards + Warranty Override (Frontend Phase 4)
+
+Adds a **Job Cards** section to the sidebar nav. There's no list here on purpose — the
+backend has no "list all Job Cards" endpoint, only look-up by appointment — so this
+screen is a lookup/create panel, not a table.
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a). The quickest
+path is from an appointment: go to **Appointments → Schedule** (Section 20), open a
+**COMPLETED** appointment (one where the technician has already captured serial number
+and fault/symptom — Section 20d), and click the **Job Card →** button in its detail view.
+That takes you straight to the Job Cards screen with the appointment id pre-filled.
+Alternatively, click **Job Cards** in the sidebar and paste an appointment id in
+yourself.
+
+**b. Create it**: if no Job Card exists yet, click **Create Job Card**. This is blocked
+by the backend (FR-05) unless the appointment has an invoice number on file *and* the
+technician's visit is fully captured (serial number, warranty check, fault/symptom) —
+if either is missing you'll see the backend's real error message, not a generic one.
+
+**c. Walk it through its lifecycle**:
+- **Validate S/N** (shown only while `OPEN`) — click **Matches** to move to
+  `SN_VALIDATED`, or **Doesn't match** to record a mismatch without advancing (the job
+  stays `OPEN`).
+- **Assign section** (shown only once `SN_VALIDATED`) — pick **On-site repair** or
+  **Workshop**. If the job is out-of-warranty and no customer approval is on file yet,
+  the buttons are disabled with an explanation — that's the real FR-06 gate, not a bug.
+- **Record customer approval** (shown for out-of-warranty jobs) — add optional notes and
+  approve; this unblocks section assignment above.
+- **Warranty Override** (shown only if you're signed in as a Technical Team Leader,
+  Service Head, or Super Admin) — the button offers the *other* warranty status with a
+  required reason (minimum 5 characters). Try it, then confirm the badge and override
+  count update.
+- **Cancel** — available until the job reaches `READY_FOR_QC`/`QC_PASSED`/`DELIVERED`
+  (later phases' territory) or is already cancelled.
+
+**d. Things worth trying**: sign in as a CCE (not a Team Leader) and confirm the Warranty
+Override panel doesn't appear at all; try assigning a section on an out-of-warranty job
+before approving the customer and confirm you're blocked; try validating S/N a second
+time once it's already `SN_VALIDATED` and confirm the backend rejects it.
+
+**e. What to report back**: same as Phases 1–3 — anything confusing, broken, or where a
+missing action looks like a bug rather than a status the backend genuinely hasn't
+reached yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 4 section if
+unsure).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1875,11 +1922,11 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–20) now exists at `http://localhost:5173` and covers
-sign-in/sign-out, all 9 Master Data sub-modules, and Appointment Scheduling + the
-technician's Field View (Section 20, live-verified against the real backend) —
-everything else in the app still only has a Swagger-based way to test it until its own
-frontend phase ships.
+The React frontend (Sections 18–21) now exists at `http://localhost:5173` and covers
+sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
+technician's Field View (Section 20), and Job Cards + Warranty Override (Section 21) -
+all live-verified against the real backend — everything else in the app still only has
+a Swagger-based way to test it until its own frontend phase ships.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

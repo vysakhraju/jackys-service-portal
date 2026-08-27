@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-27 (Frontend Phase 3)
+**Last updated:** 2026-08-27 (Frontend Phase 4)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `6475e68`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `6475e68`, 4 commits ahead of origin, awaiting `git push` from your machine
@@ -1505,18 +1505,83 @@ then accepted a real reason → `CANCELLED`. `npx tsc -b` and `npm run build`
 
 ---
 
-## Next: Frontend Phase 4 (Job Cards + Warranty Override) — 9 phases queued
+## Frontend Phase 4: Job Cards + Warranty Override
 
-The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend Phase 1
-(Auth), Phase 2 (Master Data), and Phase 3 (Appointment Scheduling + Technician Field View)
-are built (Phase 3's live-verification is the one open item — see above). The remaining 9
+Covers `/job-cards/*`: creating a Job Card from a completed field visit, validating the
+captured serial number against the physical invoice, assigning a section, the FR-06
+manual customer-approval stopgap for out-of-warranty jobs, the Technical Team Leader-only
+Warranty Override (FR-17/AC-18), and cancel.
+
+**Decisions made before writing code:**
+1. **There is no "list all Job Cards" endpoint** (confirmed by reading
+   `job-cards.controller.ts` directly) — only `GET /job-cards/:id` and
+   `GET /job-cards/by-appointment/:appointmentId`. So the screen is a lookup, not a table:
+   paste an appointment id (there's now a direct link for this from a **COMPLETED**
+   appointment's detail view in the Schedule tab) to find or create its Job Card — the
+   same pasted-id precedent Warranty Master and Spare Parts already set, not a shortcut
+   invented for this phase.
+2. **The client mirrors the backend's real transition guards, read directly from
+   `job-cards.service.ts`**, rather than assuming a generic form-then-submit flow:
+   Validate S/N only shows while `OPEN`; Assign Section only shows once `SN_VALIDATED`,
+   and is disabled client-side (with an explanatory note, not just a silent failure) when
+   the job is out-of-warranty and `customerApproved` is still `false` — the backend's own
+   FR-06 gate; Warranty Override is hidden entirely unless the signed-in user's role is
+   `SUPER_ADMIN`/`SERVICE_HEAD`/`TECHNICAL_TEAM_LEADER` (`WARRANTY_OVERRIDE_ROLES`), and is
+   otherwise available any time except `RWR`/`CANCELLED`; Cancel is hidden once the job
+   reaches `READY_FOR_QC`/`QC_PASSED`/`DELIVERED` (stock or delivery state that can't be
+   unwound) or is already `CANCELLED`.
+3. **Warranty Override only offers the one real choice.** `WarrantyStatus` has exactly two
+   values (`IW`/`OOW`), so instead of a status dropdown the screen shows a single "Override
+   to {the other one}" action with a required reason — there's nothing else it could
+   sensibly be.
+4. **A job that's moved past what this phase covers** (`WORKSHOP_ASSIGNED`, `IN_PROGRESS`,
+   `SPARE_PENDING`, `READY_FOR_QC`, `QC_PASSED`, `DELIVERED`) shows a plain note saying so
+   rather than a dead-end action panel — Workshop (Phase 6), QC (Phase 7), and Delivery
+   (Phase 8) each get their own screens for those statuses in later phases.
+5. **Record Customer Approval has no backend status gate at all** (confirmed by reading
+   `approveCustomer()` — it unconditionally sets the flag), so the client only adds one
+   sensible guardrail of its own beyond the letter of the API: hidden once the job is
+   `CANCELLED`, since approving a dead job makes no sense even though the backend itself
+   wouldn't reject it.
+
+**Built**: `src/lib/jobCardsTypes.ts` (full type mirror of `JobCard` + every DTO),
+`src/lib/jobCardsApi.ts` (one function per real endpoint — deliberately no `qc/approve`
+or `qc/reject` wrapper; those belong to Frontend Phase 7's QC + Permissions admin
+screens, not this one), `src/pages/jobCards/JobCardsPage.tsx` (the lookup/create panel
+plus the five action cards described above). `StatusBadge` extended with `JobCardStatus`
+colors. A **COMPLETED** appointment's detail view (Schedule tab) now links straight to
+`/job-cards?appointmentId=...`, pre-filling the lookup.
+
+**Wired in**: `/job-cards` route added to `App.tsx`; sidebar nav item flips from "soon" to
+a real link (`AppLayout.tsx`); Dashboard's build-progress list flips "Job Cards & Warranty
+Override" to Done (`DashboardPage.tsx`) — same honesty pattern as every prior phase.
+
+**Live-verified against your real running backend** (`verify-phase4.ps1`, the same
+run-it-yourself-and-paste-back pattern Phase 3 established — see that phase's write-up
+for why — 21/21 checks passed): an in-warranty Job Card walked straight through
+`OPEN → SN_VALIDATED → SECTION_ASSIGNED`, no approval needed; a Warranty Override to
+`OOW` succeeded, correctly reset `customerApproved` to `false`, and a second override to
+the *same* status correctly `400`'d ("already OOW — nothing to override"); an
+out-of-warranty Job Card correctly `400`'d on `assign-section` before approval, then
+succeeded once `approve-customer` was called; re-validating an already-`SN_VALIDATED`
+S/N correctly `400`'d; creating a Job Card for an appointment with no invoice number on
+file correctly `400`'d (FR-05). `npx tsc -b` and `npm run build`
+(`tsc -b && vite build`) both compile clean.
+
+---
+
+## Next: Frontend Phase 5 (Estimates) — 8 phases queued
+
+The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
+Phases 1 (Auth), 2 (Master Data), 3 (Appointment Scheduling + Technician Field View), and
+4 (Job Cards + Warranty Override) are all built and live-verified. The remaining 8
 frontend phases are queued, in the same order the backend itself was built in, so each
 screen has an already-tested, already-stable API to build against:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
-3. ~~Appointment Scheduling + Technician field view~~ — done above (live-verify pending).
-4. Job Cards + Warranty Override
+3. ~~Appointment Scheduling + Technician field view~~ — done.
+4. ~~Job Cards + Warranty Override~~ — done above.
 5. Estimates (staff screens + the public customer approval link)
 6. Workshop + Inventory
 7. QC + Permissions admin
