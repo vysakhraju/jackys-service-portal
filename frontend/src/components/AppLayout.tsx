@@ -9,7 +9,7 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Dashboard', path: '/' },
   { label: 'Master Data', path: '/master-data' },
   { label: 'Appointments', path: '/appointments' },
-  { label: 'Job Cards' },
+  { label: 'Job Cards', path: '/job-cards' },
   { label: 'Estimates' },
   { label: 'Workshop & Inventory' },
   { label: 'QC & Permissions' },

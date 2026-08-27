@@ -21,6 +21,7 @@ import { AppointmentsLayout } from './pages/appointments/AppointmentsLayout';
 import { AppointmentsHome } from './pages/appointments/AppointmentsHome';
 import { SchedulePage } from './pages/appointments/SchedulePage';
 import { FieldVisitsPage } from './pages/appointments/FieldVisitsPage';
+import { JobCardsPage } from './pages/jobCards/JobCardsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -61,6 +62,8 @@ export function App() {
                   <Route path="schedule" element={<SchedulePage />} />
                   <Route path="field-visits" element={<FieldVisitsPage />} />
                 </Route>
+
+                <Route path="/job-cards" element={<JobCardsPage />} />
               </Route>
             </Route>
 

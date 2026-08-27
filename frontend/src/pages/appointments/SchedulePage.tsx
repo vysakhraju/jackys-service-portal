@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import type { AxiosError } from 'axios';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
@@ -607,6 +608,15 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
             </div>
           )}
         </div>
+
+        {appointment.status === 'COMPLETED' && (
+          <Link
+            to={`/job-cards?appointmentId=${appointment.id}`}
+            className="block rounded-md bg-slate-900 px-3 py-2 text-center text-sm font-medium text-white hover:bg-slate-800"
+          >
+            Job Card →
+          </Link>
+        )}
       </div>
     </Modal>
   );
