@@ -2012,6 +2012,66 @@ yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 6 section if unsur
 
 ---
 
+## 24. Frontend — QC + Permissions admin (Frontend Phase 7)
+
+Adds a **QC & Permissions** section to the sidebar nav with two tabs: **QC** (approve or
+reject a `READY_FOR_QC` Job Card) and **Permissions** (admin-only: grant/revoke
+`QC_APPROVAL`/`REWORK_APPROVAL`, see who currently holds a permission, look up a user's
+full grant history).
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a). The quickest
+path to a QC-able job is from the Workshop screen (Section 23) - complete a job's
+workshop work (`Complete → Ready for QC`) and you'll see a **"Go to the QC screen →"**
+link right there. Alternatively, click **QC & Permissions** in the sidebar and paste the
+Job Card's id yourself.
+
+**b. Approve**: on a `READY_FOR_QC` job, **Approve → QC Passed** requires the
+`QC_APPROVAL` permission (grant it to yourself on the Permissions tab first, or as
+`SUPER_ADMIN`/`SERVICE_HEAD` - Section 24d below). On success, reserved stock moves
+Main Store → Damage Location; check the spare part's stock on the Inventory tab
+(Section 23e) before/after to see it. If the job's spares aren't all fully reserved -
+specifically, if the *most recent* request for any one spare part on this job came back
+short - Approve is blocked with a red list naming each short part and a link back to
+Workshop to top up.
+
+**c. Reject**: type a reason (5-500 characters) and **Reject**. The job goes back to
+`IN_PROGRESS` and a link back to the Workshop screen appears immediately - there's
+nothing further to do on the QC screen itself once rejected. Try requesting the same
+spare part again from Workshop afterward to see the rework sign-off fields Section 23f
+already covers.
+
+**d. Permissions tab (admin only - `SUPER_ADMIN`/`SERVICE_HEAD`)**: **"Who currently
+holds a permission"** lists active holders of `QC_APPROVAL` or `REWORK_APPROVAL` (switch
+the dropdown to see either) with a **Revoke** button per row - check this before granting
+so you're not acting blind. **Grant a permission** pastes a user id (same "no
+list-users endpoint" convention as everywhere else in this app) plus a type and optional
+notes; granting the same active permission to the same user twice is rejected (409). The
+**grant history lookup** at the bottom shows a pasted user's full history, active and
+revoked, with a status badge - useful for confirming a revoke actually took effect.
+
+**e. Role floor vs. the real gate**: any `QC_GATE_ROLES` member (`SUPER_ADMIN`,
+`SERVICE_HEAD`, `TECHNICAL_TEAM_LEADER`, `CCE`, `QC_OFFICER`) sees the Approve/Reject
+buttons - that's just who the backend even lets *attempt* it. Whether the action
+actually succeeds depends on the separate `QC_APPROVAL` grant (Permissions tab), which
+is deliberately not tied to any role - even `SUPER_ADMIN` needs it explicitly. If you see
+Approve/Reject buttons but get a 403 with "Ask an admin to grant it", that's this working
+as designed, not a bug - go grant yourself the permission on the Permissions tab.
+
+**f. Things worth trying**: request two different spare parts on the same job, let one
+come back fully held and the other partially - complete the job anyway (the job-level
+check only looks at the *most recent* request's outcome) and confirm Approve still
+blocks on the genuinely-short part specifically, naming it. Try Approve as a role
+outside `QC_GATE_ROLES` (if you have a second non-privileged account) and confirm you
+see the plain "your role isn't allowed to attempt this" notice instead of a raw error.
+Try the Permissions tab as a non-admin role and confirm you get a clear restricted
+notice, not a broken page.
+
+**g. What to report back**: same as Phases 1–6 — anything confusing, broken, or where a
+missing action looks like a bug rather than a status the backend genuinely hasn't reached
+yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 7 section if unsure).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2043,12 +2103,13 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–23) now exists at `http://localhost:5173` and covers
+The React frontend (Sections 18–24) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
 technician's Field View (Section 20), Job Cards + Warranty Override (Section 21),
-Estimates + the public customer approval link (Section 22), and Workshop + Inventory
-(Section 23) - all live-verified against the real backend - everything else in the app
-still only has a Swagger-based way to test it until its own frontend phase ships.
+Estimates + the public customer approval link (Section 22), Workshop + Inventory
+(Section 23), and QC + Permissions admin (Section 24) - all live-verified against the
+real backend - everything else in the app still only has a Swagger-based way to test it
+until its own frontend phase ships.
 Starting with Section 22's phase, the frontend also has its own automated test suite
 (Vitest + React Testing Library, `npm test` in `frontend/`) - Phases 1-4 predate this and
 are covered only by the manual walkthroughs above.

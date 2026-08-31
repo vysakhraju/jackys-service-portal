@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-31 (Frontend Phase 6)
+**Last updated:** 2026-08-31 (Frontend Phase 7)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `830a5eb`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `830a5eb`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `734dedd`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `734dedd`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -1811,35 +1811,107 @@ check itself (`GET /inventory/reservations/stale` returning 200) still passed.
 
 ---
 
-## Next: Frontend Phase 7 (QC + Permissions admin) — 6 phases queued
+## Frontend Phase 7: QC + Permissions admin
+
+Adds a **QC & Permissions** section to the sidebar nav (staff/admin only) with two tabs:
+**QC** (per-Job-Card: approve or reject a `READY_FOR_QC` job) and **Permissions**
+(admin-only: grant/revoke `QC_APPROVAL`/`REWORK_APPROVAL`, see who currently holds a
+permission, look up a user's full grant history).
+
+**Design review before writing code — the-fool pre-mortem** (per Standing Practices):
+four findings from reading `permissions.service.ts`/`permissions.controller.ts`/
+`job-cards.controller.ts`'s qc endpoints/`inventory.service.ts`'s
+`consumeReservationsOnQcApproval()` in full before writing any screen, all fixed in the
+initial build:
+
+1. **A QC_OFFICER can't check their own grant.** `GET /permissions/users/:userId` (a
+   user's own grant history) is `SUPER_ADMIN`/`SERVICE_HEAD`-only, so a non-admin
+   `QC_GATE_ROLES` member has no way to confirm ahead of time whether they hold the
+   `QC_APPROVAL` grant qc/approve and qc/reject both require. Fixed: Approve/Reject show
+   to the `QC_GATE_ROLES` **role floor** only (the same list the backend's own `@Roles()`
+   guard uses), and the backend's own clear 403 message ("This action requires the
+   QC_APPROVAL permission, which you do not currently hold. Ask an admin to grant it.")
+   is what actually tells a role-floor member without the grant why it failed — no
+   client-side grant check is faked.
+2. **The 409 stock-shortfall payload needs its own rendering.** `qc/approve`'s 409 is
+   `{ message, blockers: [{reservationId, sparePartId, quantityRequested,
+   quantityReserved}] }`, but the shared `ErrorNotice` component only reads `.message` -
+   the `blockers` array would be silently dropped. Fixed: the QC screen catches that 409
+   specifically and lists each blocked spare part with a link back to Workshop to top up
+   or resolve it.
+3. **QC reject was a dead end.** Rejecting sends the job back to `IN_PROGRESS`, and the
+   only place to act on it next is the Workshop screen - the QC screen itself has nothing
+   further to offer. Fixed: a successful reject shows a direct link back to Workshop
+   instead of leaving the user on a screen with nothing to do.
+4. **No list-users convention continues, but leaned on the one real list that exists.**
+   Grant/revoke still uses the same "paste the user id" convention as everywhere else
+   (there's no list-users endpoint anywhere in this app) - but `GET /permissions?type=X`
+   **is** a real list endpoint (who currently holds a given permission type today), so
+   it's surfaced prominently as "who currently holds this" ahead of the grant form, so
+   admins aren't granting or revoking blind.
+
+**Test coverage — test-master, explicitly invoked via the Skill tool this time (isolated
+sandbox first, same pattern as Phase 5/6):** 19 new tests (64 total: 45 from Phases 1-6 +
+19 new) — `permissionsApi.test.ts` (all 4 wrapper-to-endpoint mappings) and
+`jobCardsApi.test.ts` (a new file covering only the `qcApprove`/`qcReject` additions -
+Job Cards itself predates this project's test-suite convention, same as Phases 1-4),
+`QcPage.test.tsx` (one test per pre-mortem finding: role-floor gating hides/shows
+Approve+Reject correctly, the 409 blockers render as a structured list rather than a
+dropped message, the post-reject link back to Workshop, plus the not-yet-ready/past-this-
+screen phase-boundary notes), `PermissionsPage.test.tsx` (admin-only gating for a non-
+admin role vs. `SERVICE_HEAD`, the who-holds-X list + revoke action, the grant form
+submitting the exact payload, the per-user history lookup rendering Active/Revoked
+badges). All 64 tests pass; `npx tsc -b` and `npm run build` both compile clean.
+
+**Built**: `src/lib/permissionsTypes.ts` + `src/lib/permissionsApi.ts` (one function per
+real endpoint: grant/revoke/listGrantsForUser/listGrantsByType), `qcApprove`/`qcReject`
+added to `src/lib/jobCardsApi.ts` (plus `QcRejectInput`/`QcApproveBlocker` added to
+`jobCardsTypes.ts`), `src/pages/qc/QcPermissionsLayout.tsx` + `QcPermissionsHome.tsx`
+(the two-tab shell, mirroring `WorkshopInventoryLayout` exactly), `src/pages/qc/
+QcPage.tsx`, `src/pages/qc/PermissionsPage.tsx`.
+
+**Wired in**: `/qc-permissions` (layout) with `/qc-permissions/qc` and
+`/qc-permissions/permissions` routes added to `App.tsx`; sidebar nav item flips from
+"soon" to a real link; Dashboard's build-progress list flips "QC & Permissions" to Done;
+Workshop's `READY_FOR_QC` note now links forward to the QC screen, and its own
+phase-boundary note for a `QC_PASSED` job links back to QC to see the approval that got
+it there.
+
+**Live-verified against your real running backend** (`verify-phase7.ps1`): exercises
+`qc/approve`'s happy path (stock moves Main Store → Damage Location on approval), the
+masked per-part stock shortfall (a `PARTIALLY_RESERVED` reservation on one spare part
+whose job-level status gets flipped back to `IN_PROGRESS` by an unrelated, fully-held
+request for a *different* part on the same job - exactly the gap pre-mortem finding #2
+covers - followed by confirming `qc/approve` still 409s with a blocker naming the short
+part, then resolving it and re-approving successfully), `qc/reject` incrementing
+`qcRejectionCount`, and the full grant/duplicate-grant(409)/list-by-type/list-by-user/
+revoke/revoke-again(404) permissions lifecycle, plus a non-admin 403 on the grant
+endpoint. *(Fill in with the pasted PASS/FAIL count once you've run it.)*
+
+---
+
+## Next: Frontend Phase 8 (Delivery + Invoicing) — 5 phases queued
 
 The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
-Phases 1–6 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
-Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory) are
-all built. The remaining 6 frontend phases are queued, in the same order the backend
-itself was built in, so each screen has an already-tested, already-stable API to build
-against:
+Phases 1–7 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
+Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory,
+QC + Permissions admin) are all built. The remaining 5 frontend phases are queued, in
+the same order the backend itself was built in, so each screen has an already-tested,
+already-stable API to build against:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
 3. ~~Appointment Scheduling + Technician field view~~ — done.
 4. ~~Job Cards + Warranty Override~~ — done.
 5. ~~Estimates (staff screens + the public customer approval link)~~ — done.
-6. ~~Workshop + Inventory~~ — done above.
-7. QC + Permissions admin
+6. ~~Workshop + Inventory~~ — done.
+7. ~~QC + Permissions admin~~ — done above.
 8. Delivery + Invoicing
 9. Finance extension + Customer Portal (public pages)
 10. AMC Management
 11. Dismantling
 12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
     easiest to get right once the simpler ones establish the patterns)
-
-Frontend Phase 7 already has real backend endpoints to build against
-(`POST /job-cards/:id/qc/approve`, `POST /job-cards/:id/qc/reject`, and the full
-`PermissionsController` — grant/revoke/list-by-user/list-by-type) — this phase's own
-`verify-phase6.ps1` already exercised `qc/reject` and a permission grant directly to make
-the rework-gate tests meaningful, so Phase 7's backend contract is not new information,
-just not yet given its own screens.
 
 Known, explicitly-deferred follow-ups, unrelated to the frontend build, if you want them
 at some point instead:
