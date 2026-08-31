@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-08-31 (Frontend Phase 6)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `41138ac`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `41138ac`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `830a5eb`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `830a5eb`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
