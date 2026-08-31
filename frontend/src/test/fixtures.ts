@@ -10,6 +10,7 @@ import type { UserPermissionGrant } from '../lib/permissionsTypes';
 import type { Delivery, ReadyForDeliveryRow } from '../lib/deliveryTypes';
 import type { AgingBucket, Invoice, Payment } from '../lib/invoicingTypes';
 import type { PortalInvoiceView, PortalSummaryView, PortalTrackView } from '../lib/customerPortalTypes';
+import type { AmcBillingInvoice, AmcContract, AmcScheduleVisit, AmcVisitCompletion, UpsellCandidate } from '../lib/amcTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -316,6 +317,102 @@ export function makePortalSummaryView(overrides: Partial<PortalSummaryView> = {}
     },
     invoice: makePortalInvoiceView(),
     delivery: null,
+    ...overrides,
+  };
+}
+
+// Frontend Phase 10 additions below.
+
+export function makeAmcContract(overrides: Partial<AmcContract> = {}): AmcContract {
+  return {
+    id: 'contract-1',
+    contractNumber: 'AMC-0001',
+    customerName: 'Al Futtaim Facilities LLC',
+    customerPhone: '+971501234567',
+    customerEmail: 'facilities@example.com',
+    customerAddress: null,
+    customerType: 'B2C',
+    serviceCentre: { id: 'sc-1', code: 'SC01', name: 'Dubai Main' },
+    serviceCentreId: 'sc-1',
+    coveredSerialNumbers: ['SN-000123'],
+    brand: 'Samsung',
+    modelNumber: 'WA80J5710',
+    coverageType: 'COMPREHENSIVE',
+    serviceLevel: 'Standard',
+    visitFrequency: 'QUARTERLY',
+    startDate: '2026-09-01T00:00:00.000Z',
+    endDate: '2027-08-31T00:00:00.000Z',
+    totalAmount: 4800,
+    paymentTerms: 'FULL_UPFRONT',
+    assignedTechnician: null,
+    assignedTechnicianId: null,
+    status: 'ACTIVE',
+    cancellationReason: null,
+    renewalReminderSentAt: null,
+    renewalReminderChannelsAttempted: [],
+    renewalReminderChannelsDelivered: [],
+    previousContractId: null,
+    createdById: 'user-1',
+    createdAt: '2026-08-01T08:00:00Z',
+    updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeAmcScheduleVisit(overrides: Partial<AmcScheduleVisit> = {}): AmcScheduleVisit {
+  return {
+    id: 'apt-amc-1',
+    appointmentNumber: 'APT-20260901-0001',
+    status: 'SCHEDULED',
+    scheduledAt: '2026-09-01T09:00:00Z',
+    amcContractId: 'contract-1',
+    ...overrides,
+  };
+}
+
+export function makeAmcVisitCompletion(overrides: Partial<AmcVisitCompletion> = {}): AmcVisitCompletion {
+  return {
+    id: 'avc-1',
+    amcContractId: 'contract-1',
+    appointmentId: 'apt-amc-1',
+    visitNumber: 1,
+    checklistNotes: 'Checked filters, cleaned drum.',
+    customerSignatureBase64: null,
+    extraChargeDescription: null,
+    extraChargeAmount: null,
+    extraChargeApprovedByCustomer: false,
+    completedByUserId: 'user-1',
+    completedAt: '2026-09-01T10:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeAmcBillingInvoice(overrides: Partial<AmcBillingInvoice> = {}): AmcBillingInvoice {
+  return {
+    id: 'bi-1',
+    invoiceNumber: 'AMCINV-0001',
+    amcContractId: 'contract-1',
+    periodLabel: 'Full Term',
+    amount: 4800,
+    status: 'DRAFT',
+    paymentMethod: null,
+    paymentReference: null,
+    paidAt: null,
+    recordedByUser: null,
+    recordedByUserId: null,
+    createdAt: '2026-08-01T08:00:00Z',
+    updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeUpsellCandidate(overrides: Partial<UpsellCandidate> = {}): UpsellCandidate {
+  return {
+    jobCardId: 'jc-1',
+    jobCardNumber: 'JC-0001',
+    customerName: 'Jane Doe',
+    customerPhone: '+971509998888',
+    estimateAmount: 420,
     ...overrides,
   };
 }

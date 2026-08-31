@@ -411,6 +411,21 @@ export class AmcService {
       throw new BadRequestException(`Cannot bill a contract with status ${contract.status}`);
     }
 
+    // Frontend Phase 10 pre-mortem finding: periodLabel is caller-supplied free text with
+    // nothing else tying a billing invoice to "the period it covers" - unlike Invoicing's
+    // Invoice (1:1 with a job card, effectively idempotent by construction), nothing stopped
+    // a double-click or a re-billing months later from generating a second AMCINV-#### for
+    // the same period. Guarded here rather than left to a Finance user noticing the
+    // duplicate during reconciliation.
+    const existingForPeriod = await this.billingInvoiceRepository.findOne({
+      where: { amcContractId: contractId, periodLabel },
+    });
+    if (existingForPeriod && existingForPeriod.status !== AmcBillingStatus.CANCELLED) {
+      throw new BadRequestException(
+        `An invoice for "${periodLabel}" already exists on this contract (${existingForPeriod.invoiceNumber}, ${existingForPeriod.status}) - use a different period label if this is genuinely a separate bill.`,
+      );
+    }
+
     const installments = this.installmentsFor(contract.paymentTerms);
     const amount = Math.round((Number(contract.totalAmount) / installments) * 100) / 100;
 

@@ -454,6 +454,18 @@ describe('AppointmentsService', () => {
       appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.CONFIRMED }));
       await expect(service.completeAppointment('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
     });
+
+    // Frontend Phase 10 (AMC Management) pre-mortem finding: this generic endpoint used to
+    // be reachable for an AMC PM-visit appointment too, silently completing it without ever
+    // creating the AmcVisitCompletion record - AmcService.completeVisit() refuses to run once
+    // status is already COMPLETED, so that data would become permanently uncapturable.
+    it('completeAppointment rejects an AMC-type appointment, directing to the AMC completion endpoint', async () => {
+      appointmentRepository.findOne.mockResolvedValue(
+        appointment({ status: AppointmentStatus.ON_SITE, type: AppointmentType.AMC }),
+      );
+      await expect(service.completeAppointment('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('getTechnicianSchedule / getServiceCentreSchedule', () => {

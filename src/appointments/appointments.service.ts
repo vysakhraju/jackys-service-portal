@@ -485,6 +485,18 @@ export class AppointmentsService {
       throw new BadRequestException(`Can only complete on-site appointments`);
     }
 
+    // Frontend Phase 10 (AMC Management) pre-mortem finding: this generic path used to be
+    // reachable for an AMC PM-visit appointment too, silently marking it COMPLETED without
+    // ever creating its AmcVisitCompletion record (checklist/signature/extra-charge) -
+    // AmcService.completeVisit() unconditionally refuses to run once status is COMPLETED, so
+    // that data would become permanently uncapturable. Blocked here at the source rather than
+    // only in the UI, since this endpoint is directly callable via Swagger/curl too.
+    if (appointment.type === AppointmentType.AMC) {
+      throw new BadRequestException(
+        'AMC PM visits are completed via POST /amc/visits/:appointmentId/complete, not this endpoint - that records the required checklist/signature/extra-charge approval instead of just flipping status.',
+      );
+    }
+
     appointment.status = AppointmentStatus.COMPLETED;
     appointment.actualEndAt = new Date();
     const saved = await this.appointmentRepository.save(appointment);

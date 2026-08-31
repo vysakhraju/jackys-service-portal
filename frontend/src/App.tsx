@@ -41,6 +41,11 @@ import { FinanceHome } from './pages/finance/FinanceHome';
 import { InvoicesPage } from './pages/finance/InvoicesPage';
 import { AgingReportPage } from './pages/finance/AgingReportPage';
 import { CustomerPortalPage } from './pages/customerPortal/CustomerPortalPage';
+import { AmcLayout } from './pages/amc/AmcLayout';
+import { AmcHome } from './pages/amc/AmcHome';
+import { ContractsPage } from './pages/amc/ContractsPage';
+import { ExpiringContractsPage } from './pages/amc/ExpiringContractsPage';
+import { UpsellCandidatesPage } from './pages/amc/UpsellCandidatesPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -117,6 +122,13 @@ export function App() {
                   <Route index element={<FinanceHome />} />
                   <Route path="invoices" element={<InvoicesPage />} />
                   <Route path="aging" element={<AgingReportPage />} />
+                </Route>
+
+                <Route path="/amc" element={<AmcLayout />}>
+                  <Route index element={<AmcHome />} />
+                  <Route path="contracts" element={<ContractsPage />} />
+                  <Route path="expiring" element={<ExpiringContractsPage />} />
+                  <Route path="upsell" element={<UpsellCandidatesPage />} />
                 </Route>
               </Route>
             </Route>

@@ -45,6 +45,10 @@ const COLOR_BY_STATUS: Record<string, string> = {
   // reuse the colors already defined above for Estimates.
   PARTIALLY_PAID: 'bg-amber-50 text-amber-700',
   PAID: 'bg-emerald-50 text-emerald-700',
+  // AMC contracts (src/amc/entities/amc-contract.entity.ts's AmcContractStatus) -
+  // EXPIRED/CANCELLED reuse the colors already defined above (Estimates/Appointments).
+  ACTIVE: 'bg-emerald-50 text-emerald-700',
+  RENEWED: 'bg-slate-100 text-slate-500',
 };
 
 export function StatusBadge({ status }: { status: string }) {

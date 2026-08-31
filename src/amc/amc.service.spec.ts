@@ -373,6 +373,27 @@ describe('AmcService', () => {
 
       await expect(service.generateBillingInvoice('contract-1', 'Full Term')).rejects.toThrow(BadRequestException);
     });
+
+    // Frontend Phase 10 pre-mortem finding: periodLabel is free text with nothing else tying
+    // an invoice to "the period it covers", so nothing stopped a double-click or a re-billing
+    // months later from generating a second AMCINV-#### for the same period.
+    it('rejects generating a duplicate invoice for a period already billed on this contract', async () => {
+      amcContractRepository.findOne.mockResolvedValue(contract());
+      billingInvoiceRepository.findOne.mockResolvedValue(billingInvoice({ periodLabel: 'Full Term' }));
+
+      await expect(service.generateBillingInvoice('contract-1', 'Full Term')).rejects.toThrow(BadRequestException);
+      expect(billingInvoiceRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('allows re-billing a period whose previous invoice for it was cancelled', async () => {
+      amcContractRepository.findOne.mockResolvedValue(contract());
+      billingInvoiceRepository.findOne.mockResolvedValue(
+        billingInvoice({ periodLabel: 'Full Term', status: AmcBillingStatus.CANCELLED }),
+      );
+
+      const result = await service.generateBillingInvoice('contract-1', 'Full Term');
+      expect(result.periodLabel).toBe('Full Term');
+    });
   });
 
   describe('recordBillingPayment', () => {

@@ -76,12 +76,25 @@ const EMPTY_FORM: FormValues = {
 // Mirrors the exact status-transition guards in AppointmentsService, so we don't render a
 // button that the backend will just 400 - see confirmAppointment/markOnSite/
 // completeAppointment/assignTechnician for the source of these checks.
-function availableActions(status: AppointmentStatusValue) {
+//
+// Frontend Phase 10 (AMC Management) pre-mortem finding #1: an AMC-type appointment (a
+// generated PM visit) used to show this same generic "Complete" button, which calls PUT
+// /appointments/:id/complete - NOT AmcService.completeVisit() - and never creates the
+// AmcVisitCompletion record (checklist/signature/extra-charge). Since that endpoint
+// unconditionally refuses to run once status is already COMPLETED, clicking the generic
+// button here would permanently and silently lose that visit's ability to ever be
+// documented. The backend now rejects this combination outright (see
+// appointments.service.ts's own guard), and this button is replaced with a link into the
+// AMC module's own completion flow for AMC rows, so a technician never hits that 400 in
+// the first place.
+function availableActions(status: AppointmentStatusValue, type: string) {
+  const isAmc = type === 'AMC';
   return {
     canAssign: status === 'SCHEDULED' || status === 'CONFIRMED',
     canConfirm: status === 'SCHEDULED',
     canMarkOnSite: status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED',
-    canComplete: status === 'ON_SITE',
+    canComplete: status === 'ON_SITE' && !isAmc,
+    canCompleteAmcVisit: status === 'ON_SITE' && isAmc,
     canCancel: status !== 'COMPLETED' && status !== 'CANCELLED',
   };
 }
@@ -316,7 +329,7 @@ export function SchedulePage() {
         error={error}
         emptyMessage="No appointments match these filters yet."
         rowActions={(row) => {
-          const a = availableActions(row.status);
+          const a = availableActions(row.status, row.type);
           return (
             <div className="flex flex-wrap justify-end gap-2">
               <button onClick={() => setViewTarget(row)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
@@ -341,6 +354,15 @@ export function SchedulePage() {
                 <button onClick={() => { setActionError(null); completeMutation.mutate(row.id); }} className="text-xs font-medium text-emerald-600 hover:text-emerald-800">
                   Complete
                 </button>
+              )}
+              {a.canCompleteAmcVisit && (
+                <Link
+                  to={`/amc/contracts?contractId=${row.amcContractId ?? ''}`}
+                  className="text-xs font-medium text-emerald-600 hover:text-emerald-800"
+                  title="AMC PM visits have their own completion flow - checklist, signature, and extra-charge approval - not this generic action"
+                >
+                  Complete PM Visit →
+                </Link>
               )}
               {a.canCancel && (
                 <button onClick={() => { setActionError(null); setCancelTarget(row); setCancelReason(''); }} className="text-xs font-medium text-red-500 hover:text-red-700">
