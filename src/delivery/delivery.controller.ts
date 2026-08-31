@@ -81,6 +81,16 @@ export class DeliveryController {
     return this.deliveryService.findById(id);
   }
 
+  @Get(':id/job-cards')
+  @Roles(...DELIVERY_ROLES)
+  @ApiParam({ name: 'id', type: String })
+  @ApiOperation({ summary: 'List the Job Cards attached to one delivery (frontend detail view - the only other primitive is job-card -> delivery, not this direction)' })
+  @ApiResponse({ status: 200, description: 'Member Job Cards' })
+  @ApiResponse({ status: 404, description: 'Delivery not found' })
+  async findJobCards(@Param('id', ParseUUIDPipe) id: string) {
+    return this.deliveryService.findJobCards(id);
+  }
+
   @Post(':id/dispatch')
   @Roles(...DELIVERY_ROLES)
   @UseInterceptors(AuditInterceptor)

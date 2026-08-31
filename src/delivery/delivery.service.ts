@@ -84,6 +84,17 @@ export class DeliveryService {
   }
 
   /**
+   * Frontend Phase 8: the Delivery detail screen needs its member Job Cards, and the only
+   * existing primitive was job-card -> delivery (findByJobCardId above), not the reverse.
+   * Thin read-only wrapper over the already-existing JobCardsService.findByDeliveryId,
+   * which until now was only used internally by create()/capturePod()/cancel().
+   */
+  async findJobCards(id: string): Promise<JobCard[]> {
+    await this.findById(id); // 404s if the delivery doesn't exist
+    return this.jobCardsService.findByDeliveryId(id);
+  }
+
+  /**
    * The ready-for-delivery pool (GET /delivery/ready, IW/OOW tabs). Proactive
    * payment-status visibility for OOW jobs (the-fool finding: don't make a dispatcher
    * attempt a whole batch just to discover one job is unpaid) - a non-creating lookup

@@ -121,8 +121,12 @@ function QcDetail({ jobCard, onChanged }: { jobCard: JobCard; onChanged: () => v
 
       {pastQc && (
         <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
-          This job is {jobCard.status.replaceAll('_', ' ')} - past what this screen covers (Delivery gets its own
-          screen in a later phase).
+          This job is {jobCard.status.replaceAll('_', ' ')} - past what this screen covers.{' '}
+          {jobCard.status === 'QC_PASSED' && (
+            <Link to="/delivery/ready" className="font-medium underline">
+              Go to Delivery →
+            </Link>
+          )}
         </p>
       )}
 

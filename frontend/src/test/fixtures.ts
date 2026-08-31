@@ -7,6 +7,8 @@ import type { Estimate } from '../lib/estimatesTypes';
 import type { InventoryReservationWithAge } from '../lib/inventoryTypes';
 import type { WorkshopState } from '../lib/workshopTypes';
 import type { UserPermissionGrant } from '../lib/permissionsTypes';
+import type { Delivery, ReadyForDeliveryRow } from '../lib/deliveryTypes';
+import type { Invoice, Payment } from '../lib/invoicingTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -148,6 +150,72 @@ export function makeWorkshopState(overrides: Partial<WorkshopState> = {}): Works
   return {
     jobCard: makeJobCard({ status: 'IN_PROGRESS', section: 'WORKSHOP', assignedWorkshopTechnicianId: 'tech-1' }),
     staleReservations: [],
+    ...overrides,
+  };
+}
+
+export function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
+  return {
+    id: 'del-1',
+    deliveryNumber: 'DLV-0001',
+    status: 'PENDING',
+    dispatcherUserId: 'dispatcher-1',
+    driverUserId: null,
+    dispatchedAt: null,
+    deliveredAt: null,
+    podSignatureBase64: null,
+    podPhotoBase64: null,
+    podRecipientName: null,
+    podNotes: null,
+    cancellationReason: null,
+    createdAt: '2026-08-01T08:00:00Z',
+    updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeReadyRow(overrides: Partial<ReadyForDeliveryRow> = {}): ReadyForDeliveryRow {
+  return {
+    jobCard: makeJobCard({ status: 'QC_PASSED', warrantyStatus: 'OOW' }),
+    invoiceStatus: null,
+    payable: true,
+    ...overrides,
+  };
+}
+
+export function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
+  return {
+    id: 'inv-1',
+    invoiceNumber: 'INV-0001',
+    jobCardId: 'jc-1',
+    amount: 367.5,
+    subtotal: 350,
+    vatRate: 5,
+    vatAmount: 17.5,
+    dueDate: '2026-08-31T08:00:00Z',
+    status: 'DRAFT',
+    paymentMethod: null,
+    amountReceived: null,
+    paymentReference: null,
+    paidAt: null,
+    recordedByUser: null,
+    recordedByUserId: null,
+    createdAt: '2026-08-01T08:00:00Z',
+    updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makePayment(overrides: Partial<Payment> = {}): Payment {
+  return {
+    id: 'pay-1',
+    invoiceId: 'inv-1',
+    method: 'CASH',
+    amount: 367.5,
+    reference: null,
+    recordedByUser: { id: 'user-1', firstName: 'Test', lastName: 'User', email: 't@example.com' },
+    recordedByUserId: 'user-1',
+    recordedAt: '2026-08-01T08:00:00Z',
     ...overrides,
   };
 }

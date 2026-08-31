@@ -13,7 +13,7 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Estimates', path: '/estimates' },
   { label: 'Workshop & Inventory', path: '/workshop-inventory' },
   { label: 'QC & Permissions', path: '/qc-permissions' },
-  { label: 'Delivery & Invoicing' },
+  { label: 'Delivery & Invoicing', path: '/delivery' },
   { label: 'Finance & Customer Portal' },
   { label: 'AMC Contracts' },
   { label: 'Dismantling' },

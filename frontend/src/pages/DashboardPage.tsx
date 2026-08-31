@@ -8,7 +8,7 @@ const FRONTEND_PHASES = [
   { name: 'Estimates (approval flow)', status: 'done' as const },
   { name: 'Workshop & Inventory', status: 'done' as const },
   { name: 'QC & Permissions', status: 'done' as const },
-  { name: 'Delivery & Invoicing', status: 'planned' as const },
+  { name: 'Delivery & Invoicing', status: 'done' as const },
   { name: 'Finance & Customer Portal', status: 'planned' as const },
   { name: 'AMC Management', status: 'planned' as const },
   { name: 'Dismantling', status: 'planned' as const },

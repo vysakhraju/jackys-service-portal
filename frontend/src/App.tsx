@@ -32,6 +32,10 @@ import { QcPermissionsLayout } from './pages/qc/QcPermissionsLayout';
 import { QcPermissionsHome } from './pages/qc/QcPermissionsHome';
 import { QcPage } from './pages/qc/QcPage';
 import { PermissionsPage } from './pages/qc/PermissionsPage';
+import { DeliveryLayout } from './pages/delivery/DeliveryLayout';
+import { DeliveryHome } from './pages/delivery/DeliveryHome';
+import { ReadyForDeliveryPage } from './pages/delivery/ReadyForDeliveryPage';
+import { DeliveriesPage } from './pages/delivery/DeliveriesPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -91,6 +95,12 @@ export function App() {
                   <Route index element={<QcPermissionsHome />} />
                   <Route path="qc" element={<QcPage />} />
                   <Route path="permissions" element={<PermissionsPage />} />
+                </Route>
+
+                <Route path="/delivery" element={<DeliveryLayout />}>
+                  <Route index element={<DeliveryHome />} />
+                  <Route path="ready" element={<ReadyForDeliveryPage />} />
+                  <Route path="deliveries" element={<DeliveriesPage />} />
                 </Route>
               </Route>
             </Route>

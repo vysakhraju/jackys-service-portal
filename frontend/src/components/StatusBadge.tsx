@@ -37,6 +37,14 @@ const COLOR_BY_STATUS: Record<string, string> = {
   RETURN_PENDING: 'bg-sky-50 text-sky-700',
   RETURNED: 'bg-emerald-50 text-emerald-700',
   CONSUMED: 'bg-slate-100 text-slate-500',
+  // Delivery (src/delivery/entities/delivery.entity.ts's DeliveryStatus) - DELIVERED
+  // reuses the color already defined above for Job Cards' own DELIVERED status.
+  PENDING: 'bg-slate-100 text-slate-600',
+  DISPATCHED: 'bg-sky-50 text-sky-700',
+  // Invoicing (src/invoicing/entities/invoice.entity.ts's InvoiceStatus) - DRAFT/CANCELLED
+  // reuse the colors already defined above for Estimates.
+  PARTIALLY_PAID: 'bg-amber-50 text-amber-700',
+  PAID: 'bg-emerald-50 text-emerald-700',
 };
 
 export function StatusBadge({ status }: { status: string }) {
