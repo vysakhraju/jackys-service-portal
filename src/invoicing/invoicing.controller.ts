@@ -1,6 +1,8 @@
-import { Controller, Post, Get, Body, Param, UseGuards, UseInterceptors, ParseUUIDPipe } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Post, Get, Body, Param, Query, UseGuards, UseInterceptors, ParseUUIDPipe } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { InvoicingService } from './invoicing.service';
+import { InvoiceStatus } from './entities/invoice.entity';
+import { CustomerType } from '../appointments/entities/appointment.entity';
 import { RecordPaymentDto } from './dto/record-payment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -22,6 +24,16 @@ const INVOICING_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN', 'SERVIC
 @ApiBearerAuth('JWT-auth')
 export class InvoicingController {
   constructor(private invoicingService: InvoicingService) {}
+
+  @Get()
+  @Roles(...INVOICING_ROLES)
+  @ApiQuery({ name: 'status', required: false, enum: InvoiceStatus })
+  @ApiQuery({ name: 'customerType', required: false, enum: CustomerType })
+  @ApiOperation({ summary: 'List invoices, optionally filtered by status and/or the Job Card appointment\'s customerType (frontend Finance browse screen - the only other primitives are by-id, by-job-card, and the B2B-unpaid-only aging report, none of which cover a general browse/audit view)' })
+  @ApiResponse({ status: 200, description: 'Invoices, newest first' })
+  async findAll(@Query('status') status?: InvoiceStatus, @Query('customerType') customerType?: CustomerType) {
+    return this.invoicingService.findAll(status, customerType);
+  }
 
   @Get('job-card/:jobCardId')
   @Roles(...INVOICING_ROLES, 'LOGISTICS_DISPATCHER', 'DRIVER')

@@ -8,7 +8,8 @@ import type { InventoryReservationWithAge } from '../lib/inventoryTypes';
 import type { WorkshopState } from '../lib/workshopTypes';
 import type { UserPermissionGrant } from '../lib/permissionsTypes';
 import type { Delivery, ReadyForDeliveryRow } from '../lib/deliveryTypes';
-import type { Invoice, Payment } from '../lib/invoicingTypes';
+import type { AgingBucket, Invoice, Payment } from '../lib/invoicingTypes';
+import type { PortalInvoiceView, PortalSummaryView, PortalTrackView } from '../lib/customerPortalTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -246,6 +247,75 @@ export function makeEstimate(overrides: Partial<Estimate> = {}): Estimate {
     createdById: 'user-1',
     createdAt: '2026-08-01T08:00:00Z',
     updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+// Frontend Phase 9 additions below.
+
+export function makeAgingBucket(overrides: Partial<AgingBucket> = {}): AgingBucket {
+  return {
+    label: '0-30 days',
+    invoices: [],
+    totalOutstanding: 0,
+    ...overrides,
+  };
+}
+
+export function makePortalTrackView(overrides: Partial<PortalTrackView> = {}): PortalTrackView {
+  return {
+    jobCardNumber: 'JC-0001',
+    brand: 'Samsung',
+    status: 'IN_PROGRESS',
+    warrantyStatus: 'OOW',
+    customerApproved: true,
+    qcApprovedAt: null,
+    delivery: null,
+    createdAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+// Only the "real invoice with an amount due" branch needs a builder - the other two
+// (not-applicable/IW, and no-invoice-yet) are tiny two/three-field literals tests can just
+// write inline.
+export function makePortalInvoiceView(
+  overrides: Partial<Extract<PortalInvoiceView, { invoiceCreated: true }>> = {},
+): Extract<PortalInvoiceView, { invoiceCreated: true }> {
+  return {
+    applicable: true,
+    invoiceCreated: true,
+    invoiceNumber: 'INV-0001',
+    subtotal: 350,
+    vatRate: 5,
+    vatAmount: 17.5,
+    totalAmount: 367.5,
+    amountPaid: 0,
+    amountDue: 367.5,
+    status: 'DRAFT',
+    message: 'Please contact us to arrange payment - Cash, Card, or Bank Transfer.',
+    ...overrides,
+  };
+}
+
+export function makePortalSummaryView(overrides: Partial<PortalSummaryView> = {}): PortalSummaryView {
+  return {
+    jobCardNumber: 'JC-0001',
+    brand: 'Samsung',
+    faultCode: 'FLT-01',
+    symptomCode: 'SYM-01',
+    status: 'QC_PASSED',
+    warrantyStatus: 'OOW',
+    createdAt: '2026-08-01T08:00:00Z',
+    estimate: {
+      lineItems: [{ description: 'Drum Motor Assembly', quantity: 1, unitPrice: 350 }],
+      subtotal: 350,
+      vatAmount: 17.5,
+      totalAmount: 367.5,
+      status: 'APPROVED',
+    },
+    invoice: makePortalInvoiceView(),
+    delivery: null,
     ...overrides,
   };
 }

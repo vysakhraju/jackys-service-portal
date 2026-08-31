@@ -234,6 +234,30 @@ function JobCardDetail({
         )}
       </div>
 
+      {jobCard.publicToken && (
+        <ActionCard title="Customer tracking link">
+          <p className="mb-2 text-xs text-slate-400">
+            Minted automatically when this Job Card was created (valid 180 days) - the customer
+            can use it to check status, see what's owed on an out-of-warranty repair, and
+            download a summary. No login required.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              readOnly
+              value={`${window.location.origin}/track/${jobCard.publicToken}`}
+              className={`${inputClass} font-mono text-xs`}
+            />
+            <button
+              type="button"
+              onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/track/${jobCard.publicToken}`)}
+              className="shrink-0 rounded-md border border-slate-300 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Copy
+            </button>
+          </div>
+        </ActionCard>
+      )}
+
       {pastThisPhase && (
         <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
           This job has moved past what this phase's screens cover ({jobCard.status.replaceAll('_', ' ')}) -

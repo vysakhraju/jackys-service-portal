@@ -3,7 +3,7 @@
 // (the customer's ORIGINAL PURCHASE invoice/receipt number, used for S/N-vs-invoice
 // warranty verification) - this Invoice is the bill the business issues for an
 // out-of-warranty repair. No Invoice is ever created for IW jobs (nothing to collect).
-import type { UserRef } from './appointmentsTypes';
+import type { UserRef, CustomerTypeValue } from './appointmentsTypes';
 
 export const INVOICE_STATUSES = ['DRAFT', 'PARTIALLY_PAID', 'PAID', 'CANCELLED'] as const;
 export type InvoiceStatusValue = (typeof INVOICE_STATUSES)[number];
@@ -49,4 +49,26 @@ export interface RecordPaymentInput {
   method: PaymentMethodValue;
   amountReceived: number;
   reference?: string;
+}
+
+// Optional filters for GET /invoicing (Frontend Phase 9's new list endpoint - see
+// invoicing.controller.ts/invoicing.service.ts's findAll()). customerType lives on the
+// Job Card's Appointment, not on Invoice itself - the backend joins it in.
+export interface InvoiceListFilters {
+  status?: InvoiceStatusValue;
+  customerType?: CustomerTypeValue;
+}
+
+// Matches InvoicingService.getB2bAgingReport()'s return shape exactly (AC-16).
+export const AGING_BUCKET_LABELS = ['0-30 days', '31-60 days', '61-90 days', '90+ days'] as const;
+
+export interface AgingBucket {
+  label: (typeof AGING_BUCKET_LABELS)[number];
+  invoices: Invoice[];
+  totalOutstanding: number;
+}
+
+export interface AgingReport {
+  buckets: AgingBucket[];
+  totalOutstanding: number;
 }

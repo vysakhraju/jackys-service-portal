@@ -5,7 +5,7 @@ vi.mock('./api', () => ({
 }));
 
 import { api } from './api';
-import { getInvoice, getInvoiceByJobCard, getPayments, recordPayment } from './invoicingApi';
+import { getB2bAging, getInvoice, getInvoiceByJobCard, getPayments, listInvoices, recordPayment } from './invoicingApi';
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
@@ -36,5 +36,24 @@ describe('invoicingApi', () => {
     const input = { method: 'CASH' as const, amountReceived: 367.5, reference: 'slip-42' };
     await recordPayment('inv-1', input);
     expect(api.post).toHaveBeenCalledWith('/invoicing/inv-1/record-payment', input);
+  });
+
+  // Frontend Phase 9 additions - the two read primitives Phase 8 deliberately deferred.
+  it('listInvoices fetches GET /invoicing with no params when called with nothing', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await listInvoices();
+    expect(api.get).toHaveBeenCalledWith('/invoicing', { params: undefined });
+  });
+
+  it('listInvoices passes status/customerType through as query params', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await listInvoices({ status: 'PARTIALLY_PAID', customerType: 'B2B' });
+    expect(api.get).toHaveBeenCalledWith('/invoicing', { params: { status: 'PARTIALLY_PAID', customerType: 'B2B' } });
+  });
+
+  it('getB2bAging fetches GET /invoicing/b2b-aging', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { buckets: [], totalOutstanding: 0 } });
+    await getB2bAging();
+    expect(api.get).toHaveBeenCalledWith('/invoicing/b2b-aging');
   });
 });

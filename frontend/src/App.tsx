@@ -36,6 +36,11 @@ import { DeliveryLayout } from './pages/delivery/DeliveryLayout';
 import { DeliveryHome } from './pages/delivery/DeliveryHome';
 import { ReadyForDeliveryPage } from './pages/delivery/ReadyForDeliveryPage';
 import { DeliveriesPage } from './pages/delivery/DeliveriesPage';
+import { FinanceLayout } from './pages/finance/FinanceLayout';
+import { FinanceHome } from './pages/finance/FinanceHome';
+import { InvoicesPage } from './pages/finance/InvoicesPage';
+import { AgingReportPage } from './pages/finance/AgingReportPage';
+import { CustomerPortalPage } from './pages/customerPortal/CustomerPortalPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -58,6 +63,11 @@ export function App() {
                 /AppLayout entirely (no sidebar, no login requirement). See
                 EstimatePublicPage's own doc comment and lib/publicApi.ts. */}
             <Route path="/estimate/:token" element={<EstimatePublicPage />} />
+
+            {/* Public, unauthenticated customer link (EPIC-005) - one page, three sections
+                sharing JobCard.publicToken, same reasoning as above. See
+                CustomerPortalPage's own doc comment. */}
+            <Route path="/track/:token" element={<CustomerPortalPage />} />
 
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
@@ -101,6 +111,12 @@ export function App() {
                   <Route index element={<DeliveryHome />} />
                   <Route path="ready" element={<ReadyForDeliveryPage />} />
                   <Route path="deliveries" element={<DeliveriesPage />} />
+                </Route>
+
+                <Route path="/finance" element={<FinanceLayout />}>
+                  <Route index element={<FinanceHome />} />
+                  <Route path="invoices" element={<InvoicesPage />} />
+                  <Route path="aging" element={<AgingReportPage />} />
                 </Route>
               </Route>
             </Route>

@@ -9,7 +9,7 @@ const FRONTEND_PHASES = [
   { name: 'Workshop & Inventory', status: 'done' as const },
   { name: 'QC & Permissions', status: 'done' as const },
   { name: 'Delivery & Invoicing', status: 'done' as const },
-  { name: 'Finance & Customer Portal', status: 'planned' as const },
+  { name: 'Finance & Customer Portal', status: 'done' as const },
   { name: 'AMC Management', status: 'planned' as const },
   { name: 'Dismantling', status: 'planned' as const },
   { name: 'Reports & Dashboards (live Kanban)', status: 'planned' as const },

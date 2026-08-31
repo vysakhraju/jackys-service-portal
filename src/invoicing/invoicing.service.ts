@@ -55,6 +55,27 @@ export class InvoicingService {
     return this.invoiceRepository.findOne({ where: { jobCardId } });
   }
 
+  /**
+   * Frontend Phase 9: general browse/audit view - the only other read primitives are
+   * by-id, by-job-card, and the B2B-unpaid-only aging report, none of which give Finance
+   * a full system-of-record list (all statuses, both B2B and B2C). Filters by status
+   * and/or the owning appointment's customerType, same post-fetch-filter style as
+   * getB2bAgingReport (customerType lives on a relation two hops away, not a plain
+   * column, so it isn't expressible as a `where` clause without a query builder).
+   */
+  async findAll(status?: InvoiceStatus, customerType?: CustomerType): Promise<Invoice[]> {
+    const invoices = await this.invoiceRepository.find({
+      where: status ? { status } : {},
+      relations: { jobCard: { appointment: true } },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!customerType) {
+      return invoices;
+    }
+    return invoices.filter((inv: any) => inv.jobCard?.appointment?.customerType === customerType);
+  }
+
   async findPayments(invoiceId: string): Promise<Payment[]> {
     // Ensures a 404 for an unknown invoice id rather than a silently-empty list.
     await this.findById(invoiceId);

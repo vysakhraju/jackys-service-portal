@@ -1,12 +1,19 @@
-// Thin wrappers over src/invoicing/invoicing.controller.ts. Kept deliberately small for
-// Frontend Phase 8 - just enough to unblock Delivery's OOW-payment gate (view/lazily-create
-// an invoice for a job card, view its payment history, record a payment). The B2B aging
-// report (GET /invoicing/b2b-aging) and a standalone invoice-browsing screen are scoped to
-// Frontend Phase 9 ("Finance extension") - see the-fool pre-mortem for this phase.
+// Thin wrappers over src/invoicing/invoicing.controller.ts. Phase 8 kept this deliberately
+// small - just enough to unblock Delivery's OOW-payment gate (view/lazily-create an invoice
+// for a job card, view its payment history, record a payment). Phase 9 ("Finance extension")
+// adds the two read primitives Phase 8 explicitly deferred: a general browse/audit list
+// (listInvoices - backed by a small new GET /invoicing list endpoint added this phase, since
+// none of the existing routes gave Finance a full system-of-record view) and the AC-16 B2B
+// aging report (getB2bAging).
 import { api } from './api';
-import type { Invoice, Payment, RecordPaymentInput } from './invoicingTypes';
+import type { AgingReport, Invoice, InvoiceListFilters, Payment, RecordPaymentInput } from './invoicingTypes';
 
 const BASE = '/invoicing';
+
+export const listInvoices = (filters?: InvoiceListFilters) =>
+  api.get<Invoice[]>(BASE, { params: filters }).then((r) => r.data);
+
+export const getB2bAging = () => api.get<AgingReport>(`${BASE}/b2b-aging`).then((r) => r.data);
 
 // Lazily creates a DRAFT invoice the first time it's queried for a QC_PASSED/DELIVERED +
 // OOW job card with an approved Estimate - a real side effect of this GET, which is why
