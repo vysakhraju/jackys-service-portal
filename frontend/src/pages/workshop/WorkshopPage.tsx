@@ -152,8 +152,20 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
 
       {!notWorkshopSection && !inWorkshopScope && (
         <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
-          This job is {jobCard.status.replaceAll('_', ' ')} - past what the Workshop screen covers (QC and
-          Delivery get their own screens in later phases), or not yet assigned a section.
+          This job is {jobCard.status.replaceAll('_', ' ')} - past what the Workshop screen covers
+          {jobCard.status === 'QC_PASSED' ? (
+            <>
+              {' '}
+              (Delivery gets its own screen in a later phase); see the{' '}
+              <Link to={`/qc-permissions/qc?jobCardId=${jobCard.id}`} className="font-medium underline">
+                QC screen
+              </Link>{' '}
+              for the approval that got it here
+            </>
+          ) : (
+            ' (Delivery gets its own screen in a later phase), or not yet assigned a section'
+          )}
+          .
         </p>
       )}
 
@@ -208,8 +220,12 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
           )}
           {jobCard.status === 'READY_FOR_QC' && (
             <p className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
-              Work is done and waiting on QC (Frontend Phase 7). You can still request a
-              top-up spare above if QC approval reported a stock shortfall.
+              Work is done and waiting on QC.{' '}
+              <Link to={`/qc-permissions/qc?jobCardId=${jobCard.id}`} className="font-medium underline">
+                Go to the QC screen →
+              </Link>{' '}
+              You can still request a top-up spare above if QC approval reports a stock
+              shortfall.
             </p>
           )}
         </>

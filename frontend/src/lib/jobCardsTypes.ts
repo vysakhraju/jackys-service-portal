@@ -91,3 +91,19 @@ export interface WarrantyOverrideInput {
 export interface CancelJobCardInput {
   reason: string;
 }
+
+// Matches QcRejectDto exactly - reason is required, 5-500 chars, for the audit trail.
+export interface QcRejectInput {
+  reason: string;
+}
+
+// The shape ConflictException({ message, blockers }) serializes to on a QC-approve stock
+// shortfall - see InventoryService.consumeReservationsOnQcApproval(). Not exported from
+// jobCardsApi.ts's qcApprove() itself (axios throws, it doesn't return this) - callers
+// read it off the caught AxiosError's response.data.
+export interface QcApproveBlocker {
+  reservationId: string;
+  sparePartId: string;
+  quantityRequested: number;
+  quantityReserved: number;
+}

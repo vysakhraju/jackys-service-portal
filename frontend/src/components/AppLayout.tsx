@@ -12,7 +12,7 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Job Cards', path: '/job-cards' },
   { label: 'Estimates', path: '/estimates' },
   { label: 'Workshop & Inventory', path: '/workshop-inventory' },
-  { label: 'QC & Permissions' },
+  { label: 'QC & Permissions', path: '/qc-permissions' },
   { label: 'Delivery & Invoicing' },
   { label: 'Finance & Customer Portal' },
   { label: 'AMC Contracts' },

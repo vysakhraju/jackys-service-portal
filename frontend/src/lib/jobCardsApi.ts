@@ -2,9 +2,10 @@
 // one function per route actually exposed. There is deliberately no "list all job cards"
 // wrapper here: the backend has no such endpoint (only get-by-id and get-by-appointment),
 // so a Job Card is always reached by pasting an appointment id, the same way Warranty
-// Master and Spare Parts already work on this frontend. qc/approve and qc/reject are not
-// wrapped here either - those belong to the QC + Permissions admin screens (Frontend
-// Phase 7), not this phase.
+// Master and Spare Parts already work on this frontend. qcApprove/qcReject were added in
+// Frontend Phase 7 (QC + Permissions admin) - they live here rather than in a separate
+// "qc" API file because they're plain Job Card mutations under QC_GATE_ROLES, same as
+// warrantyOverride above.
 import { api } from './api';
 import type {
   ApproveCustomerInput,
@@ -12,6 +13,7 @@ import type {
   CancelJobCardInput,
   CreateJobCardInput,
   JobCard,
+  QcRejectInput,
   ValidateSnInput,
   WarrantyOverrideInput,
 } from './jobCardsTypes';
@@ -39,3 +41,15 @@ export const warrantyOverride = (id: string, data: WarrantyOverrideInput) =>
 
 export const cancelJobCard = (id: string, data: CancelJobCardInput) =>
   api.post<JobCard>(`${BASE}/${id}/cancel`, data).then((r) => r.data);
+
+// Gated by PermissionsService.requireActiveGrant(user.id, QC_APPROVAL), not a fixed
+// @Roles() list - see QC_GATE_ROLES in job-cards.controller.ts. On success this also
+// atomically consumes the job's reserved stock (Main Store -> Damage Location); on a
+// stock shortfall it 409s with { message, blockers: [...] } - callers should render
+// that structured shape, not just error.message (the-fool pre-mortem finding #2).
+export const qcApprove = (id: string) => api.post<JobCard>(`${BASE}/${id}/qc/approve`).then((r) => r.data);
+
+// Sends the job back to IN_PROGRESS and increments qcRejectionCount - same QC_APPROVAL
+// grant gate as approve.
+export const qcReject = (id: string, data: QcRejectInput) =>
+  api.post<JobCard>(`${BASE}/${id}/qc/reject`, data).then((r) => r.data);

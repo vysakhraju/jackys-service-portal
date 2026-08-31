@@ -28,6 +28,10 @@ import { WorkshopInventoryLayout } from './pages/workshop/WorkshopInventoryLayou
 import { WorkshopInventoryHome } from './pages/workshop/WorkshopInventoryHome';
 import { WorkshopPage } from './pages/workshop/WorkshopPage';
 import { InventoryPage } from './pages/inventory/InventoryPage';
+import { QcPermissionsLayout } from './pages/qc/QcPermissionsLayout';
+import { QcPermissionsHome } from './pages/qc/QcPermissionsHome';
+import { QcPage } from './pages/qc/QcPage';
+import { PermissionsPage } from './pages/qc/PermissionsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -81,6 +85,12 @@ export function App() {
                   <Route index element={<WorkshopInventoryHome />} />
                   <Route path="workshop" element={<WorkshopPage />} />
                   <Route path="inventory" element={<InventoryPage />} />
+                </Route>
+
+                <Route path="/qc-permissions" element={<QcPermissionsLayout />}>
+                  <Route index element={<QcPermissionsHome />} />
+                  <Route path="qc" element={<QcPage />} />
+                  <Route path="permissions" element={<PermissionsPage />} />
                 </Route>
               </Route>
             </Route>
