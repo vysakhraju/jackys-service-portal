@@ -2072,6 +2072,71 @@ yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 7 section if unsur
 
 ---
 
+## 25. Frontend — Delivery + Invoicing (Frontend Phase 8)
+
+Adds a **Delivery & Invoicing** section to the sidebar nav with two tabs: **Ready for
+Delivery** (the `QC_PASSED` pool waiting to be claimed into a delivery, IW/OOW sub-tabs,
+batch-select) and **Deliveries** (every DLV# through dispatch, proof of delivery, or
+cancellation). Invoicing itself has no standalone screen yet - it's reached in-context,
+wherever an out-of-warranty payment needs recording (a full Invoicing screen with
+payment-history browsing and the B2B aging report is Frontend Phase 9).
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a), or any
+`LOGISTICS_DISPATCHER`/`DRIVER`/`SERVICE_HEAD` account. Click **Delivery & Invoicing**
+in the sidebar, or follow the **"Go to Delivery →"** link that now appears on a
+`QC_PASSED` job's QC screen (Section 24).
+
+**b. Ready for Delivery tab**: switch between **In Warranty** and **Out of Warranty**
+sub-tabs. IW rows have nothing further to check - warranty covers it. OOW rows show an
+**Invoice** column: `not yet invoiced` with a **Check invoice** button until you look,
+or a status badge (`DRAFT`/`PARTIALLY_PAID`/`PAID`) with a **View / pay** button once
+one exists - clicking either opens the payment modal for that job card without minting
+an invoice just by scrolling past the row. Check one or more boxes and **Create
+Delivery**: if every OOW member is `PAID` (or `B2B Credit`-eligible), you get a single
+DLV# covering everything you selected, IW and OOW mixed freely. If any OOW member isn't
+paid, the WHOLE batch is blocked - a red panel lists each unpaid job with the exact
+amount owed and its own **Record payment** button, right there.
+
+**c. Recording a payment**: pick a method (Cash/Card/Bank Transfer/B2B Credit), enter an
+amount (partial payments are fine - the invoice sits at `PARTIALLY_PAID` until the full
+amount is covered across one or more payments), an optional reference, and submit.
+**B2B Credit only works for a real B2B customer's job** - try it on a B2C job and you'll
+get the server's own rejection, not a silently-accepted bypass (this is deliberate: it's
+the guard against B2B Credit becoming a free way to skip payment).
+
+**d. Deliveries tab**: filter by status, click **View** on any row to open its detail
+below the list - the delivery record, every member job card (via the id you paste or the
+link from Ready above), and the actions available for its current status:
+   - **PENDING**: **Dispatch** (driver id is optional - same "paste an id, no picker"
+     convention as everywhere else in this app) or **Cancel** (requires a reason -
+     releases every member job card straight back into the Ready pool).
+   - **DISPATCHED**: **Capture Proof of Delivery** - a recipient name plus a signature
+     OR a photo (file upload only; there's no signature-pad widget yet, see Section
+     25f). Submitting flips the delivery AND every member job card to `DELIVERED`. If
+     payment somehow lapsed on an OOW member since the delivery was created, this is
+     blocked with the same structured red panel as batch-creation (the backend
+     re-checks defensively right before the irreversible hand-back).
+   - **DELIVERED**: a read-only summary - who received it, when, and the
+     signature/photo thumbnails.
+   - **CANCELLED**: the reason you gave.
+
+**e. Things worth trying**: create a batch mixing an IW and an OOW job in one call and
+confirm they share one DLV#. Try dispatching a delivery twice, or cancelling one that's
+already been dispatched, and confirm you get a clear rejection rather than a silent
+no-op. Try submitting the POD form with only a recipient name (no file) and confirm
+**Mark Delivered** stays disabled until you attach one.
+
+**f. Known limitation**: POD capture is plain file upload (read into a base64 data URI
+client-side) - there's no camera-capture or signature-pad component in this app yet.
+Works fine from a desktop browser with a saved image; a real driver-facing mobile app
+would want a proper signature pad.
+
+**g. What to report back**: same as Phases 1–7 — anything confusing, broken, or where a
+missing action looks like a bug rather than a status the backend genuinely hasn't reached
+yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 8 section if unsure).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2103,13 +2168,14 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–24) now exists at `http://localhost:5173` and covers
+The React frontend (Sections 18–25) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
 technician's Field View (Section 20), Job Cards + Warranty Override (Section 21),
 Estimates + the public customer approval link (Section 22), Workshop + Inventory
-(Section 23), and QC + Permissions admin (Section 24) - all live-verified against the
-real backend - everything else in the app still only has a Swagger-based way to test it
-until its own frontend phase ships.
+(Section 23), QC + Permissions admin (Section 24), and Delivery + Invoicing (Section
+25) - all built and test-covered; Sections 18-24 are live-verified against the real
+backend, Section 25 is awaiting its live-verification run - everything else in the app
+still only has a Swagger-based way to test it until its own frontend phase ships.
 Starting with Section 22's phase, the frontend also has its own automated test suite
 (Vitest + React Testing Library, `npm test` in `frontend/`) - Phases 1-4 predate this and
 are covered only by the manual walkthroughs above.

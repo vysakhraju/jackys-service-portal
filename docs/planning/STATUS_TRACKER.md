@@ -1,8 +1,8 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-31 (Frontend Phase 7, live-verified, reruns confirmed clean)
+**Last updated:** 2026-08-31 (Frontend Phase 8 built, tests passing, awaiting live verification)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `a73f44e`)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `8631a15`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `a73f44e`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
@@ -1906,14 +1906,118 @@ reruns again (commit `00ca11e`) - confirmed with a second rerun of both, back-to
 
 ---
 
-## Next: Frontend Phase 8 (Delivery + Invoicing) — 5 phases queued
+## Frontend Phase 8: Delivery + Invoicing — done this session
+
+Research-first, per the established process: read `delivery.entity.ts`,
+`delivery.controller.ts` (all 8 endpoints), all 4 delivery DTOs,
+`delivery.service.ts` in full (289 lines — the advisory-lock concurrency
+handling, the whole-batch-block-on-unpaid-OOW pattern, the defensive
+re-check-at-POD-time pattern), `invoice.entity.ts`, `invoicing.controller.ts`,
+`record-payment.dto.ts`, `payment.entity.ts`, and `invoicing.service.ts` in
+full (265 lines) before designing anything.
+
+**Scoping realization mid-research:** the backend's Invoicing module had
+grown well past the "minimal Invoice" originally scoped for this phase — it
+now has VAT breakdown fields, a real append-only `Payment` entity supporting
+true partial payments, a B2B aging report endpoint, and GL ledger posting
+integration (all backend-side already; none of it needed frontend work to
+exist). Since the frontend phase queue explicitly separates "Delivery +
+Invoicing" (this phase) from "Finance extension + Customer Portal" (next),
+the-fool pre-mortem below settled the scope question explicitly rather than
+building everything the backend now exposes.
+
+**the-fool pre-mortem (Find the Failure Modes)** surfaced one real gap and
+several UX decisions, presented to you before any code was written:
+
+1. **No `delivery-id → job-cards` endpoint existed.** The only primitive was
+   the reverse (`GET /delivery/job-card/:jobCardId`, job-card → its
+   delivery), so the Delivery detail screen had no way to show its batch
+   members. You chose the recommended fix: add one small, safe backend
+   endpoint (`GET /delivery/:id/job-cards`, a thin wrapper over the
+   already-existing `JobCardsService.findByDeliveryId`, previously only used
+   internally) — same class of small defensive backend addition as Phase 8's
+   own earlier `JobCardsService.cancel()` guard extension.
+2. **Eager N+1 invoice lookups on the Ready tab would have silently minted
+   DRAFT invoices** for jobs nobody had decided to deliver yet (`GET
+   /invoicing/job-card/:jobCardId` lazily creates on read). Resolved by using
+   the `invoiceStatus`/`payable` fields `GET /delivery/ready` already returns
+   (a genuinely side-effect-free lookup, per that endpoint's own doc
+   comment) for the list view, and only calling the lazy-create endpoint
+   on an explicit user action (an on-demand "Check invoice" button per OOW
+   row, or opening the payment modal from a 409's blockers).
+3. **The 409 blockers shape spans job-card + invoice fields**, unlike Phase
+   6/7's spare-part-reservation blockers — got its own renderer
+   (`DeliveryBlockersNotice`) rather than reusing QcPage's, with a
+   "Record payment" action per blocked row.
+4. **POD capture UX**: no signature-pad library or camera component exists
+   in this app. Both signature and photo are plain file uploads read
+   client-side into a base64 data URI via `FileReader.readAsDataURL` and sent
+   as-is — the backend just stores the string (capped ~2.8M chars), it
+   doesn't care about the format. Flagged as a known UX gap below, not fixed
+   this phase.
+5. **Driver assignment** continues the app's existing "paste a user id, no
+   picker" convention (same as Permissions grants) — not a new gap, just
+   consistent with how the rest of the app already works.
+6. **Stale `invoiceStatus` between two staff members** viewing the Ready tab
+   isn't a correctness risk: the backend re-checks payment at both
+   delivery-creation time and defensively again at POD-capture time (the
+   established "re-check at the irreversible action" pattern), so a UI
+   staleness window just surfaces as a 409 on the stale actor's attempt, not
+   a silent bypass.
+
+**Built:** `deliveryTypes.ts` / `deliveryApi.ts` (wraps all 8 Delivery
+endpoints plus the new 9th), `invoicingTypes.ts` / `invoicingApi.ts`
+(deliberately scoped to just enough to unblock Delivery's OOW-payment gate —
+lazy-create/lookup, payment history, record-payment; the B2B aging report UI
+is deferred to Frontend Phase 9, see below); `DeliveryLayout.tsx` +
+`DeliveryHome.tsx` (two-tab shell, same pattern as `qc/` and `workshop/`);
+`ReadyForDeliveryPage.tsx` (IW/OOW sub-tabs via a `?warranty=` search param,
+batch-select checkboxes, an OOW-only Invoice column with on-demand
+check/pay, Create Delivery with full 409-blockers rendering);
+`DeliveriesPage.tsx` (status-filtered list, a `?deliveryId=` deep-linkable
+detail view showing the delivery record + its member job cards via the new
+endpoint, with status-conditional action panels — Dispatch/Cancel while
+PENDING, Capture POD while DISPATCHED, a read-only POD/cancellation summary
+once settled); `DeliveryBlockersNotice.tsx` and `RecordPaymentModal.tsx`
+(both shared between the Ready and Deliveries tabs, since the same 409 shape
+and payment flow apply in both places). `StatusBadge.tsx` got color entries
+for `PENDING`/`DISPATCHED` (Delivery) and `PARTIALLY_PAID`/`PAID` (Invoice).
+Wired into `App.tsx`/`AppLayout.tsx`/`DashboardPage.tsx`; `QcPage.tsx`'s
+"past QC" notice now links to `/delivery/ready` for a `QC_PASSED` job instead
+of a dead end.
+
+**Backend addition (small, pre-approved via the-fool, shipped alongside):**
+`GET /delivery/:id/job-cards` on `DeliveryController`/`DeliveryService` — see
+finding #1 above.
+
+**Test coverage** — `/test-master` invoked explicitly via the Skill tool
+(continuing the Phase 7 practice), 34 new tests (**98 total**) written and
+verified clean in the isolated sandbox before touching the real device:
+`deliveryApi.test.ts`/`invoicingApi.test.ts` (URL/param/payload correctness
+for every wrapper), `ReadyForDeliveryPage.test.tsx` (role gate, IW/OOW tab
+switching and querying, batch-select + create success, the 409-blockers
+render path), `DeliveriesPage.test.tsx` (status filter, selecting a
+delivery, dispatch, cancel, POD's AC-12 disabled-until-signature-or-photo
+gating, the defensive re-check blockers path, DELIVERED/CANCELLED read-only
+summaries), `RecordPaymentModal.test.tsx` (both fetch paths — by job card
+vs. by known invoice id — and a successful payment). `npx tsc -b` and
+`npx vite build` both confirmed clean before and after.
+
+**Not yet live-verified against your real backend** — `verify-phase8.ps1`
+is ready (idempotent: every created value with a real uniqueness constraint
+is suffixed, per this session's earlier verify-phase6/7.ps1 fix). Run it with
+both dev servers up and paste back the output.
+
+---
+
+## Next: Frontend Phase 9 (Finance extension + Customer Portal) — 4 phases queued
 
 The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
-Phases 1–7 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
+Phases 1–8 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
 Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory,
-QC + Permissions admin) are all built. The remaining 5 frontend phases are queued, in
-the same order the backend itself was built in, so each screen has an already-tested,
-already-stable API to build against:
+QC + Permissions admin, Delivery + Invoicing) are all built. The remaining 4 frontend
+phases are queued, in the same order the backend itself was built in, so each screen has
+an already-tested, already-stable API to build against:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
@@ -1921,9 +2025,11 @@ already-stable API to build against:
 4. ~~Job Cards + Warranty Override~~ — done.
 5. ~~Estimates (staff screens + the public customer approval link)~~ — done.
 6. ~~Workshop + Inventory~~ — done.
-7. ~~QC + Permissions admin~~ — done above.
-8. Delivery + Invoicing
-9. Finance extension + Customer Portal (public pages)
+7. ~~QC + Permissions admin~~ — done.
+8. ~~Delivery + Invoicing~~ — done above.
+9. Finance extension + Customer Portal (public pages) — including the B2B aging report
+   UI deliberately deferred from Phase 8 (`GET /invoicing/b2b-aging` is already wired
+   into `invoicing.controller.ts`, just has no screen yet).
 10. AMC Management
 11. Dismantling
 12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
@@ -1941,6 +2047,9 @@ at some point instead:
 - The Appointment dashboard-stats endpoint (`GET /appointments/.../dashboard-stats` —
   today's counts by status, this week's totals) — typed on the frontend already, no
   screen built yet; no widget spec exists for it.
+- POD capture has no signature-pad or camera-capture component — plain file upload only
+  (Frontend Phase 8's the-fool pre-mortem finding #4). Works, but a real signature pad
+  would be a better driver-side experience if this becomes a mobile app.
 
 ---
 
