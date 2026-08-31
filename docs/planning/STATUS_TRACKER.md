@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-31 (Frontend Phase 9 live-verified — 143/143 checks passed)
+**Last updated:** 2026-08-31 (Frontend Phase 10 built — AMC Management, 246 tests passing, tsc/build clean; `verify-phase10.ps1` drafted, awaiting your live run)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `8631a15`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `a73f44e`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `75bf3df`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `75bf3df`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -2142,15 +2142,145 @@ way through Delivery to `DELIVERED`.
 
 ---
 
-## Next: Frontend Phase 10 (AMC Management) — 3 phases queued
+## Frontend Phase 10: AMC Management — done this session
+
+Research-first, per the established process: read `amc.controller.ts`,
+`amc.service.ts`, and all 6 `amc/dto/*.ts` files in full before designing
+anything. This is the largest single-phase backend surface built so far — 3
+entities (`AmcContract`, `AmcVisitCompletion`, `AmcBillingInvoice`), 16
+endpoints, and the most fragmented role set of any phase (4 different,
+overlapping role arrays — `AMC_MANAGEMENT_ROLES`, `AMC_VIEW_ROLES`,
+`AMC_TECHNICIAN_ROLES`, `FINANCE_ROLES` — gating different parts of one
+screen).
+
+**the-fool pre-mortem (Find the Failure Modes)** surfaced 5 findings, all
+fixed at both the API and frontend layers per your explicit instruction:
+
+1. **Generic-complete bypass.** `PUT /appointments/:id/complete` used to be
+   reachable for an AMC-type PM-visit appointment too, silently marking it
+   `COMPLETED` without ever creating its `AmcVisitCompletion` record
+   (checklist/signature/extra-charge approval) — and
+   `AmcService.completeVisit()` unconditionally refuses to run once status is
+   already `COMPLETED`, so that data would become permanently uncapturable.
+   Fixed at the source: `appointments.service.ts`'s `completeAppointment()`
+   now rejects any `AppointmentType.AMC` appointment outright (this endpoint
+   is directly callable via Swagger/curl too, so a UI-only fix wasn't enough).
+   The frontend half: `SchedulePage.tsx`'s row actions now show
+   `"Complete PM Visit →"` — a link into the AMC module's own completion
+   flow — instead of the generic Complete button, for AMC rows only.
+2. **Fragmented role-check risk.** Four different role arrays living in one
+   component was flagged as a likely copy-paste-wrong-array bug source.
+   Centralized into a single `amcPermissions(roleName)` helper in
+   `amcTypes.ts` computing `{canView, canManage, canCompleteVisits, canBill}`
+   once, used everywhere instead of inline `.includes()` checks — tested
+   exhaustively across every role combination.
+3. **Duplicate billing invoices.** `periodLabel` is caller-supplied free
+   text with nothing else tying a billing invoice to "the period it
+   covers" — unlike Invoicing's `Invoice` (1:1 with a job card, effectively
+   idempotent by construction), nothing stopped a double-click or a
+   re-billing months later from generating a second `AMCINV-####` for the
+   same period. Fixed: `amc.service.ts`'s `generateBillingInvoice()` now
+   rejects a duplicate non-cancelled `periodLabel` on the same contract.
+4. **Dead-end read-only tabs.** Expiring Soon and Upsell Candidates risked
+   being pure lookup screens with no next action. Fixed: each Expiring row
+   gets an in-row "Send reminder" action plus a direct link into the full
+   contract detail; each Upsell row links straight into a pre-filled Create
+   Contract form via `?prefillName=&prefillPhone=`.
+5. **60-visit cap surprise.** The backend's `MAX_GENERATED_VISITS=60` safety
+   cap had no client-side preview — a long multi-field Create/Renew form
+   could be filled out entirely only to 400 on submit. Fixed: a client-side
+   `estimateVisitCount()` mirrors the backend's own `buildVisitDates()` /
+   `intervalMonthsFor()` date math exactly, shown live on both forms,
+   disabling submit once the estimate exceeds the cap.
+
+**Backend additions (both approved via the-fool, shipped alongside):**
+`appointments.service.ts`'s `completeAppointment()` AMC guard (finding #1)
+and `amc.service.ts`'s `generateBillingInvoice()` duplicate-`periodLabel`
+guard (finding #3), each with new unit tests (4 new specs, 71/71 backend
+tests passing).
+
+**Built:** `lib/amcTypes.ts` (enums, DTOs mirroring the backend exactly,
+`amcPermissions()`, `estimateVisitCount()`, `MAX_GENERATED_VISITS`),
+`lib/amcApi.ts` (all 16 endpoint wrappers); `pages/amc/AmcLayout.tsx`
+(page-level `canView` self-check — deliberately NOT a layout-level gate like
+Finance, since `AMC_VIEW_ROLES` is broad and includes technicians — 3 tabs:
+Contracts, Expiring Soon, Upsell Candidates) + `AmcHome.tsx` (redirect);
+`ContractsPage.tsx` (the largest file — status-filterable list, a
+`?contractId=` deep-linkable detail panel mirroring `InvoicesPage`'s Phase 9
+pattern, Create Contract modal with the live visit-count estimate and
+`?prefillName=&prefillPhone=` auto-open, `ContractDetail` with
+Renew/Cancel/Send-reminder gated to `canManage` + `status===ACTIVE`, the PM
+visit schedule with per-row Complete/View-completion actions, and an
+embedded `AmcBillingSection`); `CompleteVisitModal.tsx` (checklist/
+signature/extra-charge form, blocks submit client-side when an extra charge
+lacks approval); `AmcBillingSection.tsx` (invoice list, generate-invoice
+form, a dedicated full-amount-only `BillingPaymentForm` — deliberately not
+reusing `RecordPaymentModal`, which is built around `Invoice`'s
+partial-payment model that doesn't apply here); `ExpiringContractsPage.tsx`
+and `UpsellCandidatesPage.tsx`. Modified `StatusBadge.tsx` (ACTIVE/RENEWED
+colors), `App.tsx`/`AppLayout.tsx` (routing + nav), `DashboardPage.tsx`
+(status → done), and `SchedulePage.tsx` (the AMC-routing fix above).
+
+**Bugs self-caught and fixed before ever running a test:** a fragile
+`window.history.replaceState` + `popstate`-dispatch hack for post-renewal
+navigation, refactored to a proper `onNavigateToContract` callback prop; an
+input snap-back bug on the Expiring Soon "within days" field (clearing it
+immediately reset to 30, since `Number('') || 30` = 30) — fixed with a
+two-state raw-input/parsed-value split; and an ambiguous "View" button that
+collided with the DataTable's own row action — renamed to "View completion"
+for the visit-history case.
+
+**Test coverage** — `/test-master` invoked explicitly via the Skill tool, 60
+new tests (**246 total**) written and verified clean in the isolated sandbox
+before touching the real device: `amcTypes.test.ts` (15 tests —
+`amcPermissions()` across every role, `estimateVisitCount()` date math for
+all 3 frequencies plus the invalid-range and exceeds-cap cases),
+`amcApi.test.ts` (16, one per wrapper), `AmcLayout.test.tsx`,
+`CompleteVisitModal.test.tsx` (the extra-charge-without-approval block),
+`AmcBillingSection.test.tsx` (no amount field, Record Payment only on DRAFT),
+`ExpiringContractsPage.test.tsx`, `UpsellCandidatesPage.test.tsx`,
+`ContractsPage.test.tsx` (9 — live estimate, cap-triggered disable, prefill
+auto-open, role-gated actions, SCHEDULED-only Complete), and
+`SchedulePage.test.tsx` (new file — the regression test for pre-mortem
+finding #1: an AMC-type ON_SITE row shows "Complete PM Visit →" instead of
+the generic Complete button and links to the right contract id; a non-AMC
+ON_SITE row is completely unaffected). `npx tsc -b` and `npx vite build`
+both confirmed clean in the sandbox (186/186 tests passing suite-wide) and
+`npx tsc --noEmit` + the 4 new backend specs confirmed clean on the real
+device; the device-side `npx tsc -b`/`vitest` re-check hit an unrelated
+environment issue (a stale/partial `node_modules` on the mounted drive with
+very slow rename syscalls) and wasn't completable this session — the
+sandbox result is the authoritative gate per test-master's own requirement,
+but if you hit missing-module errors running `npm test` locally, run
+`npm install` in `frontend/` first.
+
+**Live verification:** `verify-phase10.ps1` (root + `frontend/` copies)
+drafted, covering contract creation + PM-visit-schedule generation + the
+60-visit cap rejection, the generic-complete-now-rejects-AMC-type guard, PM
+visit completion (with and without an approved extra charge, plus the
+already-completed rejection), the duplicate-billing-invoice-periodLabel
+guard, full-amount-only billing payment (including the already-paid
+rejection and the B2B-Credit-requires-B2B-contract guard, both the rejected
+and accepted cases), renewal (forward-only chain, original marked RENEWED,
+re-renewal blocked), cancellation (cascading to cancel future SCHEDULED
+visits, re-cancel and renew-after-cancel both blocked), the expiring-
+contracts query + send-renewal-reminder, and the upsell-candidates heuristic
+(including that an ACTIVE AMC contract on the same phone number correctly
+removes that customer from the list). Not yet run against the real backend —
+**run it and paste the output back** so this section can be updated with the
+live pass/fail count, matching every prior phase.
+
+---
+
+## Next: Frontend Phase 11 (Dismantling) — 2 phases queued
 
 The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
-Phases 1–9 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
+Phases 1–10 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
 Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory,
-QC + Permissions admin, Delivery + Invoicing, Finance extension + Customer Portal) are
-all built. The remaining 3 frontend phases are queued, in the same order the backend
-itself was built in, so each screen has an already-tested, already-stable API to build
-against:
+QC + Permissions admin, Delivery + Invoicing, Finance extension + Customer Portal, AMC
+Management) are all built. The remaining 2 frontend phases are queued, in the same order
+the backend itself was built in, so each screen has an already-tested, already-stable
+API to build against:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
@@ -2160,8 +2290,8 @@ against:
 6. ~~Workshop + Inventory~~ — done.
 7. ~~QC + Permissions admin~~ — done.
 8. ~~Delivery + Invoicing~~ — done.
-9. ~~Finance extension + Customer Portal (public pages)~~ — done above.
-10. AMC Management
+9. ~~Finance extension + Customer Portal (public pages)~~ — done.
+10. ~~AMC Management~~ — done above.
 11. Dismantling
 12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
     easiest to get right once the simpler ones establish the patterns)
@@ -2182,9 +2312,13 @@ at some point instead:
   (Frontend Phase 8's the-fool pre-mortem finding #4). Works, but a real signature pad
   would be a better driver-side experience if this becomes a mobile app.
 - GL Postings (`GET /gl-postings?sourceType=...`) — a fully-built, already role-gated,
-  read-only ledger endpoint discovered during Phase 9's research. No UI built for it
-  since it was outside Phase 9's named scope (Delivery/Invoicing/B2B aging/Customer
-  Portal); would make a reasonable small addition to a future Finance screen.
+  read-only ledger endpoint discovered during Phase 9's research. No UI built for it yet;
+  would make a reasonable small addition to a future Finance screen.
+- The device-side `npm install` for `frontend/` hit very slow rename syscalls on the
+  mounted drive this session (unrelated to any Phase 10 code) — if `npm test`/`tsc -b`
+  fail locally with "Cannot find module 'vitest'" or similar, run `npm install` in
+  `frontend/` once from a normal terminal (not through the cloud session's device bridge)
+  and it should resolve at native disk speed.
 
 ---
 

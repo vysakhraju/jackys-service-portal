@@ -2208,6 +2208,78 @@ yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 9 section if unsur
 
 ---
 
+## 27. Frontend — AMC Management (Frontend Phase 10)
+
+Adds a new **AMC Contracts** sidebar destination covering the full Annual Maintenance
+Contract lifecycle: contract creation with an auto-generated preventive-maintenance
+visit schedule, visit completion, renewal, cancellation, billing, expiry reminders, and
+an upsell-candidates report.
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a), or any
+`SERVICE_HEAD`/`CCE`/`TECHNICIAN_FIELD`/`TECHNICIAN_WORKSHOP`/`ACCOUNTANT`/
+`FINANCE_MANAGER` account - this screen is deliberately broad-access since technicians
+need to see their PM visits and Finance needs to see billing, but individual actions
+(create/renew/cancel, complete a visit, bill/record payment) stay role-gated per action,
+not per page. Anyone outside all of those roles sees a plain "restricted" message and no
+AMC query ever fires. Three tabs: Contracts, Expiring Soon, Upsell Candidates.
+
+**b. Contracts tab**: every contract, newest first, filterable by status (Active /
+Expired / Cancelled / Renewed). Click **+ New Contract** to open the create form -
+customer details, service centre id and (optional) assigned technician id are pasted
+UUIDs (this app has no picker component anywhere, same convention as every other
+service-centre/technician field), covered serial numbers as a comma-separated list,
+coverage type, visit frequency (Monthly/Quarterly/Half-Yearly), date range, total
+amount, and payment terms. As you fill in the date range and frequency, a live line
+appears - *"This will generate N PM visits"* - and if that number would exceed the
+backend's 60-visit safety cap, the line turns into a warning and the Create button
+disables itself before you can even submit. Click any contract to open its detail:
+contract fields, the full PM visit schedule (each row shows its scheduled date and
+status), and an embedded billing section - plus, for an `ACTIVE` contract you're allowed
+to manage, **Renew**, **Cancel**, and **Send renewal reminder** buttons.
+
+**c. Completing a PM visit**: on a contract's `SCHEDULED` visit row, click **Complete**
+(only technicians/Service Head/Super Admin see this). The form takes checklist notes, an
+optional signature capture, and an optional extra charge - AMC coverage is pre-paid, so
+any extra charge requires an explicit "customer approved this on the spot" checkbox; try
+entering an amount without ticking it and the Complete button disables itself with an
+inline explanation, matching the backend's own rule exactly. A completed row switches to
+a **View completion** button showing what was recorded.
+
+**d. Billing**: inside a contract's detail, the billing section lists any generated
+invoices and lets a Finance/Service Head/Super Admin user generate a new one by typing a
+period label (e.g. "Q1 2026") - the amount is computed automatically from the contract's
+total and payment terms (full upfront / half-yearly / quarterly split). Try generating a
+second invoice with the *same* period label - it's rejected, since nothing else ties an
+invoice to "the period it covers" and a duplicate would otherwise go unnoticed until
+reconciliation. Recording payment on a `DRAFT` invoice is deliberately full-amount-only
+(no partial-payment amount field, unlike the Invoicing module) - pick a method and
+optionally a reference, done.
+
+**e. Expiring Soon tab**: `ACTIVE` contracts expiring within a configurable window
+(default 30 days, editable). Each row has a **View** link into the full contract detail
+and, for a manager, a **Send reminder** button right there - no need to go find the
+contract first just to send a reminder.
+
+**f. Upsell Candidates tab**: out-of-warranty customers who just had a repair approved
+(an approved Estimate exists) and aren't already covered by an AMC contract - a
+heuristic phone-number match, called out as such rather than presented as precise CRM
+data. Each row links straight into a **Create AMC Contract** form pre-filled with that
+customer's name and phone.
+
+**g. Things worth trying**: on the Schedule page (Section 20), find an AMC-type
+appointment that's `ON_SITE` - instead of the usual generic **Complete** button, it
+shows **Complete PM Visit →**, linking straight into this module's own completion flow;
+a non-AMC appointment in the same state is completely unaffected and still shows the
+regular Complete button. This is deliberate: the generic completion endpoint now
+actively rejects an AMC-type appointment, so a technician can never accidentally lose a
+PM visit's checklist/signature/extra-charge record by using the wrong button.
+
+**h. What to report back**: same as Phases 1-9 - anything confusing, broken, or where a
+missing action looks like a bug rather than a status the backend genuinely hasn't reached
+yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 10 section if unsure).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2239,18 +2311,20 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–26) now exists at `http://localhost:5173` and covers
+The React frontend (Sections 18–27) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
 technician's Field View (Section 20), Job Cards + Warranty Override (Section 21),
 Estimates + the public customer approval link (Section 22), Workshop + Inventory
 (Section 23), QC + Permissions admin (Section 24), Delivery + Invoicing (Section 25),
-and Finance + Customer Portal (Section 26) - all built and test-covered; Sections
-18-26 are all live-verified against the real backend (Section 26's
-`verify-phase9.ps1` run: 143/143 checks passed, 0 failed) - everything else in the app
-still only has a Swagger-based way to test it until its own frontend phase ships.
-Starting with Section 22's phase, the frontend also has its own automated test suite
-(Vitest + React Testing Library, `npm test` in `frontend/`) - Phases 1-4 predate this and
-are covered only by the manual walkthroughs above.
+Finance + Customer Portal (Section 26), and AMC Management (Section 27) - all built and
+test-covered (246 automated frontend tests total as of Section 27); Sections 18-26 are
+live-verified against the real backend (Section 26's `verify-phase9.ps1` run: 143/143
+checks passed, 0 failed) - Section 27's own `verify-phase10.ps1` is drafted but not yet
+run against the real backend (see Section 27h and `docs/planning/STATUS_TRACKER.md`).
+Everything else in the app still only has a Swagger-based way to test it until its own
+frontend phase ships. Starting with Section 22's phase, the frontend also has its own
+automated test suite (Vitest + React Testing Library, `npm test` in `frontend/`) -
+Phases 1-4 predate this and are covered only by the manual walkthroughs above.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider
