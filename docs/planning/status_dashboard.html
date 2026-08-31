@@ -381,9 +381,9 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">5 / 12</span><span class="l">Frontend phases live (+ Estimates)</span></div>
-      <div class="stat"><span class="n mono">489 + 20</span><span class="l">Backend + frontend tests passing</span></div>
-      <div class="stat"><span class="n mono">28d48a5</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">7 / 12</span><span class="l">Frontend phases built (+ QC/Permissions)</span></div>
+      <div class="stat"><span class="n mono">489 + 64</span><span class="l">Backend + frontend tests passing</span></div>
+      <div class="stat"><span class="n mono">e632664</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -472,113 +472,128 @@
       </div>
       <div class="phase done">
         <span class="phase-num mono">FE·5</span>
-        <div><div class="phase-name">Frontend Phase 5: Estimates + Public Approval Link</div><div class="phase-sub">the-fool pre-mortem + test-master coverage — details below</div></div>
+        <div><div class="phase-name">Frontend Phase 5: Estimates + Public Approval Link</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 28/28 live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">FE·6</span>
+        <div><div class="phase-name">Frontend Phase 6: Workshop + Inventory</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 50/50 live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
+      <div class="phase done">
+        <span class="phase-num mono">FE·7</span>
+        <div><div class="phase-name">Frontend Phase 7: QC + Permissions admin</div><div class="phase-sub">the-fool pre-mortem + test-master coverage — details below</div></div>
         <span class="chip done">Done</span>
       </div>
     </div>
   </div>
 
   <div class="section">
-    <div class="section-head"><h2>Frontend Phase 5, in detail</h2></div>
+    <div class="section-head"><h2>Frontend Phase 7, in detail</h2></div>
     <div class="card">
-      <h3 style="font-size:17px;">Designed with a the-fool pre-mortem before any screen was built</h3>
+      <h3 style="font-size:17px;">Approve/reject the workshop's work, and control who's allowed to</h3>
       <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
-        First phase built under the standing commitment to always load
-        <span class="mono">the-fool</span>, <span class="mono">test-master</span> and
-        <span class="mono">typescript-pro</span> where relevant, rather than reaching for
-        them inconsistently. A pre-mortem on the Estimate + public-link design ran
-        <em>before</em> any code — four failure modes were found and fixed up front
-        instead of discovered later.
+        Reads <span class="mono">permissions.service.ts</span>,
+        <span class="mono">permissions.controller.ts</span>, the
+        <span class="mono">job-cards.controller.ts</span> qc endpoints, and
+        <span class="mono">inventory.service.ts</span>'s
+        <span class="mono">consumeReservationsOnQcApproval()</span> in full before
+        designing anything. Four failure modes found and fixed <em>before</em> any screen
+        was built, continuing the standing the-fool-first practice — and this time
+        <span class="mono">test-master</span> was invoked explicitly via the Skill tool
+        rather than just applied implicitly.
       </p>
 
       <div class="stat-tiles">
         <div class="tile"><span class="n mono">4</span><span class="l">Pre-mortem findings, fixed pre-build</span></div>
-        <div class="tile"><span class="n mono">5 / 12</span><span class="l">Frontend phases built</span></div>
-        <div class="tile"><span class="n mono">20</span><span class="l">New automated tests (Vitest + RTL)</span></div>
-        <div class="tile"><span class="n mono">28 / 28</span><span class="l">Live checks passed</span></div>
+        <div class="tile"><span class="n mono">7 / 12</span><span class="l">Frontend phases built</span></div>
+        <div class="tile"><span class="n mono">19</span><span class="l">New automated tests (Vitest + RTL)</span></div>
+        <div class="tile"><span class="n mono">64 / 64</span><span class="l">Total frontend tests passing</span></div>
       </div>
 
       <h3 style="margin-top:4px;">What the pre-mortem caught before it shipped</h3>
       <ul class="findings">
         <li>
           <span class="tag">01</span>
-          <div><b>An EXPIRED estimate has no resend/extend endpoint on the backend — gating "Create" on an empty list, not on "no active estimate", would have been a dead end.</b>
-          <p>Fixed: "Create Estimate" now keys off whether a DRAFT/SENT/APPROVED estimate exists, not whether the list is empty — an EXPIRED or REJECTED-with-no-revise-yet row no longer blocks a fresh one.</p></div>
+          <div><b>A QC_OFFICER can't check their own grant — GET /permissions/users/:userId is admin-only.</b>
+          <p>Fixed: Approve/Reject show to the QC_GATE_ROLES role floor only; the backend's own 403 message ("Ask an admin to grant it") is what actually tells a role-floor member without the grant why it failed — no client-side check is faked.</p></div>
         </li>
         <li>
           <span class="tag">02</span>
-          <div><b>The staff API client's bearer-token + redirect-to-login behavior had no business anywhere near a customer's browser.</b>
-          <p>Fixed: the public link page (<span class="mono">/estimate/:token</span>) now runs on a brand-new, zero-interceptor axios client — asserted by its own test to carry no auth header and no redirect logic at all.</p></div>
+          <div><b>qc/approve's 409 stock-shortfall payload ({message, blockers}) would be silently dropped — the shared ErrorNotice only reads .message.</b>
+          <p>Fixed: the QC screen catches that 409 specifically and lists every blocked spare part with a link back to Workshop to top up or resolve it.</p></div>
         </li>
         <li>
           <span class="tag">03</span>
-          <div><b>The anti-consent-laundering contact check is exact-format — a staff member guessing at phone formatting would 400 every time with no hint why.</b>
-          <p>Fixed: the Record Response form prefills the exact on-file phone/email as one-click buttons instead of a blank field.</p></div>
+          <div><b>QC reject was a dead end — the job goes back to IN_PROGRESS, and the QC screen has nothing further to offer.</b>
+          <p>Fixed: a successful reject shows a direct link back to Workshop instead of leaving the user stranded.</p></div>
         </li>
         <li>
           <span class="tag">04</span>
-          <div><b>A customer responding via the link at the same moment staff records a phone decision produces a 409 — a raw error would look like a broken form.</b>
-          <p>Fixed: both response forms now refetch on a 409 and show the real, current decision instead of a stale form.</p></div>
+          <div><b>No list-users endpoint (same as everywhere else), but GET /permissions?type=X is a real list — easy to bury it.</b>
+          <p>Fixed: "who currently holds this" is surfaced prominently above the grant form, so admins aren't granting or revoking blind.</p></div>
         </li>
       </ul>
 
-      <h3 style="margin-top:22px;">Live-verified against your real running backend</h3>
-      <div class="verified">
-        <span><span class="mono">tsc -b && vite build</span> compiles clean, zero errors</span>
-        <span>20/20 new Vitest + React Testing Library tests passing</span>
-        <span>VAT math exact: 470 subtotal → 493.50 total at the real 5% rate</span>
-        <span>Duplicate active estimate on one Job Card correctly 409'd</span>
-        <span>Public view showed only customer-safe fields — no internal ids</span>
-        <span>Wrong contact value on record-response correctly 400'd</span>
-        <span>Double-respond and viewing an already-decided link correctly 409/410'd</span>
-        <span>Reject → RWR → revise → SN_VALIDATED → approve → customerApproved, full loop</span>
+      <h3 style="margin-top:22px;">Live verification</h3>
+      <div class="alert" style="border-color:var(--info); background:var(--info-wash);">
+        <h3 style="color:var(--info);">Pending — run verify-phase7.ps1</h3>
+        <p>
+          <span class="mono">tsc -b</span> and <span class="mono">vite build</span> both
+          compile clean in the isolated sandbox, and all 64 frontend tests pass (19 new).
+          The code is committed and pushed to your machine along with
+          <span class="mono">verify-phase7.ps1</span>, which exercises qc/approve's happy
+          path (stock moves Main Store → Damage Location), the masked per-spare-part
+          stock shortfall (an unrelated part's fully-held request flips the job back to
+          IN_PROGRESS at the job level while the first part is still genuinely short —
+          the exact gap pre-mortem finding #2 is about), qc/reject incrementing
+          qcRejectionCount, and the full grant/duplicate-grant/list-by-type/list-by-user/
+          revoke/revoke-again permissions lifecycle. This build session has no network
+          path to your machine to run it itself — run it with both dev servers up and
+          paste the output back, and this dashboard gets updated with the real result.
+        </p>
       </div>
-      <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
-        All 28 checks passed on the first run — no fixes needed. See "Worth knowing" below.
-      </p>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
-      <h3 style="color:var(--success);">Two new standing practices, both held up on the first real run</h3>
+      <h3 style="color:var(--success);">Standing practices, held for a third phase in a row</h3>
       <p>
-        <span class="mono">the-fool</span> now runs as a design pre-mortem before any
-        phase with tricky logic gets built, not after — this phase's four findings
-        (above) were all fixed before a single screen existed, and none of them showed up
-        as bugs once tested against the real backend. <span class="mono">test-master</span>
-        coverage also starts here rather than being backfilled onto Phases 1-4 — the
-        frontend had zero automated tests before this phase; it now has 20, all passing,
-        and every phase from here on ships with its own.
+        <span class="mono">the-fool</span> pre-mortem before build, then
+        <span class="mono">test-master</span> coverage in an isolated sandbox before any
+        file reaches your machine — this phase's <span class="mono">test-master</span>
+        pass was invoked explicitly via the Skill tool for the first time, rather than
+        just applied implicitly. This phase's four findings (above) were all fixed
+        before a single screen existed. Frontend test count is now 64 (45 from Phases
+        1–6 + 19 new), every one passing.
       </p>
       <p>
         Also as before: this build session has no network path to anything running on
-        your machine — only a file bridge (confirmed back in Phase 3). Each frontend
-        phase ships with a small PowerShell script (<span class="mono">verify-phaseN.ps1</span>)
-        you run yourself with both dev servers up; you paste back the output and anything
-        that fails gets fixed from that. Same pattern <span class="mono">git push</span>
-        already uses — <span class="mono">verify-phase5.ps1</span> passed all 28 checks on
-        the first try.
+        your machine — only a file bridge. Each frontend phase ships with a small
+        PowerShell script (<span class="mono">verify-phaseN.ps1</span>) you run yourself
+        with both dev servers up; you paste back the output and anything that fails gets
+        fixed from that. <span class="mono">verify-phase7.ps1</span> is pushed and ready
+        to run.
       </p>
-      <span class="resolved-tag">Live-verified this phase</span>
     </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Frontend Phase 6</h3>
-        <h2>Workshop + Inventory</h2>
-        <p>Next comes the Workshop + Inventory screens (spare part reservations, custody, return) — then QC + Permissions, Delivery + Invoicing, and the remaining four phases in the same order the backend itself was built, ending with the live Reports/Dashboards Kanban board.</p>
+        <h3>Next up · Frontend Phase 8</h3>
+        <h2>Delivery + Invoicing</h2>
+        <p>Batch/normal delivery, DLV# generation, POD capture (signature/photo), and the OOW-invoice-must-be-paid delivery block — then Finance extension + Customer Portal, AMC Management, Dismantling, and Reports/Dashboards, ending with the live Kanban board.</p>
       </div>
-      <div class="go">Building next →</div>
+      <div class="go">Up next →</div>
     </div>
   </div>
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 28d48a5 — awaiting push from your machine</span>
+    <span>master + main synced locally at e632664 — awaiting push from your machine</span>
   </footer>
 
 </div>
