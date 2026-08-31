@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-31 (Frontend Phase 8 live-verified — 173/173 checks passed)
+**Last updated:** 2026-08-31 (Frontend Phase 9 live-verified — 143/143 checks passed)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `8631a15`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `a73f44e`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
@@ -2022,14 +2022,135 @@ including the 2-member case.
 
 ---
 
-## Next: Frontend Phase 9 (Finance extension + Customer Portal) — 4 phases queued
+## Frontend Phase 9: Finance extension + Customer Portal — done this session
+
+Research-first, per the established process: read `invoicing.controller.ts` and
+`invoicing.service.ts` in full (the aging-report bucket logic, payment history,
+the lazy-create/record-payment flow already built in Phase 8), the
+`customer-portal` module in full (3 public, unauthenticated, token-gated
+endpoints - `track`, `invoice`, `job-card/:token/summary` - explicitly
+mirroring `EstimatesPublicController`, all three keyed off the SAME
+`JobCard.publicToken`, unlike Estimate's per-send `accessToken`), and the
+existing public-page/admin-gate conventions (`EstimatePublicPage.tsx`,
+`PermissionsPage.tsx`'s layout-level role check) before designing anything.
+
+**the-fool pre-mortem (Find the Failure Modes)** surfaced one real gap and
+resolved four design questions, presented to you before any code was written:
+
+1. **No `GET /invoicing` list-all endpoint existed** - only by-id, by-job-card,
+   and the B2B aging report (which only ever returns unpaid B2B invoices). A
+   naive "Invoices" tab built from the aging response alone would have
+   structurally hidden every B2C invoice and every paid/cancelled one from
+   Finance staff - a real money-tracking gap, not just a UI inconvenience. You
+   chose the recommended fix: a small new `GET /invoicing` endpoint (optional
+   `status`/`customerType` filters), same class of addition as Phase 8's own
+   `GET /delivery/:id/job-cards`.
+2. **Customer Portal route shape**: since all 3 backend endpoints share one
+   `publicToken`, three separate URLs would only ever mean deciding which one
+   link to send a customer and orphaning the other two. Resolved without
+   asking: one page, `/track/:token`, with three sections (Status / What You
+   Owe / Download Summary) - Status eager-loads for the header, the other two
+   fetch lazily only once their tab is opened.
+3. **Role-gating financial data**: Delivery's established pattern is a
+   page-level self-check that still lets the page (and its queries) mount for
+   anyone. Finance is gated at the *layout* level instead, the same pattern
+   `PermissionsPage` (Phase 7) uses for admin actions - a non-privileged user
+   never mounts a child route, so no invoicing query is ever even constructed
+   for them, not just rejected server-side.
+4. **A customer looking at "amount due" with no pay button** is a predictable
+   support complaint waiting to happen (FR-14 is manual-payment-only, no
+   online gateway). The invoice section leads with the amount, then an
+   explicit, unmissable line on how to actually pay - never left implicit.
+
+GL Postings (`GET /gl-postings`, already fully built and role-gated) was
+deliberately left out - found incidentally during research, outside this
+phase's named scope, added to the deferred-follow-ups list below rather than
+scope-creeping into it.
+
+**Backend addition (small, pre-approved via the-fool, shipped alongside):**
+`GET /invoicing` on `InvoicingController`/`InvoicingService.findAll()` -
+optional `status`/`customerType` query filters, `customerType` resolved via
+the Job Card's Appointment relation (same post-fetch-filter style as the
+existing B2B aging report, since it's two relation hops away from a plain
+column, not expressible as a simple `where`).
+
+**Built:** `invoicingApi.ts`/`invoicingTypes.ts` additions (`listInvoices`,
+`getB2bAging`, `AgingBucket`/`AgingReport`/`InvoiceListFilters` types) - the
+two read primitives Phase 8 explicitly deferred; `FinanceLayout.tsx` (the
+layout-level role gate) + `FinanceHome.tsx` (two-tab shell: Invoices, B2B
+Aging Report); `InvoicesPage.tsx` (status+customerType filterable list, a
+`?invoiceId=` deep-linkable detail panel with payment history via
+`getPayments` and a Record Payment action reusing `RecordPaymentModal`);
+`AgingReportPage.tsx` (AC-16's 4 buckets, always all 4 even when empty, each
+invoice deep-linking into the Invoices tab); `customerPortalTypes.ts`/
+`customerPortalApi.ts` (new, wraps the 3 public endpoints via the existing
+unauthenticated `publicApi` client, never the staff client);
+`CustomerPortalPage.tsx` (new public page at `/track/:token`, no login,
+friendly plain-English status labels, 404 handling for an unknown/expired
+token, a Print/Save-as-PDF button on the summary). `JobCardsPage.tsx` gained
+a "Customer tracking link" copy-link block using the Job Card's own
+`publicToken` (same copy-box UI as Estimates' existing public-link block).
+
+**Bug fixed along the way:** Phase 8's `RecordPaymentModal` defaulted
+`amountReceived` to the invoice's *full* amount even when already
+`PARTIALLY_PAID`, which would 400 server-side ("exceeds remaining balance")
+on any second partial payment made through the UI - a real latent bug this
+phase's payment-history work surfaced, not a hypothetical. Fixed by fetching
+payment history and defaulting to the true remaining balance via
+react-hook-form's `values` option, so it stays correct once the async fetch
+resolves - fixes every caller of this shared modal (Delivery's two tabs and
+the new Finance screen), not just the new code.
+
+**Test coverage** - `/test-master` invoked explicitly via the Skill tool
+(continuing the established practice), 28 new tests (**126 total**) written
+and verified clean in the isolated sandbox before touching the real device:
+`invoicingApi.test.ts`/`customerPortalApi.test.ts` (URL/param correctness for
+every new wrapper), `FinanceLayout.test.tsx` (the role gate across all 4
+`FINANCE_ROLES` plus a rejected role, confirming the child route's query
+never fires when denied), `InvoicesPage.test.tsx` (filter query params,
+payment-history rendering, Record Payment gating), `AgingReportPage.test.tsx`
+(all 4 buckets including empty ones, the cross-tab deep link),
+`CustomerPortalPage.test.tsx` (eager-vs-lazy tab fetching, 404 handling, all
+3 states of the discriminated invoice-view union), and 3 new
+`RecordPaymentModal.test.tsx` cases proving the remaining-balance fix
+(including summing multiple partial payments correctly). `npx tsc -b` and
+`npx vite build` both confirmed clean before and after.
+
+**Live-verified against your real backend** - `verify-phase9.ps1` run against
+both dev servers: **143 of 143 checks passed, 0 failed**. One small script-
+only issue turned up, not an app bug: the payment-history check's `Count`
+printed blank instead of `1` in the console output (a PowerShell quirk -
+`Invoke-RestMethod` unwraps a single-element JSON array into a bare object
+rather than a 1-item array on this PowerShell version, so `.Count` came back
+`$null`), while the actual data underneath (`$paymentsForPartial[0].amount`)
+printed correctly at `210.00` and every real assertion still passed - a
+cosmetic display gap in the script's own diagnostic line, not a hidden
+failure. Confirmed live: the new `GET /invoicing` list endpoint returning a
+true system-of-record view across every status and customer type (not just
+unpaid B2B), each filter (`status`, `customerType`, and both combined)
+excluding exactly the rows it should; the B2B aging report correctly
+bucketing a fresh unpaid B2B invoice into "0-30 days"; the customer portal's
+`getInvoiceByToken` provably creating no invoice just from being viewed (the
+same job card's invoice was still absent immediately before this script
+lazily created one itself via the staff endpoint); all three discriminated
+invoice-view states (in-warranty/not-applicable, out-of-warranty/no-invoice-
+yet, and a real invoice reflecting `PARTIALLY_PAID` and `PAID` amounts
+correctly); the 404 "unknown or expired token" path shared identically across
+all three public endpoints; and the consolidated summary view correctly
+combining job card + estimate + invoice + delivery once a job was run all the
+way through Delivery to `DELIVERED`.
+
+---
+
+## Next: Frontend Phase 10 (AMC Management) — 3 phases queued
 
 The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
-Phases 1–8 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
+Phases 1–9 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
 Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory,
-QC + Permissions admin, Delivery + Invoicing) are all built. The remaining 4 frontend
-phases are queued, in the same order the backend itself was built in, so each screen has
-an already-tested, already-stable API to build against:
+QC + Permissions admin, Delivery + Invoicing, Finance extension + Customer Portal) are
+all built. The remaining 3 frontend phases are queued, in the same order the backend
+itself was built in, so each screen has an already-tested, already-stable API to build
+against:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
@@ -2038,10 +2159,8 @@ an already-tested, already-stable API to build against:
 5. ~~Estimates (staff screens + the public customer approval link)~~ — done.
 6. ~~Workshop + Inventory~~ — done.
 7. ~~QC + Permissions admin~~ — done.
-8. ~~Delivery + Invoicing~~ — done above.
-9. Finance extension + Customer Portal (public pages) — including the B2B aging report
-   UI deliberately deferred from Phase 8 (`GET /invoicing/b2b-aging` is already wired
-   into `invoicing.controller.ts`, just has no screen yet).
+8. ~~Delivery + Invoicing~~ — done.
+9. ~~Finance extension + Customer Portal (public pages)~~ — done above.
 10. AMC Management
 11. Dismantling
 12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
@@ -2062,6 +2181,10 @@ at some point instead:
 - POD capture has no signature-pad or camera-capture component — plain file upload only
   (Frontend Phase 8's the-fool pre-mortem finding #4). Works, but a real signature pad
   would be a better driver-side experience if this becomes a mobile app.
+- GL Postings (`GET /gl-postings?sourceType=...`) — a fully-built, already role-gated,
+  read-only ledger endpoint discovered during Phase 9's research. No UI built for it
+  since it was outside Phase 9's named scope (Delivery/Invoicing/B2B aging/Customer
+  Portal); would make a reasonable small addition to a future Finance screen.
 
 ---
 

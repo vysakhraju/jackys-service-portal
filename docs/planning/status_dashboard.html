@@ -381,8 +381,8 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">8 / 12</span><span class="l">Frontend phases built (+ Delivery/Invoicing)</span></div>
-      <div class="stat"><span class="n mono">489 + 98</span><span class="l">Backend + frontend tests passing</span></div>
+      <div class="stat"><span class="n mono">9 / 12</span><span class="l">Frontend phases built (+ Finance/Portal)</span></div>
+      <div class="stat"><span class="n mono">489 + 126</span><span class="l">Backend + frontend tests passing</span></div>
       <div class="stat"><span class="n mono">d9f2121</span><span class="l">Latest commit</span></div>
     </div>
   </header>
@@ -490,6 +490,11 @@
         <div><div class="phase-name">Frontend Phase 8: Delivery + Invoicing</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 173/173 live-verified</div></div>
         <span class="chip done">Done</span>
       </div>
+      <div class="phase done">
+        <span class="phase-num mono">FE·9</span>
+        <div><div class="phase-name">Frontend Phase 9: Finance + Customer Portal</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 143/143 live-verified</div></div>
+        <span class="chip done">Done</span>
+      </div>
     </div>
   </div>
 
@@ -563,25 +568,98 @@
   </div>
 
   <div class="section">
+    <div class="section-head"><h2>Frontend Phase 9, in detail</h2></div>
+    <div class="card">
+      <h3 style="font-size:17px;">A true invoice list, the B2B aging report screen, and a public no-login customer tracking link</h3>
+      <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
+        Reads <span class="mono">invoicing.controller.ts</span> and
+        <span class="mono">invoicing.service.ts</span> in full (the aging-bucket logic,
+        payment history, the lazy-create/record-payment flow from Phase 8), and the
+        <span class="mono">customer-portal</span> module in full (3 public, unauthenticated,
+        token-gated endpoints sharing one <span class="mono">JobCard.publicToken</span>)
+        before designing anything. One real backend gap found and fixed pre-build,
+        continuing the standing the-fool-first practice, with
+        <span class="mono">test-master</span> invoked explicitly via the Skill tool again
+        this phase.
+      </p>
+
+      <div class="stat-tiles">
+        <div class="tile"><span class="n mono">1 + 4</span><span class="l">Backend gap fixed + design decisions pressure-tested</span></div>
+        <div class="tile"><span class="n mono">9 / 12</span><span class="l">Frontend phases built</span></div>
+        <div class="tile"><span class="n mono">28</span><span class="l">New automated tests (Vitest + RTL)</span></div>
+        <div class="tile"><span class="n mono">126 / 126</span><span class="l">Total frontend tests passing</span></div>
+      </div>
+
+      <h3 style="margin-top:4px;">What the pre-mortem caught before it shipped</h3>
+      <ul class="findings">
+        <li>
+          <span class="tag">01</span>
+          <div><b>No GET /invoicing list-all endpoint existed — only by-id, by-job-card, and the B2B aging report (unpaid B2B only).</b>
+          <p>A naive "Invoices" tab built from the aging response alone would have structurally hidden every B2C invoice and every paid/cancelled one from Finance staff — a real money-tracking gap, not a UI inconvenience. Fixed with a small new GET /invoicing endpoint (optional status/customerType filters), same class of addition as Phase 8's own GET /delivery/:id/job-cards.</p></div>
+        </li>
+        <li>
+          <span class="tag">02</span>
+          <div><b>Customer Portal route shape — three backend endpoints, but all keyed off one shared publicToken.</b>
+          <p>Three separate URLs would only ever mean deciding which one link to send a customer and orphaning the other two. Resolved as one page, /track/:token, with three sections — Status eager-loads for the header, "What You Owe" and "Download Summary" fetch lazily only once their tab is opened.</p></div>
+        </li>
+        <li>
+          <span class="tag">03</span>
+          <div><b>Delivery's role-gating pattern is a page-level self-check that still lets the page (and its queries) mount for anyone.</b>
+          <p>Finance data is more sensitive, so it's gated at the layout level instead — the same pattern PermissionsPage (Phase 7) uses. A non-privileged user's child route never mounts, so no invoicing query is ever even constructed for them, not just rejected server-side.</p></div>
+        </li>
+        <li>
+          <span class="tag">04</span>
+          <div><b>A customer looking at "amount due" with no pay button is a predictable support complaint waiting to happen.</b>
+          <p>FR-14 is manual-payment-only — no online gateway. The invoice section leads with the amount, then an explicit, unmissable line on how to actually pay, never left implicit.</p></div>
+        </li>
+      </ul>
+
+      <h3 style="margin-top:22px;">Built, test-covered, and live-verified — 143/143, zero failures</h3>
+      <div class="verified">
+        <span><span class="mono">tsc -b && vite build</span> compile clean, zero errors</span>
+        <span>28/28 new Vitest + React Testing Library tests passing (126/126 total)</span>
+        <span>GET /invoicing: status + customerType filters, alone and combined</span>
+        <span>B2B aging report: correct bucket assignment, all 4 buckets always present</span>
+        <span>Customer Portal: 3 discriminated invoice states + shared 404 across all 3 endpoints</span>
+        <span><span class="mono">verify-phase9.ps1</span>: 143/143 live checks passed, 0 app bugs</span>
+      </div>
+      <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
+        <span class="mono">verify-phase9.ps1</span> ran clean against both dev servers on the
+        first try. Confirmed live: the new list endpoint returning a true system-of-record
+        view across every status and customer type (not just unpaid B2B); the aging report
+        correctly bucketing a fresh unpaid B2B invoice into "0-30 days"; the customer
+        portal's invoice view provably creating no invoice just from being viewed; the
+        RecordPaymentModal bug fix (it used to default to the invoice's full amount even
+        when already partially paid); and the consolidated summary view once a job ran all
+        the way through Delivery. One cosmetic, script-only issue turned up — a payment
+        count printed blank instead of "1" in the console output, a PowerShell quirk where
+        a single-element JSON array unwraps to a bare object — the real data underneath was
+        correct and no check failed because of it.
+      </p>
+    </div>
+  </div>
+
+  <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
-      <h3 style="color:var(--success);">Standing practices, held for a fourth phase in a row</h3>
+      <h3 style="color:var(--success);">Standing practices, held for a fifth phase in a row</h3>
       <p>
         <span class="mono">the-fool</span> pre-mortem before build, then
         <span class="mono">test-master</span> coverage in an isolated sandbox before any
         file reaches your machine — both invoked explicitly via the Skill tool again this
-        phase. This phase's one real gap (above) was fixed before a single screen
-        existed. Frontend test count is now 98 (64 from Phases 1–7 + 34 new), every one
-        passing.
+        phase. This phase's one real backend gap (above) was fixed before a single screen
+        existed, and a real pre-existing bug in the shared RecordPaymentModal (stale
+        full-amount default) was found and fixed along the way. Frontend test count is now
+        126 (98 from Phases 1–8 + 28 new), every one passing.
       </p>
       <p>
         Also as before: this build session has no network path to anything running on
         your machine — only a file bridge. Each frontend phase ships with a small
         PowerShell script (<span class="mono">verify-phaseN.ps1</span>) you run yourself
         with both dev servers up; you paste back the output and anything that fails gets
-        fixed from that. <span class="mono">verify-phase8.ps1</span> came back
-        <b>173 passed, 0 failed</b> — the first phase this project where the live run found
-        no script bugs at all.
+        fixed from that. <span class="mono">verify-phase9.ps1</span> came back
+        <b>143 passed, 0 failed</b> — a clean first-try run again, with only one cosmetic,
+        script-only display quirk (not an app bug — see the detail card above).
       </p>
       <span class="resolved-tag">Live-verified this phase</span>
     </div>
@@ -590,9 +668,9 @@
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Frontend Phase 9</h3>
-        <h2>Finance extension + Customer Portal</h2>
-        <p>The standalone Invoicing screen (payment history browsing, the B2B aging report deliberately deferred from Phase 8) and the public customer portal pages — then AMC Management, Dismantling, and Reports/Dashboards, ending with the live Kanban board.</p>
+        <h3>Next up · Frontend Phase 10</h3>
+        <h2>AMC Management</h2>
+        <p>The AMC contract screens, next in the same order the backend itself was built in — then Dismantling, and Reports/Dashboards last, ending with the live Kanban board.</p>
       </div>
       <div class="go">Up next →</div>
     </div>

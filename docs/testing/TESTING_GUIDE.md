@@ -2137,6 +2137,77 @@ yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 8 section if unsur
 
 ---
 
+## 26. Frontend — Finance + Customer Portal (Frontend Phase 9)
+
+Adds the two read primitives deferred from Phase 8 - a real invoice list and the B2B
+aging report - under a new **Finance & Customer Portal** sidebar destination, plus a
+brand-new **public, no-login** page customers can be sent a link to: `/track/:token`,
+which shows repair status, what's owed, and a printable job summary from one shared
+link.
+
+**a. Get there (staff side)**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a),
+or any `ACCOUNTANT`/`FINANCE_MANAGER`/`SERVICE_HEAD` account. Click **Finance &
+Customer Portal** in the sidebar. Anyone without one of those roles who navigates there
+directly sees a plain "restricted" message and nothing else loads - no invoice data is
+ever fetched for a denied role, not just hidden after the fact.
+
+**b. Invoices tab**: every invoice, newest first, filterable by status
+(Draft/Partially Paid/Paid/Cancelled) and by customer type (B2C/B2B) - this is the
+general browse/audit view Phase 8 didn't have (it only had by-id and by-job-card
+lookups, plus the B2B-unpaid-only aging report). Click **View** on any row to open its
+detail: invoice fields, a payment-history list (method, amount, date, reference), the
+running "Paid so far" / "Remaining" totals, a **View Job Card →** link back to the
+originating job, and - if it isn't fully settled yet - a **Record Payment** button
+reusing the same payment modal from Delivery (Section 25c). You can also land straight
+on one invoice's detail via `?invoiceId=...` in the URL, same deep-linking convention
+used throughout this app.
+
+**c. B2B Aging Report tab**: the 4 standard aging buckets (0-30 / 31-60 / 61-90 / 90+
+days past due), always all 4 shown even when a bucket is empty, each listing its unpaid
+B2B invoices with the total outstanding per bucket and overall. Click any invoice in a
+bucket to jump straight to its full detail on the Invoices tab.
+
+**d. Customer tracking link**: open any Job Card (Section 21) - if it has a
+`publicToken` (all job cards do, minted at creation), you'll see a new **Customer
+tracking link** box with a copy-to-clipboard field, same UI as the existing Estimate
+public-link box. That's the link a customer would actually receive.
+
+**e. The public page itself**: paste the copied link into a browser - no sign-in, works
+in an incognito window. Three sections in one page, since all three share one token:
+   - **Status** (loads immediately): a friendly, plain-English status line (e.g. "Being
+     repaired" rather than `IN_PROGRESS`) and the job card number.
+   - **What You Owe** (loads only once you click its tab): either "covered by warranty -
+     nothing to pay" (in-warranty job), "no invoice yet" (out-of-warranty but not
+     invoiced), or the real amount due/paid - and if anything is still owed, an explicit
+     line on how to actually pay (this app is manual-payment-only; there's no online
+     payment button, deliberately, so it never looks broken or unfinished).
+   - **Download Summary** (also loads lazily): job card + estimate line items + invoice
+     + delivery details combined, with a **Print / Save as PDF** button (uses the
+     browser's own print dialog).
+   
+   Try an invalid or made-up token in the URL - you should get a plain "we couldn't
+   find that tracking link" message, and it looks identical whether the token is simply
+   wrong or a real-but-expired one (tokens don't reveal which, on purpose).
+
+**f. Things worth trying**: view the "What You Owe" tab on a fresh out-of-warranty job
+*before* any invoice has been created for it, and confirm it says "no invoice yet"
+rather than erroring - just viewing the portal never creates an invoice as a side
+effect. Record a second partial payment on an already-`PARTIALLY_PAID` invoice through
+the Finance Invoices tab (or the Delivery tabs) and confirm the payment form now
+defaults to the *remaining* balance, not the full original amount (a real bug from
+Phase 8 fixed this phase - it used to always default to the full amount, which the
+server would reject once anything had already been paid).
+
+**g. Known limitation**: Finance has no UI yet for `GET /gl-postings` - the underlying
+ledger endpoint is fully built and role-gated, but wasn't in this phase's scope; it's on
+the deferred-follow-ups list in `docs/planning/STATUS_TRACKER.md`.
+
+**h. What to report back**: same as Phases 1-8 - anything confusing, broken, or where a
+missing action looks like a bug rather than a status the backend genuinely hasn't reached
+yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 9 section if unsure).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2168,14 +2239,14 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–25) now exists at `http://localhost:5173` and covers
+The React frontend (Sections 18–26) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
 technician's Field View (Section 20), Job Cards + Warranty Override (Section 21),
 Estimates + the public customer approval link (Section 22), Workshop + Inventory
-(Section 23), QC + Permissions admin (Section 24), and Delivery + Invoicing (Section
-25) - all built and test-covered; Sections 18-25 are all live-verified against the
-real backend (Section 25's `verify-phase8.ps1` run: 173/173 checks passed, 0 failed) -
-everything else in the app
+(Section 23), QC + Permissions admin (Section 24), Delivery + Invoicing (Section 25),
+and Finance + Customer Portal (Section 26) - all built and test-covered; Sections
+18-26 are all live-verified against the real backend (Section 26's
+`verify-phase9.ps1` run: 143/143 checks passed, 0 failed) - everything else in the app
 still only has a Swagger-based way to test it until its own frontend phase ships.
 Starting with Section 22's phase, the frontend also has its own automated test suite
 (Vitest + React Testing Library, `npm test` in `frontend/`) - Phases 1-4 predate this and
