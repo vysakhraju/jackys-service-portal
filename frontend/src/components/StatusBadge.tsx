@@ -29,6 +29,14 @@ const COLOR_BY_STATUS: Record<string, string> = {
   APPROVED: 'bg-emerald-50 text-emerald-700',
   REJECTED: 'bg-red-50 text-red-600',
   EXPIRED: 'bg-slate-100 text-slate-400',
+  // Inventory reservations (src/inventory/entities/inventory-reservation.entity.ts's
+  // ReservationStatus) - APPROVED/REJECTED above are Estimate-only, reservations never
+  // reuse them so there's no collision.
+  HELD: 'bg-indigo-50 text-indigo-700',
+  PARTIALLY_RESERVED: 'bg-amber-50 text-amber-700',
+  RETURN_PENDING: 'bg-sky-50 text-sky-700',
+  RETURNED: 'bg-emerald-50 text-emerald-700',
+  CONSUMED: 'bg-slate-100 text-slate-500',
 };
 
 export function StatusBadge({ status }: { status: string }) {

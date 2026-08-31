@@ -24,6 +24,10 @@ import { FieldVisitsPage } from './pages/appointments/FieldVisitsPage';
 import { JobCardsPage } from './pages/jobCards/JobCardsPage';
 import { EstimatesPage } from './pages/estimates/EstimatesPage';
 import { EstimatePublicPage } from './pages/estimates/EstimatePublicPage';
+import { WorkshopInventoryLayout } from './pages/workshop/WorkshopInventoryLayout';
+import { WorkshopInventoryHome } from './pages/workshop/WorkshopInventoryHome';
+import { WorkshopPage } from './pages/workshop/WorkshopPage';
+import { InventoryPage } from './pages/inventory/InventoryPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -72,6 +76,12 @@ export function App() {
 
                 <Route path="/job-cards" element={<JobCardsPage />} />
                 <Route path="/estimates" element={<EstimatesPage />} />
+
+                <Route path="/workshop-inventory" element={<WorkshopInventoryLayout />}>
+                  <Route index element={<WorkshopInventoryHome />} />
+                  <Route path="workshop" element={<WorkshopPage />} />
+                  <Route path="inventory" element={<InventoryPage />} />
+                </Route>
               </Route>
             </Route>
 

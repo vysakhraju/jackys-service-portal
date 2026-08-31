@@ -11,7 +11,7 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Appointments', path: '/appointments' },
   { label: 'Job Cards', path: '/job-cards' },
   { label: 'Estimates', path: '/estimates' },
-  { label: 'Workshop & Inventory' },
+  { label: 'Workshop & Inventory', path: '/workshop-inventory' },
   { label: 'QC & Permissions' },
   { label: 'Delivery & Invoicing' },
   { label: 'Finance & Customer Portal' },

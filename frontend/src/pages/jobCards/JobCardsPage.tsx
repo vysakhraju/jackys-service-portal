@@ -24,15 +24,18 @@ import type { JobCard, JobCardSectionValue } from '../../lib/jobCardsTypes';
 // actually use it, not as a substitute for the server's own @Roles() check.
 const WARRANTY_OVERRIDE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
 
-// Statuses past which this phase's screens stop - Workshop (Phase 6), QC (Phase 7) and
-// Delivery (Phase 8) each pick up their own slice of the remaining lifecycle.
-const TERMINAL_FOR_THIS_PHASE: JobCard['status'][] = [
+// Statuses past which this phase's screens stop. WORKSHOP_ASSIGNED/IN_PROGRESS/
+// SPARE_PENDING/READY_FOR_QC now link to the Workshop screen (Frontend Phase 6) instead
+// of dead-ending here - READY_FOR_QC deliberately stays linked, not terminal, since a
+// READY_FOR_QC job can still take a top-up spare request there (workshop.service.ts's own
+// comment on requestSpare). Only QC (Phase 7) and Delivery (Phase 8) still pick up from
+// QC_PASSED/DELIVERED.
+const TERMINAL_FOR_THIS_PHASE: JobCard['status'][] = ['QC_PASSED', 'DELIVERED'];
+const WORKSHOP_LINKED_STATUSES: JobCard['status'][] = [
   'WORKSHOP_ASSIGNED',
   'IN_PROGRESS',
   'SPARE_PENDING',
   'READY_FOR_QC',
-  'QC_PASSED',
-  'DELIVERED',
 ];
 
 export function JobCardsPage() {
@@ -195,6 +198,9 @@ function JobCardDetail({
     canWarrantyOverride && jobCard.status !== 'RWR' && jobCard.status !== 'CANCELLED';
   const canCancel = !['CANCELLED', 'READY_FOR_QC', 'QC_PASSED', 'DELIVERED'].includes(jobCard.status);
   const pastThisPhase = TERMINAL_FOR_THIS_PHASE.includes(jobCard.status);
+  const showWorkshopLink =
+    WORKSHOP_LINKED_STATUSES.includes(jobCard.status) ||
+    (jobCard.status === 'SECTION_ASSIGNED' && jobCard.section === 'WORKSHOP');
 
   return (
     <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
@@ -231,7 +237,17 @@ function JobCardDetail({
       {pastThisPhase && (
         <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
           This job has moved past what this phase's screens cover ({jobCard.status.replaceAll('_', ' ')}) -
-          Workshop, QC, and Delivery each get their own screens in later phases.
+          QC and Delivery each get their own screens in later phases.
+        </p>
+      )}
+
+      {showWorkshopLink && (
+        <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+          This is a Workshop job -{' '}
+          <Link to={`/workshop-inventory/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
+            go to the Workshop screen →
+          </Link>{' '}
+          to assign a technician, track WIP, and request spares.
         </p>
       )}
 

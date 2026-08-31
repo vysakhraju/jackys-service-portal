@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-27 (Frontend Phase 5)
+**Last updated:** 2026-08-31 (Frontend Phase 6)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `7888805`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `7888805`, 15 commits ahead of origin, awaiting `git push` from your machine
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `6dc6cea` as of the start of this session)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally, awaiting `git push` from your machine (this header's own commit hash is always one commit behind the actual latest — see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -1697,20 +1697,113 @@ design held up exactly as the-fool's pre-mortem and the pre-build reading of
 
 ---
 
-## Next: Frontend Phase 6 (Workshop + Inventory) — 7 phases queued
+## Frontend Phase 6: Workshop + Inventory
+
+Covers `/workshop-inventory/workshop` (staff, per-Job-Card: assign technician, start WIP,
+request spares, mark complete) and `/workshop-inventory/inventory` (staff, shared across
+jobs: GRN, stock lookup, the stale-reservations queue, review/return). This is the
+richest edge-case surface built so far — partial reservations, a 24h/48h staleness
+clock, a rework-approval gate keyed on a prior QC rejection, and an admin-assignable
+permission grant (`QC_APPROVAL`) that even `SUPER_ADMIN` needs explicitly.
+
+**Design review before writing code — the-fool pre-mortem** (per Standing Practices —
+run before building, on tricky design decisions, not after): five failure modes were
+found by reading `workshop.service.ts`/`inventory.service.ts` in full before writing any
+screen, all fixed in the initial build rather than patched in afterward:
+
+1. **`READY_FOR_QC` isn't actually past this phase.** `workshop.service.ts`'s own
+   comment confirms a `READY_FOR_QC` job can still take a top-up `request-spare` call to
+   resolve the exact stock shortfall blocking QC approval. The Job Cards page's
+   `TERMINAL_FOR_THIS_PHASE` list previously treated `READY_FOR_QC` as "past this
+   phase" with no link anywhere — left as-is, staff would have had no way to resolve a
+   QC-blocking shortfall from the UI at all. Fixed: only `QC_PASSED`/`DELIVERED` are
+   "past this phase" now; `WORKSHOP_ASSIGNED` through `READY_FOR_QC` (and
+   `SECTION_ASSIGNED`+`WORKSHOP`) link to the Workshop screen, and `READY_FOR_QC` still
+   shows the Request Spare form there.
+2. **A fresh stock shortfall is invisible.** There is no "list this job's active
+   reservations" endpoint — only `GET /workshop/:jobCardId`, which returns *stale* (24h+)
+   reservations, not all of them. A `PARTIALLY_RESERVED` reservation from five minutes
+   ago shows nowhere except the direct response of the `request-spare` call that created
+   it. Fixed: that response is shown inline for the session (with a "not needed — request
+   return" shortcut), and the screen says plainly that "no stale reservations" does not
+   mean "nothing is short" — a documented known gap, not something faked with an
+   invented endpoint.
+3. **The rework-approver picker is admin-only server-side.** `GET
+   /permissions?type=REWORK_APPROVAL` is restricted to `SUPER_ADMIN`/`SERVICE_HEAD`, so a
+   `TECHNICIAN_WORKSHOP`/`TECHNICAL_TEAM_LEADER` submitting a same-part rework
+   re-request has no way to browse valid approvers. Fixed: the rework fields are a plain
+   paste-the-user-id input (same "no list-users endpoint" convention Appointments
+   already established) plus the verbal-override fallback, both explained inline; the
+   fields only appear once `qcRejectionCount > 0` hints a rework re-request might apply.
+4. **Ownership 403s need pre-emptive UI gating.** `startWip`/`requestSpare`/`complete`
+   all hard-block a non-privileged `TECHNICIAN_WORKSHOP` caller who isn't
+   `jobCard.assignedWorkshopTechnicianId` (`WorkshopService.assertOwnership`). Fixed: the
+   Workshop screen gates every action the same way `canWarrantyOverride` already does —
+   `useAuth()` + that comparison — so a technician opening someone else's job sees why,
+   not a raw 403.
+5. **No workshop "queue".** Like Estimates/Job Cards, navigation is entirely id-driven
+   except Stale Reservations (the one real list endpoint in this module). Documented
+   plainly on both screens so it isn't mistaken for a bug.
+
+**Other decisions made before writing code:**
+1. **Two tabs under one nav entry**, mirroring `AppointmentsLayout`'s
+   Schedule/Field-Visits split — "Workshop" (per-Job-Card actions) and "Inventory &
+   Stock" (GRN/stock/stale-reservations, shared across jobs) are different enough
+   audiences to warrant separate screens, but small enough each to not need their own
+   nav row.
+2. **Stock lookup distinguishes "never received" from a real zero.** `GET
+   /inventory/stock/:sparePartId` synthesizes a zero-quantity object (no `id`) when no
+   stock row exists yet for that part/location — the frontend surfaces that distinction
+   explicitly instead of showing an indistinguishable "0".
+3. **A reservation approved for reallocation is handed off inline, not lost.** Approving
+   a stale reservation moves it to `RETURN_PENDING`, and there's no list of
+   `RETURN_PENDING` reservations anywhere — so the review action's own response is shown
+   immediately with a note that an Inventory Clerk still needs to confirm the physical
+   return, and the Confirm Return form (paste the reservation id) is right there on the
+   same Inventory tab.
+
+**Test coverage — test-master, isolated sandbox first (same pattern as Phase 5):** 25
+new tests across 4 files, verified passing in a throwaway sandbox copy of `frontend/src`
+before any file reached the real project — `workshopApi.test.ts` / `inventoryApi.test.ts`
+(every wrapper hits the right endpoint), `WorkshopPage.test.tsx` (one test per pre-mortem
+finding: ownership gating for a non-assigned technician vs. the assigned technician vs. a
+privileged role; `READY_FOR_QC` still showing Request Spare and not Complete; the rework
+hint appearing only when `qcRejectionCount > 0`; the stale-reservation visibility note),
+`InventoryPage.test.tsx` (GRN/Confirm-Return/Review role gating; the "never received via
+GRN" stock message; the review → RETURN_PENDING handoff message). All 45 tests (20 from
+Phase 5 + 25 new) pass; `npx tsc -b` and `npm run build` both compile clean.
+
+**Built**: `src/lib/workshopTypes.ts` + `src/lib/workshopApi.ts`, `src/lib/
+inventoryTypes.ts` + `src/lib/inventoryApi.ts` (one function per real endpoint each),
+`src/pages/workshop/WorkshopInventoryLayout.tsx` + `WorkshopInventoryHome.tsx` (the
+two-tab shell), `src/pages/workshop/WorkshopPage.tsx`, `src/pages/inventory/
+InventoryPage.tsx`. `StatusBadge` extended with `ReservationStatus` colors
+(`HELD`/`PARTIALLY_RESERVED`/`RETURN_PENDING`/`RETURNED`/`CONSUMED`).
+
+**Wired in**: `/workshop-inventory` (layout) with `/workshop-inventory/workshop` and
+`/workshop-inventory/inventory` routes added to `App.tsx`; sidebar nav item flips from
+"soon" to a real link; Dashboard's build-progress list flips "Workshop & Inventory" to
+Done; Job Cards' phase-boundary logic reworked per pre-mortem finding #1 above, with a
+new "Go to the Workshop screen →" link for any Workshop-section job from
+`SECTION_ASSIGNED` through `READY_FOR_QC`.
+
+---
+
+## Next: Frontend Phase 7 (QC + Permissions admin) — 6 phases queued
 
 The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
-Phases 1 (Auth), 2 (Master Data), 3 (Appointment Scheduling + Technician Field View), 4
-(Job Cards + Warranty Override), and 5 (Estimates + Public Approval Link) are all built.
-The remaining 7 frontend phases are queued, in the same order the backend itself was
-built in, so each screen has an already-tested, already-stable API to build against:
+Phases 1–6 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
+Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory) are
+all built. The remaining 6 frontend phases are queued, in the same order the backend
+itself was built in, so each screen has an already-tested, already-stable API to build
+against:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
 3. ~~Appointment Scheduling + Technician field view~~ — done.
 4. ~~Job Cards + Warranty Override~~ — done.
-5. ~~Estimates (staff screens + the public customer approval link)~~ — done above.
-6. Workshop + Inventory
+5. ~~Estimates (staff screens + the public customer approval link)~~ — done.
+6. ~~Workshop + Inventory~~ — done above.
 7. QC + Permissions admin
 8. Delivery + Invoicing
 9. Finance extension + Customer Portal (public pages)
@@ -1719,11 +1812,18 @@ built in, so each screen has an already-tested, already-stable API to build agai
 12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
     easiest to get right once the simpler ones establish the patterns)
 
+Frontend Phase 7 already has real backend endpoints to build against
+(`POST /job-cards/:id/qc/approve`, `POST /job-cards/:id/qc/reject`, and the full
+`PermissionsController` — grant/revoke/list-by-user/list-by-type) — this phase's own
+`verify-phase6.ps1` already exercised `qc/reject` and a permission grant directly to make
+the rework-gate tests meaningful, so Phase 7's backend contract is not new information,
+just not yet given its own screens.
+
 Known, explicitly-deferred follow-ups, unrelated to the frontend build, if you want them
 at some point instead:
 
 - BRD 18.2 Finance Dashboard, 18.3 Quality/Product Dashboard, 18.4 Operational Reports
-  (see Phase 11 above) — read-only reports over data that already exists, low risk.
+  (see backend Phase 11) — read-only reports over data that already exists, low risk.
 - Warranty Claims — unscoped beyond a mention in the implementation plan; would need its
   own requirements pass before design.
 - The genuine push-on-mutation WebSocket architecture (vs. the current poll-and-diff

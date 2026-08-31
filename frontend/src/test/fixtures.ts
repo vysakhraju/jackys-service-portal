@@ -4,6 +4,8 @@
 import type { Appointment } from '../lib/appointmentsTypes';
 import type { JobCard } from '../lib/jobCardsTypes';
 import type { Estimate } from '../lib/estimatesTypes';
+import type { InventoryReservationWithAge } from '../lib/inventoryTypes';
+import type { WorkshopState } from '../lib/workshopTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -85,6 +87,49 @@ export function makeJobCard(overrides: Partial<JobCard> = {}): JobCard {
     createdById: 'user-1',
     createdAt: '2026-08-01T08:00:00Z',
     updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeReservation(overrides: Partial<InventoryReservationWithAge> = {}): InventoryReservationWithAge {
+  return {
+    id: 'res-1',
+    sparePartId: 'sp-1',
+    jobCardId: 'jc-1',
+    custodian: undefined,
+    custodianUserId: 'tech-1',
+    quantityRequested: 2,
+    quantityReserved: 2,
+    status: 'HELD',
+    requestedBy: undefined,
+    requestedByUserId: 'tech-1',
+    requestedAt: '2026-08-01T08:00:00Z',
+    lastReviewedAt: null,
+    reviewedBy: null,
+    reviewedByUserId: null,
+    reviewDecision: null,
+    notes: null,
+    quantityReturned: null,
+    returnConfirmedByUserId: null,
+    returnConfirmedAt: null,
+    consumedAt: null,
+    consumedBy: null,
+    consumedByUserId: null,
+    reworkApprovedByUserId: null,
+    reworkApprovedBy: null,
+    reworkVerbalOverrideBy: null,
+    reworkVerbalOverrideNotes: null,
+    updatedAt: '2026-08-01T08:00:00Z',
+    ageHours: 30,
+    custodianActive: true,
+    ...overrides,
+  };
+}
+
+export function makeWorkshopState(overrides: Partial<WorkshopState> = {}): WorkshopState {
+  return {
+    jobCard: makeJobCard({ status: 'IN_PROGRESS', section: 'WORKSHOP', assignedWorkshopTechnicianId: 'tech-1' }),
+    staleReservations: [],
     ...overrides,
   };
 }

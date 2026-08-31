@@ -1948,6 +1948,70 @@ phase's automated tests use; it doesn't affect the app you run in the browser, o
 
 ---
 
+## 23. Frontend — Workshop + Inventory (Frontend Phase 6)
+
+Adds a **Workshop & Inventory** section to the sidebar nav (staff only — nothing here is
+customer-facing), with two tabs: **Workshop** (per-Job-Card: assign a technician, start
+WIP, request spares, mark complete) and **Inventory & Stock** (GRN, stock lookup, the
+stale-reservations queue, review/return). This is the richest edge-case screen built so
+far — partial reservations, a staleness clock, and a rework-approval gate all live here.
+
+**a. Get there (staff side)**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a).
+The quickest path is from a Job Card: go to **Job Cards** (Section 21), look up a
+`SN_VALIDATED` job, click **Workshop** in the "Assign section" step, and once you assign
+`WORKSHOP` you'll see a **"Go to the Workshop screen →"** link right there. Alternatively,
+click **Workshop & Inventory** in the sidebar and paste the Job Card's id yourself.
+
+**b. Assign a technician, start WIP**: on `SECTION_ASSIGNED` (Workshop section), paste a
+technician's user id (same "no list-technicians endpoint" convention as Appointments) and
+**Assign**. Once `WORKSHOP_ASSIGNED`, click **Start WIP** to move to `IN_PROGRESS`.
+
+**c. Request a spare part**: pick a spare part (create one under Master Data → Spare
+Parts first if you haven't, and link it to a model — GRN below is blocked otherwise, AC-17)
+and a quantity, then **Request Spare**. Watch the result panel: if stock only partially
+covers the request, you'll see `PARTIALLY_RESERVED` and the job moves to `SPARE_PENDING`
+— **Complete** is blocked while this is true. A follow-up request for the shortfall (after
+receiving more stock via GRN on the Inventory tab) that's fully covered moves the job back
+to `IN_PROGRESS` automatically. Try the **"Not needed — request return"** shortcut on a
+`HELD` result too.
+
+**d. Complete workshop work**: once `IN_PROGRESS` with nothing outstanding, **Complete →
+Ready for QC** moves the job to `READY_FOR_QC`. Note that the Request Spare form is still
+there on a `READY_FOR_QC` job — try a top-up request and confirm the job stays
+`READY_FOR_QC` (this is deliberate: QC approval itself re-checks stock and can be blocked
+on a shortfall the same way `complete()` can, per `workshop.service.ts`'s own comment —
+QC's own screens are Frontend Phase 7).
+
+**e. Inventory tab — GRN, stock, stale reservations, returns**: **Goods Received Note**
+receives new stock for a spare part (try an unlinked one to see the AC-17 block). **Stock
+lookup** shows on-hand/reserved/available for Main Store or Damage Location — a part
+that's never been received shows a distinct "no stock row exists yet" note instead of a
+plain zero. **Stale reservations** lists everything idle 24h+ (nothing will appear here
+for a reservation you *just* made — that's the documented visibility gap, not a bug; see
+the note on both screens). If something is listed, try **Approve reallocation** (moves it
+to `RETURN_PENDING`) or **Reject** (snoozes another 24h). After an approval, use **Confirm
+a physical return** (paste the reservation id shown) to complete the loop and watch stock
+move back onto Main Store.
+
+**f. The rework re-request gate — UI-visible but not yet UI-triggerable**: the Request
+Spare form shows extra sign-off fields (approver id or verbal override) whenever
+`qcRejectionCount > 0` on the Job Card, but nothing in this phase's screens can actually
+*cause* a QC rejection yet — QC approve/reject get their own screens in Frontend Phase 7.
+`verify-phase6.ps1` (below) exercises the real gate directly against the backend so it
+isn't untested, but a fully click-through demonstration of it has to wait for Phase 7.
+
+**g. Things worth trying**: request more of a spare part than is on hand and confirm you
+get a clear `PARTIALLY_RESERVED` result, not a silent short-fill; try completing a
+`SPARE_PENDING` job and confirm you get a specific, readable block rather than a raw 400;
+open the Workshop screen as a technician not assigned to that job (if you have a second
+technician account) and confirm you see the ownership notice instead of broken buttons.
+
+**h. What to report back**: same as Phases 1–5 — anything confusing, broken, or where a
+missing action looks like a bug rather than a status the backend genuinely hasn't reached
+yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 6 section if unsure).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -1979,15 +2043,15 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–22) now exists at `http://localhost:5173` and covers
+The React frontend (Sections 18–23) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
-technician's Field View (Section 20), Job Cards + Warranty Override (Section 21), and
-Estimates + the public customer approval link (Section 22) - all live-verified against
-the real backend - everything else in the app still only has a Swagger-based way to
-test it until its own frontend phase ships. Starting with Section 22's phase, the
-frontend also has its own automated test suite (Vitest + React Testing Library,
-`npm test` in `frontend/`) - Phases 1-4 predate this and are covered only by the manual
-walkthroughs above.
+technician's Field View (Section 20), Job Cards + Warranty Override (Section 21),
+Estimates + the public customer approval link (Section 22), and Workshop + Inventory
+(Section 23) - all live-verified against the real backend - everything else in the app
+still only has a Swagger-based way to test it until its own frontend phase ships.
+Starting with Section 22's phase, the frontend also has its own automated test suite
+(Vitest + React Testing Library, `npm test` in `frontend/`) - Phases 1-4 predate this and
+are covered only by the manual walkthroughs above.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

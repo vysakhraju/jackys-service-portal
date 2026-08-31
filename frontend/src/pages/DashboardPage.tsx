@@ -6,7 +6,7 @@ const FRONTEND_PHASES = [
   { name: 'Appointment Scheduling', status: 'done' as const },
   { name: 'Job Cards & Warranty Override', status: 'done' as const },
   { name: 'Estimates (approval flow)', status: 'done' as const },
-  { name: 'Workshop & Inventory', status: 'planned' as const },
+  { name: 'Workshop & Inventory', status: 'done' as const },
   { name: 'QC & Permissions', status: 'planned' as const },
   { name: 'Delivery & Invoicing', status: 'planned' as const },
   { name: 'Finance & Customer Portal', status: 'planned' as const },
