@@ -2173,8 +2173,9 @@ sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
 technician's Field View (Section 20), Job Cards + Warranty Override (Section 21),
 Estimates + the public customer approval link (Section 22), Workshop + Inventory
 (Section 23), QC + Permissions admin (Section 24), and Delivery + Invoicing (Section
-25) - all built and test-covered; Sections 18-24 are live-verified against the real
-backend, Section 25 is awaiting its live-verification run - everything else in the app
+25) - all built and test-covered; Sections 18-25 are all live-verified against the
+real backend (Section 25's `verify-phase8.ps1` run: 173/173 checks passed, 0 failed) -
+everything else in the app
 still only has a Swagger-based way to test it until its own frontend phase ships.
 Starting with Section 22's phase, the frontend also has its own automated test suite
 (Vitest + React Testing Library, `npm test` in `frontend/`) - Phases 1-4 predate this and

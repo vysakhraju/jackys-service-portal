@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-31 (Frontend Phase 8 built, tests passing, awaiting live verification)
+**Last updated:** 2026-08-31 (Frontend Phase 8 live-verified — 173/173 checks passed)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `8631a15`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `a73f44e`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
@@ -2003,10 +2003,22 @@ summaries), `RecordPaymentModal.test.tsx` (both fetch paths — by job card
 vs. by known invoice id — and a successful payment). `npx tsc -b` and
 `npx vite build` both confirmed clean before and after.
 
-**Not yet live-verified against your real backend** — `verify-phase8.ps1`
-is ready (idempotent: every created value with a real uniqueness constraint
-is suffixed, per this session's earlier verify-phase6/7.ps1 fix). Run it with
-both dev servers up and paste back the output.
+**Live-verified against your real backend** — `verify-phase8.ps1` run against
+both dev servers: **173 of 173 checks passed, 0 failed**, no script bugs found
+this time (Phase 6 and Phase 7's first live runs each turned up one real script
+bug; this one didn't). Confirmed live: the whole-batch 409 blocker on `POST
+/delivery` naming the exact unpaid job cards and amounts owed (FR-12/AC-11);
+the FR-06 customer-approval gate correctly blocking `assign-section` on an
+unapproved OOW job; the decimal-string `Invoice.amount`/`subtotal`/`vatAmount`
+values (Postgres `decimal` columns serialize as JSON strings) posting
+correctly once cast to numbers; a mixed IW+OOW batch sharing one DLV#
+(FR-11/AC-10); the B2B Credit guard rejecting a B2C job with 403 and accepting
+a real B2B job; the partial-payment lifecycle (DRAFT → PARTIALLY_PAID → PAID
+across multiple `Payment` rows); the defensive re-check at POD-capture time
+blocking delivery if payment lapsed after the delivery was created; dispatch
+and cancel state transitions and their guards; and the new `GET
+/delivery/:id/job-cards` endpoint returning the correct batch members,
+including the 2-member case.
 
 ---
 
