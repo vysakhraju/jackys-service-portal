@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-31 (Frontend Phase 7)
+**Last updated:** 2026-08-31 (Frontend Phase 7, live-verified)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `a73f44e`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `a73f44e`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
@@ -1877,16 +1877,31 @@ Workshop's `READY_FOR_QC` note now links forward to the QC screen, and its own
 phase-boundary note for a `QC_PASSED` job links back to QC to see the approval that got
 it there.
 
-**Live-verified against your real running backend** (`verify-phase7.ps1`): exercises
-`qc/approve`'s happy path (stock moves Main Store → Damage Location on approval), the
-masked per-part stock shortfall (a `PARTIALLY_RESERVED` reservation on one spare part
-whose job-level status gets flipped back to `IN_PROGRESS` by an unrelated, fully-held
-request for a *different* part on the same job - exactly the gap pre-mortem finding #2
-covers - followed by confirming `qc/approve` still 409s with a blocker naming the short
-part, then resolving it and re-approving successfully), `qc/reject` incrementing
-`qcRejectionCount`, and the full grant/duplicate-grant(409)/list-by-type/list-by-user/
-revoke/revoke-again(404) permissions lifecycle, plus a non-admin 403 on the grant
-endpoint. *(Fill in with the pasted PASS/FAIL count once you've run it.)*
+**Live-verified against your real running backend** (`verify-phase7.ps1` — **79/79
+checks passed** on the first run of the fixed script): `qc/approve`'s happy path
+consumed exactly the reserved stock (5 → 2 on Main Store, 3 landed on Damage Location);
+the masked per-part shortfall scenario worked exactly as designed — a `PARTIALLY_RESERVED`
+reservation on spare part C (2 of 5 reserved) was masked at the job level by a later,
+fully-held request for an unrelated spare part D, flipping the Job Card back to
+`IN_PROGRESS` and letting `complete()` succeed into `READY_FOR_QC` - and `qc/approve`
+still caught it, 409ing with exactly one blocker naming C's reservation (2/5), exactly
+the gap pre-mortem finding #2 is about; after a GRN top-up and a follow-up request
+resolved C, `qc/approve` succeeded on the retry. `qc/reject` correctly incremented
+`qcRejectionCount` to 1 and rejected a too-short reason with 400. The full permissions
+lifecycle held up: granting `REWORK_APPROVAL` to the technician succeeded, granting the
+same active permission again correctly 409'd, `GET /permissions?type=REWORK_APPROVAL`
+correctly listed the technician among current holders, the full grant-history lookup
+returned records, revoking succeeded, revoking again with nothing active correctly
+404'd, and a non-admin role calling the admin-only grant endpoint correctly got 403.
+
+One script bug found along the way, not an app bug: rerunning `verify-phase6.ps1` a
+second time turned up a real 409 on "Create fault/symptom" (49/50) - that script hardcoded
+its fault/symptom codes instead of suffixing them like every other piece of test data it
+creates, so a second run collided with the first run's still-present fault/symptom (fault
+and symptom codes are genuinely unique in the backend - working as designed). Both
+`verify-phase6.ps1` and `verify-phase7.ps1` (which had the identical latent bug, just not
+yet triggered by a rerun) now suffix their fault/symptom codes and are idempotent across
+reruns again (commit `00ca11e`).
 
 ---
 
