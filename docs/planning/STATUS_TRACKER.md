@@ -1787,6 +1787,28 @@ Done; Job Cards' phase-boundary logic reworked per pre-mortem finding #1 above, 
 new "Go to the Workshop screen →" link for any Workshop-section job from
 `SECTION_ASSIGNED` through `READY_FOR_QC`.
 
+**Live-verified against your real running backend** (`verify-phase6.ps1` — 50/50 checks
+passed, no fixes needed): the full reservation lifecycle held up exactly as designed —
+2 of 5 available reserved as `HELD`, then 10 of the remaining 3 correctly came back
+`PARTIALLY_RESERVED` and flipped the Job Card to `SPARE_PENDING` → `complete()` correctly
+`400`'d while `SPARE_PENDING` → a GRN top-up plus a fresh, fully-covered request correctly
+resumed the Job Card to `IN_PROGRESS` → `complete()` moved it to `READY_FOR_QC` → a
+top-up request there succeeded without reverting the status (workshop.service.ts's
+documented `READY_FOR_QC` exception, holding under real load). AC-17 correctly blocked
+GRN for an unlinked spare part. Reservation review → `RETURN_PENDING` → confirmed return
+correctly incremented stock back onto Main Store (15 on hand / 8 reserved before any
+returns, matching 2+3+2+1 exactly); a second `requestReturn` on an already-`RETURNED`
+reservation correctly `400`'d, as did over-returning more than was ever reserved. The
+rework gate — the hardest edge case in this phase — held up end-to-end: after a real
+`qc/reject` call (using the QC_APPROVAL grant this script self-grants) bumped
+`qcRejectionCount` to 1, a same-part re-request with no approver or verbal override
+correctly `400`'d, naming the requester as their own approver correctly `400`'d, and the
+verbal-override path succeeded with `reworkVerbalOverrideBy` set on the resulting
+reservation. One cosmetic script-only quirk, not an app bug: the stale-reservations count
+printed blank instead of `0` — Windows PowerShell 5.1's `ConvertFrom-Json` returns `$null`
+for an empty JSON array rather than an empty array, so `$null.Count` prints nothing; the
+check itself (`GET /inventory/reservations/stale` returning 200) still passed.
+
 ---
 
 ## Next: Frontend Phase 7 (QC + Permissions admin) — 6 phases queued
