@@ -160,10 +160,15 @@ Step "Create warranty master entry covering every serial this script uses (POST 
     }
 } | Out-Null
 
+# Suffixed like every other test-data field in this script (fault/symptom codes are
+# unique) - a hardcoded code here would 409 on a rerun, same fix applied to
+# verify-phase6.ps1 after its own rerun hit exactly that.
+$faultCode = "F-PH7-$suffix"
+$symptomCode = "S-PH7-$suffix"
 Step "Create fault/symptom (POST /master-data/fault-symptoms)" {
     Invoke-Api POST "/master-data/fault-symptoms" $adminToken @{
-        faultCode = "F-PH7"; faultDescription = "Phase 7 test fault"
-        symptomCode = "S-PH7"; symptomDescription = "Phase 7 test symptom"
+        faultCode = $faultCode; faultDescription = "Phase 7 test fault"
+        symptomCode = $symptomCode; symptomDescription = "Phase 7 test symptom"
         category = "WASHING_MACHINE"
     }
 } | Out-Null
@@ -193,7 +198,7 @@ Step "GRN: 4 units of D" { Invoke-Api POST "/inventory/grn" $adminToken @{ spare
 
 # 3. Happy path: one spare part, fully reserved, QC approves cleanly and stock moves
 # Main Store -> Damage Location.
-$jc1 = New-WorkshopJobCard $serviceCentreId "F-PH7" "S-PH7" "SN800001" "happy"
+$jc1 = New-WorkshopJobCard $serviceCentreId $faultCode $symptomCode "SN800001" "happy"
 $res1 = Step "[happy] Request 3 of 5 available units of A - expect HELD" { Invoke-Api POST "/workshop/$jc1/request-spare" $adminToken @{ sparePartId = $sparePartAId; quantity = 3 } }
 Write-Host "status=$($res1.status) (expect HELD)"
 $completed1 = Step "[happy] Complete workshop work (POST /workshop/:jobCardId/complete)" { Invoke-Api POST "/workshop/$jc1/complete" $adminToken $null }
@@ -215,7 +220,7 @@ Expect-StatusCode "[happy] A second qc/approve on an already-QC_PASSED job is re
 # request afterward flips the job back to IN_PROGRESS at the JOB level even though C is
 # still short at the PART level - the exact masked-shortfall gap the-fool pre-mortem
 # finding #2 is about. qc/approve must still catch it per-part.
-$jc2 = New-WorkshopJobCard $serviceCentreId "F-PH7" "S-PH7" "SN800002" "shortfall"
+$jc2 = New-WorkshopJobCard $serviceCentreId $faultCode $symptomCode "SN800002" "shortfall"
 $res2a = Step "[shortfall] Request 5 of only 2 available units of C - expect PARTIALLY_RESERVED" { Invoke-Api POST "/workshop/$jc2/request-spare" $adminToken @{ sparePartId = $sparePartCId; quantity = 5 } }
 Write-Host "status=$($res2a.status) quantityReserved=$($res2a.quantityReserved)/$($res2a.quantityRequested) (expect PARTIALLY_RESERVED 2/5)"
 $res2b = Step "[shortfall] Request 4 of 4 available units of D - expect HELD, masks the job-level status" { Invoke-Api POST "/workshop/$jc2/request-spare" $adminToken @{ sparePartId = $sparePartDId; quantity = 4 } }
@@ -249,7 +254,7 @@ $approved2 = Step "[shortfall] QC approve now succeeds once every part's latest 
 Write-Host "status=$($approved2.status) (expect QC_PASSED)"
 
 # 5. Reject path: no spares needed, straight IN_PROGRESS -> READY_FOR_QC -> reject.
-$jc3 = New-WorkshopJobCard $serviceCentreId "F-PH7" "S-PH7" "SN800003" "reject"
+$jc3 = New-WorkshopJobCard $serviceCentreId $faultCode $symptomCode "SN800003" "reject"
 $completed3 = Step "[reject] Complete workshop work with no spares requested" { Invoke-Api POST "/workshop/$jc3/complete" $adminToken $null }
 Write-Host "status=$($completed3.status) (expect READY_FOR_QC)"
 Expect-StatusCode "[reject] qc/reject with a too-short reason is rejected (expect 400)" 400 {
