@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-31 (Frontend Phase 7, live-verified)
+**Last updated:** 2026-08-31 (Frontend Phase 7, live-verified, reruns confirmed clean)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `a73f44e`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `a73f44e`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
@@ -1901,7 +1901,8 @@ creates, so a second run collided with the first run's still-present fault/sympt
 and symptom codes are genuinely unique in the backend - working as designed). Both
 `verify-phase6.ps1` and `verify-phase7.ps1` (which had the identical latent bug, just not
 yet triggered by a rerun) now suffix their fault/symptom codes and are idempotent across
-reruns again (commit `00ca11e`).
+reruns again (commit `00ca11e`) - confirmed with a second rerun of both, back-to-back:
+**`verify-phase6.ps1` 50/50**, **`verify-phase7.ps1` 79/79**, both clean.
 
 ---
 
