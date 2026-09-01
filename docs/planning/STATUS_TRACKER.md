@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Frontend Phase 11 — Dismantling — built, tested (227/227), awaiting live verification; Phase 10 remains live-verified — 66/66 checks passed)
+**Last updated:** 2026-09-01 (Frontend Phase 11 — Dismantling — live-verified, 51/51 checks passed)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `f0a2d39`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `f0a2d39`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `cea653c`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `cea653c`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -2286,7 +2286,7 @@ excluding them the moment an ACTIVE AMC contract exists on that same phone numbe
 
 ---
 
-## Frontend Phase 11: Dismantling — done this session
+## Frontend Phase 11: Dismantling — done, live-verified (51/51)
 
 Research-first, per the established process: read the entity, controller, service
 (288 lines, including the transactional `priceAndPost()` core), all 5 DTOs, the
@@ -2386,8 +2386,32 @@ successful post with inventory + GL) → cancel (allowed pre-verification, block
 VERIFIED) → the status-filtered list, serial lookup, and single-record GET. Needs a second
 seeded test account (any `VERIFY_ROLES` role, e.g. `TECHNICAL_TEAM_LEADER`) beyond the
 existing technician one, so AC-31's three-distinct-actor rule can be exercised for real —
-the script's header comment has the one-line `seed:technician` command for it. **Live
-verification pending** — run `verify-phase11.ps1` and paste the output back.
+the script's header comment has the one-line `seed:technician` command for it.
+
+**Live-verified — 51/51 passed, 0 failed**, after two script fixes (not app fixes — see
+below). First run: 34/39 passed. Two real findings, both in the *script*, not the app:
+(1) `link-model`'s `modelId` field expects the `SparePartModel` row's own UUID, not its
+human-facing model code — the script was passing the wrong one, so linking the recovered
+spare part to a model failed with a 400, which cascaded into the real price-and-post
+assertion also failing (5 total failures from this one root cause). (2) Three tests meant
+to prove AC-31's same-actor rejection (self-verify, harvester-as-pricer, verifier-as-pricer)
+used a technician/supervisor who don't hold the `VERIFY_ROLES`/`MANAGER_ROLES` role needed
+to even reach that endpoint — so the RolesGuard correctly rejected them with 403 before the
+service's AC-31 check ever ran, and the test's "expect 400" assertion was simply wrong for
+those actors. Fixed by keeping a plain RBAC check (now correctly expecting 403) for those
+same calls, and adding three new records (E, F, G) where the repeat actor genuinely holds
+the required role (supervisor self-verifying their own harvest; admin as both harvester and
+pricer with a different verifier; admin as both verifier and pricer with a different
+harvester) — these are the tests that actually exercise AC-31's service-layer 400, and all
+three passed. Confirmed live: eligibility computed correctly across all 4 harvest scenarios
+(matrix match + GOOD_WORKING = eligible; CONSUMABLE, unmatched code, and DAMAGED condition
+all correctly ineligible); one-shot harvest enforcement; AC-31 blocking self-verify and
+self-price-and-post at the service layer (not just RBAC); the fail-fast price-and-post
+validation (unlogged code, ineligible component, over-quantity all rejected before any
+transaction opens); a real successful post — inventory incremented, GL posted,
+`totalRecoveredValue` computed correctly (170 = 2 × 85); POSTED is terminal (re-post
+rejected); cancel allowed at `PENDING_HARVEST`/`COMPONENTS_LOGGED`, blocked once `VERIFIED`;
+and the status filter, serial lookup, and single-record GET.
 
 ---
 
@@ -2411,7 +2435,7 @@ already-stable API to build against:
 8. ~~Delivery + Invoicing~~ — done.
 9. ~~Finance extension + Customer Portal (public pages)~~ — done.
 10. ~~AMC Management~~ — done above.
-11. ~~Dismantling~~ — done above (built this session; live verification pending).
+11. ~~Dismantling~~ — done above, live-verified (51/51 checks passed).
 12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
     easiest to get right once the simpler ones establish the patterns)
 

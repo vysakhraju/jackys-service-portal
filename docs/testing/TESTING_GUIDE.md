@@ -2359,6 +2359,9 @@ yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 11 section if unsu
 known, deliberate backend limitation, unreachable from this UI and not fixed: see that same
 STATUS_TRACKER section's note on a latent duplicate-conversion-line edge case in
 `priceAndPost()` - the built modal can never construct a request that triggers it.
+`verify-phase11.ps1` has already run clean against the real backend (51/51 checks passed,
+0 failed), including AC-31's same-actor rejections at the service layer, so this section is
+about manual/UI exploration, not first-pass API verification.
 
 ---
 
@@ -2400,15 +2403,14 @@ Estimates + the public customer approval link (Section 22), Workshop + Inventory
 (Section 23), QC + Permissions admin (Section 24), Delivery + Invoicing (Section 25),
 Finance + Customer Portal (Section 26), AMC Management (Section 27), and Dismantling
 (Section 28) - all built and test-covered (227/227 automated frontend tests as of Section
-28, run isolated ahead of the device merge, on top of the earlier 246); Sections 18-27
+28, run isolated ahead of the device merge, on top of the earlier 246); Sections 18-28
 are all live-verified against the real backend (Section 26's `verify-phase9.ps1` run:
 143/143 checks passed, 0 failed; Section 27's `verify-phase10.ps1` run: 66/66 checks
-passed, 0 failed). Section 28 (Dismantling) is built and test-covered but **not yet
-live-verified** - `verify-phase11.ps1` is ready to run against the real backend, pending
-results. Everything else in the app still only has a Swagger-based way to test it until
-its own frontend phase ships. Starting with Section 22's phase, the frontend also has its
-own automated test suite (Vitest + React Testing Library, `npm test` in `frontend/`) -
-Phases 1-4 predate this and are covered only by the manual walkthroughs above.
+passed, 0 failed; Section 28's `verify-phase11.ps1` run: 51/51 checks passed, 0 failed).
+Everything else in the app still only has a Swagger-based way to test it until its own
+frontend phase ships. Starting with Section 22's phase, the frontend also has its own
+automated test suite (Vitest + React Testing Library, `npm test` in `frontend/`) - Phases
+1-4 predate this and are covered only by the manual walkthroughs above.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

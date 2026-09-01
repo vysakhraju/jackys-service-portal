@@ -383,7 +383,7 @@
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
       <div class="stat"><span class="n mono">11 / 12</span><span class="l">Frontend phases built (+ Dismantling)</span></div>
       <div class="stat"><span class="n mono">493 + 473</span><span class="l">Backend + frontend tests passing</span></div>
-      <div class="stat"><span class="n mono">f0a2d39</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">cea653c</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -500,10 +500,10 @@
         <div><div class="phase-name">Frontend Phase 10: AMC Management</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 246/246 sandbox tests + 66/66 live-verified</div></div>
         <span class="chip done">Done</span>
       </div>
-      <div class="phase current">
+      <div class="phase done">
         <span class="phase-num mono">FE·11</span>
-        <div><div class="phase-name">Frontend Phase 11: Dismantling</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 227/227 sandbox tests — awaiting live verification</div></div>
-        <span class="chip current">Built</span>
+        <div><div class="phase-name">Frontend Phase 11: Dismantling</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 227/227 sandbox tests + 51/51 live-verified</div></div>
+        <span class="chip done">Done</span>
       </div>
     </div>
   </div>
@@ -786,12 +786,13 @@
         </li>
       </ul>
 
-      <h3 style="margin-top:22px;">Backend review: complete and accurate — one gap noted, not fixed</h3>
+      <h3 style="margin-top:22px;">Backend review: complete and accurate — one gap noted, not fixed. Live-verified, 51/51, zero failures</h3>
       <div class="verified">
         <span><span class="mono">tsc -b && vite build</span> compile clean, zero errors (sandbox)</span>
         <span>227/227 new Vitest + React Testing Library tests passing (473/473 total)</span>
         <span>All 8 endpoints, 4 role arrays, and Swagger annotations reviewed — no backend or Swagger corrections needed</span>
         <span>test-master caught a real production bug pre-ship: a stale useMemo in PriceAndPostModal kept "Post recovery" disabled even with a valid selection — fixed by removing the memoization</span>
+        <span><span class="mono">verify-phase11.ps1</span>: 51/51 live checks passed, 0 failed, after two script fixes (below)</span>
       </div>
       <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
         One latent backend-only gap was found during review and deliberately left unfixed:
@@ -804,20 +805,36 @@
         (each harvested line appears once, selected or not), so this is unreachable from
         the built UI — flagged for future awareness, not fixed this phase, per your
         instruction to defer anything beyond this phase's scope.
-        <span class="mono">verify-phase11.ps1</span> is drafted and pushed to your machine,
-        covering the full lifecycle including AC-31's rejections in both directions — it
-        needs a second seeded test account (any <span class="mono">VERIFY_ROLES</span>
-        role) beyond the existing technician one, since admin alone can't exercise three
-        distinct actors. <b>Live verification pending</b> — run it and paste back the
-        results.
+      </p>
+      <p style="margin-top:10px; font-size:14px; color:var(--ink-muted);">
+        The first live run came back 34/39 with 5 failures — all in the <b>script</b>, not
+        the app. One root cause was a real script bug: the spare-part-to-model link call
+        was passing the model's human-facing code instead of its actual UUID, a 400 that
+        then cascaded into the real price-and-post assertion also failing. The other three
+        were a test-design mistake — three checks meant to prove AC-31's same-actor
+        rejection used a technician/supervisor who don't hold the role needed to even reach
+        that endpoint, so the RBAC guard correctly rejected them with 403 before AC-31's own
+        service-layer check ever ran. Fixed by correcting the link call, keeping a plain RBAC
+        check where 403 is genuinely the right answer, and adding three new test records
+        where the repeat actor legitimately holds the required role — supervisor
+        self-verifying their own harvest, admin as both harvester and pricer, admin as both
+        verifier and pricer — which are the tests that actually exercise AC-31's
+        service-layer rejection. Re-run: 51/51, zero failures. Confirmed live: eligibility
+        computed correctly across all 4 harvest scenarios; one-shot harvest enforcement;
+        AC-31 blocking self-verify and self-price-and-post at the service layer; the
+        fail-fast price-and-post validation; a real successful post with inventory
+        incremented, GL posted, and <span class="mono">totalRecoveredValue</span> computed
+        correctly (170 = 2 × 85); POSTED as a terminal state; cancel allowed pre-verification
+        and blocked once VERIFIED; and the status filter, serial lookup, and single-record
+        GET.
       </p>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--accent); background:var(--accent-wash);">
-      <h3 style="color:var(--accent);">Standing practices, held for a seventh phase in a row</h3>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
+      <h3 style="color:var(--success);">Standing practices, held for a seventh phase in a row</h3>
       <p>
         <span class="mono">the-fool</span> pre-mortem before build, then
         <span class="mono">test-master</span> coverage in an isolated sandbox before any
@@ -835,15 +852,16 @@
         your machine — only a file bridge. Each frontend phase ships with a small
         PowerShell script (<span class="mono">verify-phaseN.ps1</span>) you run yourself
         with both dev servers up; you paste back the output and anything that fails gets
-        fixed from that. <span class="mono">verify-phase11.ps1</span> is pushed to your
-        machine and ready to run — it needs one extra prerequisite this time: a second
-        seeded test account (any <span class="mono">VERIFY_ROLES</span> role, e.g.
-        <span class="mono">TECHNICAL_TEAM_LEADER</span>) via
-        <span class="mono">SEED_TECH_ROLE=TECHNICAL_TEAM_LEADER npm run seed:technician</span>,
-        since AC-31's three-distinct-actor rule needs three real accounts and admin alone
-        can't stand in for two of the three roles.
+        fixed from that. This phase needed one extra prerequisite: a second seeded test
+        account (<span class="mono">SEED_TECH_ROLE=TECHNICAL_TEAM_LEADER</span>) since
+        AC-31's three-distinct-actor rule needs three real accounts and admin alone can't
+        stand in for two of the three roles. <span class="mono">verify-phase11.ps1</span>'s
+        first run came back 34/39 — five failures, all in the script itself (a wrong UUID
+        field, and three tests whose chosen actors got blocked by the RBAC guard before
+        AC-31's own check could run) rather than the app; both issues were fixed and the
+        script re-run came back <b>51 passed, 0 failed</b>.
       </p>
-      <span class="resolved-tag" style="background:var(--accent); color:var(--accent-ink);">Awaiting live verification</span>
+      <span class="resolved-tag">Live-verified this phase</span>
     </div>
   </div>
 
@@ -860,7 +878,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at f0a2d39 — awaiting push from your machine</span>
+    <span>master + main synced locally at cea653c — awaiting push from your machine</span>
   </footer>
 
 </div>
