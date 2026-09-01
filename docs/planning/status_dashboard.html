@@ -497,7 +497,7 @@
       </div>
       <div class="phase done">
         <span class="phase-num mono">FE·10</span>
-        <div><div class="phase-name">Frontend Phase 10: AMC Management</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 246/246 sandbox tests passing — live verification pending</div></div>
+        <div><div class="phase-name">Frontend Phase 10: AMC Management</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 246/246 sandbox tests + 66/66 live-verified</div></div>
         <span class="chip done">Done</span>
       </div>
     </div>
@@ -694,34 +694,43 @@
         </li>
       </ul>
 
-      <h3 style="margin-top:22px;">Built and test-covered — 246/246 in the sandbox; live verification is the next step</h3>
+      <h3 style="margin-top:22px;">Built, test-covered, and live-verified — 66/66, zero failures</h3>
       <div class="verified">
         <span><span class="mono">tsc -b && vite build</span> compile clean, zero errors (sandbox)</span>
         <span>60/60 new Vitest + React Testing Library tests passing (246/246 total)</span>
         <span>4 new backend unit tests for both guards, 493/493 backend tests passing</span>
         <span>SchedulePage.test.tsx: the regression test for the AMC-routing fix (finding #1)</span>
         <span>ContractsPage.test.tsx: live visit estimate, cap-triggered disable, role-gated actions</span>
-        <span><span class="mono">verify-phase10.ps1</span>: drafted, awaiting your live run</span>
+        <span><span class="mono">verify-phase10.ps1</span>: 66/66 live checks passed, 0 failed</span>
       </div>
       <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
-        The device-side <span class="mono">npm test</span>/<span class="mono">tsc -b</span> re-check
-        hit an unrelated environment snag this session — a stale, partially-installed
-        <span class="mono">node_modules</span> on the mounted drive with very slow rename
-        syscalls — so it wasn't re-confirmed on your machine directly. The sandbox result above
-        (246/246, both compiles clean) is the authoritative gate per the standing test-master
-        practice; if <span class="mono">npm test</span> reports a missing module locally, run
-        <span class="mono">npm install</span> in <span class="mono">frontend/</span> once from a
-        normal terminal and it should resolve at native disk speed. Backend-side,
-        <span class="mono">tsc --noEmit</span> and the 4 new/affected spec files were confirmed
-        clean directly on your machine.
+        <span class="mono">verify-phase10.ps1</span> ran clean against both dev servers on the
+        first try. Confirmed live: contract A's 12-month QUARTERLY range generating exactly the
+        5 predicted PM visits; the 60-visit cap rejecting a 7-year MONTHLY range; the generic
+        completion endpoint correctly rejecting an AMC-type ON_SITE appointment (finding #1's
+        guard); visit completion both with and without an approved extra charge; the duplicate-
+        periodLabel billing guard (finding #3) alongside a genuinely different label succeeding;
+        full-amount-only payment including the B2B-Credit-requires-B2B-contract guard working
+        both directions; forward-only renewal chaining with the original flipped to RENEWED;
+        cancellation cascading to every future SCHEDULED PM visit; and the upsell heuristic both
+        including a fresh candidate and excluding them once an ACTIVE AMC contract covers their
+        phone number. <span class="mono">tsc -b</span> was re-confirmed clean directly on your
+        machine too, after resolving an interrupted <span class="mono">node_modules</span>
+        install left over from earlier troubleshooting. <span class="mono">vitest</span>/
+        <span class="mono">vite build</span> couldn't be re-run through the device bridge
+        itself, though — it executes through a Linux shell layered onto your Windows drive,
+        and the native <span class="mono">rolldown</span> bundler binding installed there is
+        for the wrong platform (only the Windows one your own <span class="mono">npm test</span>
+        already uses is present). Not a Phase 10 code issue — the sandbox's 246/246 plus this
+        live-verification run are the results that matter.
       </p>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--info); background:var(--info-wash);">
-      <h3 style="color:var(--info);">Standing practices, held for a sixth phase in a row</h3>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
+      <h3 style="color:var(--success);">Standing practices, held for a sixth phase in a row</h3>
       <p>
         <span class="mono">the-fool</span> pre-mortem before build, then
         <span class="mono">test-master</span> coverage in an isolated sandbox before any
@@ -736,16 +745,16 @@
         your machine — only a file bridge. Each frontend phase ships with a small
         PowerShell script (<span class="mono">verify-phaseN.ps1</span>) you run yourself
         with both dev servers up; you paste back the output and anything that fails gets
-        fixed from that. <span class="mono">verify-phase10.ps1</span> is drafted and ready
-        — it hasn't been run yet, so this phase isn't live-verified. One environment snag
-        this session, unrelated to any Phase 10 code: the device-side
+        fixed from that. <span class="mono">verify-phase10.ps1</span> came back
+        <b>66 passed, 0 failed</b> — a clean first-try run. One environment snag this
+        session, unrelated to any Phase 10 code: the device-side
         <span class="mono">npm install</span> for <span class="mono">frontend/</span> hit
         very slow rename syscalls on the mounted drive and didn't finish — if
         <span class="mono">npm test</span> reports a missing module locally, a normal
         <span class="mono">npm install</span> run from your own terminal should resolve it
         at native disk speed.
       </p>
-      <span class="resolved-tag" style="background:var(--pending-wash); color:var(--ink-muted); border-color:var(--border-strong);">Awaiting your live run</span>
+      <span class="resolved-tag">Live-verified this phase</span>
     </div>
   </div>
 

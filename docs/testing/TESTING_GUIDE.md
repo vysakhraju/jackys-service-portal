@@ -2317,14 +2317,14 @@ technician's Field View (Section 20), Job Cards + Warranty Override (Section 21)
 Estimates + the public customer approval link (Section 22), Workshop + Inventory
 (Section 23), QC + Permissions admin (Section 24), Delivery + Invoicing (Section 25),
 Finance + Customer Portal (Section 26), and AMC Management (Section 27) - all built and
-test-covered (246 automated frontend tests total as of Section 27); Sections 18-26 are
-live-verified against the real backend (Section 26's `verify-phase9.ps1` run: 143/143
-checks passed, 0 failed) - Section 27's own `verify-phase10.ps1` is drafted but not yet
-run against the real backend (see Section 27h and `docs/planning/STATUS_TRACKER.md`).
-Everything else in the app still only has a Swagger-based way to test it until its own
-frontend phase ships. Starting with Section 22's phase, the frontend also has its own
-automated test suite (Vitest + React Testing Library, `npm test` in `frontend/`) -
-Phases 1-4 predate this and are covered only by the manual walkthroughs above.
+test-covered (246 automated frontend tests total as of Section 27); Sections 18-27 are
+all live-verified against the real backend (Section 26's `verify-phase9.ps1` run:
+143/143 checks passed, 0 failed; Section 27's `verify-phase10.ps1` run: 66/66 checks
+passed, 0 failed). Everything else in the app still only has a Swagger-based way to test
+it until its own frontend phase ships. Starting with Section 22's phase, the frontend
+also has its own automated test suite (Vitest + React Testing Library, `npm test` in
+`frontend/`) - Phases 1-4 predate this and are covered only by the manual walkthroughs
+above.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-08-31 (Frontend Phase 10 built — AMC Management, 246 tests passing, tsc/build clean; `verify-phase10.ps1` drafted, awaiting your live run)
+**Last updated:** 2026-09-01 (Frontend Phase 10 live-verified — 66/66 checks passed)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `75bf3df`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `75bf3df`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `b7b113c`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `b7b113c`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -2245,30 +2245,44 @@ auto-open, role-gated actions, SCHEDULED-only Complete), and
 finding #1: an AMC-type ON_SITE row shows "Complete PM Visit →" instead of
 the generic Complete button and links to the right contract id; a non-AMC
 ON_SITE row is completely unaffected). `npx tsc -b` and `npx vite build`
-both confirmed clean in the sandbox (186/186 tests passing suite-wide) and
+both confirmed clean in the sandbox (186/186 tests passing suite-wide), and
 `npx tsc --noEmit` + the 4 new backend specs confirmed clean on the real
-device; the device-side `npx tsc -b`/`vitest` re-check hit an unrelated
-environment issue (a stale/partial `node_modules` on the mounted drive with
-very slow rename syscalls) and wasn't completable this session — the
-sandbox result is the authoritative gate per test-master's own requirement,
-but if you hit missing-module errors running `npm test` locally, run
-`npm install` in `frontend/` first.
+device. `npx tsc -b` was also re-confirmed clean directly on the real
+device (after resolving an interrupted `node_modules` install left over
+from earlier troubleshooting). `npx vitest run`/`npx vite build` could not
+be re-run through the device bridge itself, though – it executes commands
+through a Linux shell layered onto your Windows drive, and vitest/vite's
+native `rolldown` bundler binding installed there is for the wrong platform
+(only `@rolldown/binding-win32-x64-msvc` is present, which is what your own
+real Windows `npm test`/`npm run build` needs and already has). This isn't
+a Phase 10 code issue – it's a structural limit of testing through that
+bridge – so the sandbox's 246/246 plus this phase's live verification below
+are the results that matter; running `npm test`/`npm run build` yourself in
+`frontend/` (which you already do to run `verify-phaseN.ps1` anyway) is the
+real on-device confirmation.
 
-**Live verification:** `verify-phase10.ps1` (root + `frontend/` copies)
-drafted, covering contract creation + PM-visit-schedule generation + the
-60-visit cap rejection, the generic-complete-now-rejects-AMC-type guard, PM
-visit completion (with and without an approved extra charge, plus the
-already-completed rejection), the duplicate-billing-invoice-periodLabel
-guard, full-amount-only billing payment (including the already-paid
-rejection and the B2B-Credit-requires-B2B-contract guard, both the rejected
-and accepted cases), renewal (forward-only chain, original marked RENEWED,
-re-renewal blocked), cancellation (cascading to cancel future SCHEDULED
-visits, re-cancel and renew-after-cancel both blocked), the expiring-
-contracts query + send-renewal-reminder, and the upsell-candidates heuristic
-(including that an ACTIVE AMC contract on the same phone number correctly
-removes that customer from the list). Not yet run against the real backend —
-**run it and paste the output back** so this section can be updated with the
-live pass/fail count, matching every prior phase.
+**Live-verified against your real backend** - `verify-phase10.ps1` run against both
+dev servers: **66 of 66 checks passed, 0 failed**, clean on the first try. Confirmed
+live: contract A's QUARTERLY/12-month date range generating exactly the 5 PM-visit
+Appointment rows the client-side estimate predicted, all `type=AMC`/`SCHEDULED`/linked
+to the contract; the 60-visit cap correctly rejecting a MONTHLY/7-year range with a 400;
+the generic `PUT /appointments/:id/complete` correctly rejecting an AMC-type `ON_SITE`
+appointment (pre-mortem finding #1's guard); PM visit completion both without an extra
+charge and with one requiring `extraChargeApprovedByCustomer=true` (the unapproved
+attempt correctly rejected first), plus the already-completed-visit rejection; the
+duplicate-`periodLabel` billing guard (finding #3) rejecting a second "Q1 2026" invoice
+on the same contract while a genuinely different label ("Q2 2026") succeeded; full-
+amount-only payment recording, including the already-paid rejection and the
+B2B-Credit-requires-B2B-contract guard working both directions (rejected against
+contract A's B2C customer, accepted against a real B2B contract); renewal correctly
+chaining forward (`previousContractId` set, original flipped to `RENEWED`, a second
+renewal attempt rejected); cancellation correctly cascading to CANCEL all 4 of contract
+C's still-`SCHEDULED` future PM visits, with re-cancel, renew-after-cancel, and
+send-reminder-after-cancel all correctly rejected; the expiring-contracts query
+correctly surfacing a contract due in 10 days and the manual renewal-reminder trigger
+correctly stamping `renewalReminderSentAt`; and the upsell-candidates heuristic both
+correctly including a fresh OOW customer with an approved Estimate and correctly
+excluding them the moment an ACTIVE AMC contract exists on that same phone number.
 
 ---
 
