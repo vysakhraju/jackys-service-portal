@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { WarrantyClaimsService } from './warranty-claims.service';
-import { WarrantyClaimStatus } from './entities/warranty-claim.entity';
+import { WarrantyClaim, WarrantyClaimStatus } from './entities/warranty-claim.entity';
 import { ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 
@@ -92,6 +92,11 @@ describe('WarrantyClaimsService', () => {
         .mockImplementationOnce(() => candidatesQb),
       create: jest.fn((_entity, data) => data),
       save: jest.fn((data) => Promise.resolve(data)),
+      // aggregate()'s final step re-fetches through `manager` (not the injected
+      // Repository - see the regression this guards, in the service's own comment) to
+      // stay on the same transactional connection. A safe non-null default is enough for
+      // tests that only care about what was passed to manager.save/create along the way.
+      findOne: jest.fn().mockResolvedValue(claim()),
     };
 
     dataSource = {
@@ -151,6 +156,14 @@ describe('WarrantyClaimsService', () => {
 
       expect(candidatesQb.innerJoinAndSelect).toHaveBeenCalledWith('r.jobCard', 'jc');
       expect(candidatesQb.innerJoinAndSelect).toHaveBeenCalledWith('r.sparePart', 'sp');
+    });
+
+    it('re-fetches its own result through the transactional manager, never through the injected Repository (regression: a Repository-based read runs on a different DB connection and 404s on the just-inserted, not-yet-committed row - caught live via warranty-claims-e2e-test.ps1)', async () => {
+      candidatesQb.getMany.mockResolvedValue([reservationCandidate()]);
+      await service.aggregate({ supplier: 'Samsung Gulf FZE', periodStart: '2026-08-01', periodEnd: '2026-08-31' } as any, 'clerk-1');
+
+      expect(manager.findOne).toHaveBeenCalledWith(WarrantyClaim, expect.objectContaining({ relations: { lines: true } }));
+      expect(warrantyClaimRepository.findOne).not.toHaveBeenCalled();
     });
 
     it('computes totalClaimedAmount from unitCost * quantityReserved across all candidates', async () => {
@@ -292,7 +305,13 @@ describe('WarrantyClaimsService', () => {
 
       await service.recordCreditNote('claim-1', { creditNoteNumber: 'CN-2026-4471', creditNoteAmount: 180 } as any, 'accountant-1');
 
-      expect(manager.save).toHaveBeenCalledWith(
+      // Regression: this used to assert against manager.save() inside a transaction whose
+      // final this.findById() read stale pre-update data from a different DB connection
+      // than the one the transaction's own write ran on (caught live via
+      // warranty-claims-e2e-test.ps1). recordCreditNote() no longer wraps a single-row
+      // save in a transaction at all - it saves directly through the injected Repository,
+      // same as submit()/cancel() above.
+      expect(warrantyClaimRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           status: WarrantyClaimStatus.CREDIT_RECEIVED,
           creditNoteNumber: 'CN-2026-4471',

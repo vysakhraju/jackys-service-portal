@@ -144,7 +144,18 @@ export class WarrantyClaimsService {
       // half-built claim.
       await manager.save(lines);
 
-      return this.findById(savedClaim.id);
+      // Deliberately NOT this.findById() here - that uses the injected Repository, which
+      // runs on a different DB connection than this transaction's own queryRunner. Called
+      // before commit (i.e. from inside this callback, which is the only place we can
+      // attach the fresh `lines` relation to the response), a separate-connection read
+      // cannot see this transaction's own uncommitted insert yet and 404s - caught live via
+      // warranty-claims-e2e-test.ps1. Re-fetching through `manager` instead stays on the
+      // same connection, so it correctly sees its own not-yet-committed writes.
+      const result = await manager.findOne(WarrantyClaim, { where: { id: savedClaim.id }, relations: { lines: true } });
+      if (!result) {
+        throw new NotFoundException(`Warranty claim ${savedClaim.id} not found immediately after creation.`);
+      }
+      return result;
     });
   }
 
@@ -206,29 +217,37 @@ export class WarrantyClaimsService {
   }
 
   /** BRD 12.4: an Accountant records the vendor's credit note; posts to the GL
-   * (Debit Vendor Payable / Credit Warranty Recovery Account, per the BRD's own wording). */
+   * (Debit Vendor Payable / Credit Warranty Recovery Account, per the BRD's own wording).
+   * GL posting is deliberately outside the claim-status save - same pattern
+   * DismantlingService.priceAndPost() uses for postDismantlingRecovery(): the journal log
+   * is a record OF what happened, not a precondition for it. (A single-row save doesn't
+   * need its own transaction wrapper - `submit()`/`cancel()` above don't use one either;
+   * the earlier version of this method wrapped it anyway and then re-fetched via
+   * this.findById() from inside that transaction, which uses the injected Repository - a
+   * different DB connection than the transaction's own queryRunner - so it would have
+   * returned stale pre-update data. `save()`'s own return value is used directly instead,
+   * since `claim` still carries the `lines` relation loaded by the this.findById() call
+   * above.) */
   async recordCreditNote(id: string, dto: RecordCreditNoteDto, creditReceivedByUserId: string): Promise<WarrantyClaim> {
     const claim = await this.findById(id);
     if (claim.status !== WarrantyClaimStatus.SUBMITTED) {
       throw new BadRequestException(`Cannot record a credit note: claim is ${claim.status}, not SUBMITTED.`);
     }
 
-    return this.dataSource.transaction(async (manager) => {
-      claim.status = WarrantyClaimStatus.CREDIT_RECEIVED;
-      claim.creditNoteNumber = dto.creditNoteNumber;
-      claim.creditNoteAmount = dto.creditNoteAmount;
-      claim.creditReceivedByUserId = creditReceivedByUserId;
-      claim.creditReceivedAt = new Date();
-      await manager.save(claim);
+    claim.status = WarrantyClaimStatus.CREDIT_RECEIVED;
+    claim.creditNoteNumber = dto.creditNoteNumber;
+    claim.creditNoteAmount = dto.creditNoteAmount;
+    claim.creditReceivedByUserId = creditReceivedByUserId;
+    claim.creditReceivedAt = new Date();
+    const saved = await this.warrantyClaimRepository.save(claim);
 
-      await this.glLedgerService.postWarrantyCreditNote({
-        warrantyClaimId: claim.id,
-        claimNumber: claim.claimNumber,
-        amount: dto.creditNoteAmount,
-      });
-
-      return this.findById(id);
+    await this.glLedgerService.postWarrantyCreditNote({
+      warrantyClaimId: saved.id,
+      claimNumber: saved.claimNumber,
+      amount: dto.creditNoteAmount,
     });
+
+    return saved;
   }
 
   /**

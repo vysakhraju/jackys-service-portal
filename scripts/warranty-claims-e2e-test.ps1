@@ -118,12 +118,12 @@ function NewWarrantyJob($serialPrefix, $faultLabel, $qty) {
   Invoke-RestMethod -Uri "$base/appointments/$($apt.id)/assign-technician" -Method Put -Headers $H -ContentType "application/json" -Body (@{ technicianId = $fieldTechId } | ConvertTo-Json) | Out-Null
   Invoke-RestMethod -Uri "$base/technician/visits/$($apt.id)/start" -Method Post -Headers $Hfield -ContentType "application/json" -Body '{"gpsLat":25.2048,"gpsLng":55.2708}' | Out-Null
   $visit = Invoke-RestMethod -Uri "$base/technician/visits/$($apt.id)/serial-number" -Method Post -Headers $Hfield -ContentType "application/json" -Body (@{ serialNumber = $serial; brand = "Samsung" } | ConvertTo-Json)
-  if ($visit.warrantyStatus -ne "IN_WARRANTY") { Write-Host "FAIL $faultLabel : expected visit warrantyStatus IN_WARRANTY (serial $serial should have matched a WarrantyMaster row), got $($visit.warrantyStatus)" }
+  if ($visit.warrantyStatus -ne "IW") { Write-Host "FAIL $faultLabel : expected visit warrantyStatus IW (serial $serial should have matched a WarrantyMaster row), got $($visit.warrantyStatus)" }
   Invoke-RestMethod -Uri "$base/technician/visits/$($apt.id)/fault-symptom" -Method Post -Headers $Hfield -ContentType "application/json" -Body (@{ faultCode = "WCF$suffix"; symptomCode = "WCS$suffix" } | ConvertTo-Json) | Out-Null
 
   $jc = Invoke-RestMethod -Uri "$base/job-cards" -Method Post -Headers $H -ContentType "application/json" -Body (@{ appointmentId = $apt.id } | ConvertTo-Json)
   $jc = Invoke-RestMethod -Uri "$base/job-cards/$($jc.id)/validate-sn" -Method Post -Headers $H -ContentType "application/json" -Body '{"matches":true}'
-  if ($jc.warrantyStatus -ne "IN_WARRANTY") { Write-Host "FAIL $faultLabel : expected job card warrantyStatus IN_WARRANTY, got $($jc.warrantyStatus)" }
+  if ($jc.warrantyStatus -ne "IW") { Write-Host "FAIL $faultLabel : expected job card warrantyStatus IW, got $($jc.warrantyStatus)" }
   $jc = Invoke-RestMethod -Uri "$base/job-cards/$($jc.id)/assign-section" -Method Post -Headers $H -ContentType "application/json" -Body '{"section":"WORKSHOP"}'
   Invoke-RestMethod -Uri "$base/workshop/$($jc.id)/assign" -Method Post -Headers $H -ContentType "application/json" -Body (@{ technicianId = $workshopTechId } | ConvertTo-Json) | Out-Null
   Invoke-RestMethod -Uri "$base/workshop/$($jc.id)/start-wip" -Method Post -Headers $WH | Out-Null
