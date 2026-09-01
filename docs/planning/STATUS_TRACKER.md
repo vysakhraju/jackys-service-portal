@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Backend Phase 13 — Finance/Quality/Operational Dashboards — built, unit-tested (553/553), awaiting your live-verification run of `verify-phase13.ps1`)
+**Last updated:** 2026-09-01 (Backend Phase 13 — Finance/Quality/Operational Dashboards — built, unit-tested (553/553), live-verified end-to-end against the real running server, 110/110 checks passed on the first run)
 **Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `c7c3d2c`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `c7c3d2c`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
@@ -49,7 +49,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 10 | Dismantling (post-MVP) | ✅ Done — defective/DOA appliance recovery, harvest → verify → price-and-post (AC-31 three-actor segregation of duties), inventory adjustment + GL posting, live-verified (new, this session) |
 | 11 | Reports/Dashboards (post-MVP) | ✅ Done — BRD 18.1 Service Manager Dashboard: Job Status Board Kanban (REST + WebSocket real-time), Pending Approval Aging, Service Efficiency, First-Time Fix Rate; 18.2/18.3/18.4 explicitly out of scope, live-verified (new, this session) |
 | 12 | Warranty Claims (post-MVP, EPIC-007 "[Optional]") | ✅ Done — aggregation, submit, cancel/reclaim, credit-note + GL posting, recovery rate; unit-tested (23 new tests, 515/515 app-wide, `tsc` clean), live-verified against the real running server (70/70 checks passed) (new, this session) |
-| 13 | Finance/Quality/Operational Dashboards (BRD 18.2/18.3/18.4) | 🟡 Built + unit-tested (61 new tests, 553/553 app-wide, `tsc -b` clean) — awaiting live-verification, run `verify-phase13.ps1` and paste the output back (new, this session) |
+| 13 | Finance/Quality/Operational Dashboards (BRD 18.2/18.3/18.4) | ✅ Done — 11 new endpoints, unit-tested (61 new tests, 553/553 app-wide, `tsc -b` clean), live-verified against the real running server (110/110 checks passed, clean on the first run) (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -1304,16 +1304,22 @@ Consumption cost-basis (`unitCost`, never `unitPriceB2B/B2C`) and top-10 truncat
 **553/553 tests passing app-wide** (515 carried over + a full backend suite unaffected by
 these read-only additions), `tsc -b` clean.
 
-**Live-verification: pending your run.** `verify-phase13.ps1` (project root) builds one
-interdepartment (B2B_SALES_CHANNEL, in-warranty) job through to a `POSTED` Debit Note, one
-approved OOW job (fresh unpaid invoice, for revenue + the 0-2 day aging bucket), one
-rejected OOW estimate (for RWR Analysis), two job cards sharing one serial number on the
-same day (for the Repeat Complaint Report), and one AMC contract with a `PAID` billing
-invoice - then checks all 11 new endpoints, including three 403 role-gating checks and
-every null-cascade assertion from finding 1 above. Run it (`./verify-phase13.ps1` from the
-project root, same prerequisites as `verify-phase9.ps1` onward) and paste the output back;
-this section and the dashboard/testing guide get their final live-verified update once
-that's confirmed clean.
+**Live-verification: complete, 110/110 checks passed - clean on the first run.**
+`verify-phase13.ps1` built one interdepartment (B2B_SALES_CHANNEL, in-warranty) job
+through to a `POSTED` Debit Note (`laborCost` confirmed matching the model-specific
+`ServicePriceList` row exactly, 60), one approved OOW job (fresh unpaid invoice, correctly
+bucketed in the 0-2 day aging bucket), one rejected OOW estimate (correctly counted under
+RWR Analysis's `reason: "Price too high"`), two job cards sharing one serial number on the
+same day (correctly flagged by the Repeat Complaint Report's adjacent-gap check), and one
+AMC contract with a `PAID` billing invoice (correctly reflected in both
+`activeContractsCount` and `totalAmcRevenue`) - then confirmed all three 403 role-gating
+checks (a technician blocked from Finance, Quality, and Operational alike) and every
+null-cascade assertion from finding 1 above (`totalCOGS`, `grossProfit`,
+`totalLabourCostOow`, `totalAmcLabourCost` all `null`, never a fabricated number). Unlike
+Phase 12's warranty-claims script (which needed four runs to fix its own test-data
+isolation), this script's `X`-marker serial-range convention (adopted directly from that
+earlier fix) meant zero collisions with prior runs' leftover data on the very first try -
+no application code changes were needed after the live run, only confirmation.
 
 ---
 

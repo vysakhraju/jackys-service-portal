@@ -1660,7 +1660,8 @@ FR-20, NFR-02. Read-only Kanban board + three supporting reports over data every
 phase already produces — no new entity, nothing to create here, just log in as
 SERVICE_HEAD/SUPER_ADMIN/TECHNICAL_TEAM_LEADER and look. 18.2 Finance Dashboard, 18.3
 Quality/Product Dashboard, and 18.4 Operational Reports were deferred out of this phase -
-see Section 31 for those (Phase 13, built and unit-tested, awaiting live-verification).
+see Section 31 for those (Phase 13, built, unit-tested, and live-verified — 110/110
+checks passed, clean on the first run).
 
 ### 17a. Job Status Board — GET /reports/dashboard/kanban
 ```
@@ -2580,8 +2581,8 @@ pattern every other GL posting in this app uses).
 
 The three remaining BRD Workflow 14 dashboards that Phase 11 (Section 17) deferred - pure
 read-only reports over data every earlier phase already produces, no new entity, nothing
-to create here beyond the test data any of the earlier sections already gave you. Awaiting
-your live-verification run of `verify-phase13.ps1` (project root) - see
+to create here beyond the test data any of the earlier sections already gave you.
+Live-verified: `verify-phase13.ps1` passed 110/110 checks, clean on the first run - see
 `docs/planning/STATUS_TRACKER.md`'s Phase 13 write-up for the full the-fool pre-mortem
 findings baked into these endpoints' design (no blended revenue total, `null` instead of a
 fabricated OOW cost, B2B/B2C aging kept separate, etc).
@@ -2640,9 +2641,9 @@ a cost basis, never the customer-facing `unitPriceB2B/B2C`) plus `byModel`/
   `SUPER_ADMIN`/`TECHNICAL_TEAM_LEADER` → 403 (same audience as Section 17's 18.1 board -
   no dedicated Finance/Quality/Operations role exists in this app's `RoleName` enum beyond
   the Finance-specific roles Finance's own endpoints already check).
-- Live-verification: run `./verify-phase13.ps1` from the project root and paste the
-  output back - see `docs/planning/STATUS_TRACKER.md`'s Phase 13 write-up for exactly what
-  it builds and checks.
+- Live-verification: complete. `./verify-phase13.ps1` passed 110/110 checks, 0 failures,
+  clean on the first run - see `docs/planning/STATUS_TRACKER.md`'s Phase 13 write-up for
+  exactly what it built and checked.
 
 ## Troubleshooting
 
@@ -2676,8 +2677,8 @@ post-MVP sequencing (AMC → Dismantling → Reports/Dashboards 18.1 → Warrant
 Reports/Dashboards 18.2/18.3/18.4) is complete. **Phase 12 (Warranty Claims, Section 30) is
 unit-tested and live-verified against your machine — 70/70 checks passed** via
 `scripts/warranty-claims-e2e-test.ps1`. **Phase 13 (Finance/Quality/Operational
-Dashboards, Section 31) is unit-tested (553/553 app-wide) but not yet live-verified** -
-run `verify-phase13.ps1` and paste the output back.
+Dashboards, Section 31) is unit-tested (553/553 app-wide) and live-verified against your
+machine — 110/110 checks passed, clean on the first run** via `verify-phase13.ps1`.
 
 The React frontend (Sections 18–29) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
