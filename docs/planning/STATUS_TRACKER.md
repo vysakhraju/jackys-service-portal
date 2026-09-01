@@ -1,6 +1,6 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Backend Phase 12 — Warranty Claims — built, unit-tested (514/514), `warranty-claims-e2e-test.ps1` shipped, live-verification pending your run)
+**Last updated:** 2026-09-01 (Backend Phase 12 — Warranty Claims — built, unit-tested (515/515), live-verified end-to-end against the real running server, 70/70 checks passed)
 **Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards, and Warranty Claims)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `ce3e900`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `ce3e900`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
@@ -48,7 +48,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 9 | AMC Management (post-MVP) | ✅ Done — contracts, auto-generated PM visit schedule, visit completion, renewal/cancellation, billing (full/half-yearly/quarterly split), manual renewal reminder, RWR upsell report, live-verified (new, this session) |
 | 10 | Dismantling (post-MVP) | ✅ Done — defective/DOA appliance recovery, harvest → verify → price-and-post (AC-31 three-actor segregation of duties), inventory adjustment + GL posting, live-verified (new, this session) |
 | 11 | Reports/Dashboards (post-MVP) | ✅ Done — BRD 18.1 Service Manager Dashboard: Job Status Board Kanban (REST + WebSocket real-time), Pending Approval Aging, Service Efficiency, First-Time Fix Rate; 18.2/18.3/18.4 explicitly out of scope, live-verified (new, this session) |
-| 12 | Warranty Claims (post-MVP, EPIC-007 "[Optional]") | 🟡 Built, unit-tested (22 new tests, 514/514 app-wide, `tsc` clean) — `scripts/warranty-claims-e2e-test.ps1` shipped, **live-verification pending your run** (new, this session) |
+| 12 | Warranty Claims (post-MVP, EPIC-007 "[Optional]") | ✅ Done — aggregation, submit, cancel/reclaim, credit-note + GL posting, recovery rate; unit-tested (23 new tests, 515/515 app-wide, `tsc` clean), live-verified against the real running server (70/70 checks passed) (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -1147,31 +1147,67 @@ result-transformer source before trusting the draft, fixed by joining via
 live E2E assertion that specifically checks these two fields are non-empty on a real
 aggregated claim line.
 
-**Automated tests**: 22 new tests in `src/warranty-claims/warranty-claims.service.spec.ts`
+**A second real bug was caught live, on the E2E script's very first `aggregate()` call,
+that no unit test had caught** - `aggregate()`'s and `recordCreditNote()`'s final line
+originally re-fetched the just-written claim via `this.findById(...)`, which reads through
+the `@InjectRepository()`-injected repository. That repository is bound to the DataSource's
+default connection pool, not to the specific `queryRunner` the surrounding
+`this.dataSource.transaction(async (manager) => {...})` callback is using - so a read
+through it, issued before the transaction commits, runs on a *different* DB connection than
+the one that made the write, and cannot see that write yet. For `aggregate()` this 404'd
+outright ("Warranty claim ... not found") on the very first real call; for
+`recordCreditNote()` it would have silently returned stale pre-update data instead, since
+that claim row already existed. Fixed by re-fetching through the transaction's own `manager`
+inside `aggregate()` (same connection, sees its own uncommitted write), and by removing the
+unnecessary transaction wrapper from `recordCreditNote()` entirely - a single-row update
+doesn't need one (`submit()`/`cancel()` don't use one either), so it now just saves via the
+repository directly and sequences the GL posting after that save resolves, matching
+`DismantlingService.priceAndPost()`'s already-established "GL posting is intentionally
+outside the persisting transaction" pattern in this codebase. Confirmed fixed live on the
+next run; a new regression test in `warranty-claims.service.spec.ts` asserts `aggregate()`
+re-fetches through `manager`, never through the injected repository.
+
+**Automated tests**: 23 tests in `src/warranty-claims/warranty-claims.service.spec.ts`
 - `aggregate()`'s transaction/advisory-lock call, the already-claimed exclusion filter, the
 correct `WHERE`/`innerJoinAndSelect` calls (including the join-syntax regression test
-above), `totalClaimedAmount` computation, sequential `WC-####` numbering, `findById`/
-`findAll`, `submit()`'s DRAFT-only guard, `cancel()`'s DRAFT-only guard + line deletion,
-`recordCreditNote()`'s SUBMITTED-only guard + GL posting call, and `recoveryRate()`'s
-null-guard + dual-status denominator. **514/514 tests passing app-wide** (492 carried over
-+ 22 new, 22 suites). `tsc --noEmit` clean, `jest` clean. No controller-level tests, same
+above), the manager-vs-repository re-fetch regression test above, `totalClaimedAmount`
+computation, sequential `WC-####` numbering, `findById`/`findAll`, `submit()`'s DRAFT-only
+guard, `cancel()`'s DRAFT-only guard + line deletion, `recordCreditNote()`'s SUBMITTED-only
+guard + GL posting call (now via the repository, not `manager`), and `recoveryRate()`'s
+null-guard + dual-status denominator. **515/515 tests passing app-wide** (492 carried over
++ 23 new, 22 suites). `tsc --noEmit` clean, `jest` clean. No controller-level tests, same
 as every other module in this codebase - RBAC is exercised live instead, in the E2E script
 below (this app has no `*.controller.spec.ts` files anywhere).
 
-**Live-verification: pending your run.** `scripts/warranty-claims-e2e-test.ps1` drives the
-full real pipeline - appointment → field visit with a warranty-master-matched serial
-number → job card (now snapshotting `warrantySupplier`) → workshop reservation → QC
-approval (consumes the reservation) - for two vendors, producing genuinely `CONSUMED`
-warranty spares to aggregate against. It then exercises RBAC (field tech and accountant
-both blocked from `aggregate`, no-token blocked from listing, warranty clerk and
-accountant both allowed to view), `aggregate()`'s validation (`periodStart` after
-`periodEnd`, a supplier with nothing consumed) and double-claim prevention (re-aggregating
-the same vendor/period finds nothing left), the cancel-then-reclaim flow live (the-fool
-finding #3), `submit()`, a partial-recovery credit note with its GL posting, and
-`recovery-rate` across a credited vendor (90%), a submitted-but-uncredited vendor (0%, not
-null), and a vendor with nothing claimed at all (`null`). Run it against your local server
-and paste the OK/FAIL output back - this section gets a second pass once you do, matching
-every other phase's two-pass close-out.
+**Live-verification: complete, 70/70 checks passed.**
+`scripts/warranty-claims-e2e-test.ps1` drives the full real pipeline - appointment → field
+visit with a warranty-master-matched serial number → job card (snapshotting
+`warrantySupplier`) → workshop reservation → QC approval (consumes the reservation) - for
+two vendors, producing genuinely `CONSUMED` warranty spares to aggregate against. It
+exercises RBAC (field tech and accountant both blocked from `aggregate`, no-token blocked
+from listing, warranty clerk and accountant both allowed to view), `aggregate()`'s
+validation (`periodStart` after `periodEnd`, a supplier with nothing consumed) and
+double-claim prevention (re-aggregating the same vendor/period finds nothing left), the
+cancel-then-reclaim flow live (the-fool finding #3), `submit()`, a partial-recovery credit
+note with its GL posting, and `recovery-rate` across a credited vendor (90%), a
+submitted-but-uncredited vendor (0%, not null), and a vendor with nothing claimed at all
+(`null`). Took four live runs to get a clean pass - two real backend bugs (the join-syntax
+bug above, caught before any run even happened; the DB-connection-boundary bug above,
+caught on run 1) plus two issues in the *script itself*, not the app: run 1's diagnostics
+compared `WarrantyStatus` against the literal `"IN_WARRANTY"` when the enum's actual value
+is `"IW"` (cosmetic false positives only, fixed for run 2); and runs 2-3 both hit the same
+underlying cause from two different angles - the script's `WarrantyMaster.serialNumberRange`
+was a fixed literal (`"WCA00000-WCA99999"`) identical on every run, and since this dev
+database is never reset between runs and `checkWarranty()` filters only by serial-range
+match + brand (no model filter, no `ORDER BY` - just `warranties[0]`), a run's own serial
+kept matching a *previous* run's leftover row instead of its own. Run 2's fix (embedding a
+suffix into the range) solved run-vs-run collisions but not run-vs-already-stale-row
+collisions, because PostgreSQL's `BETWEEN` on text is byte-wise lexicographic and a shorter
+bound string can still legally bound a longer value that shares its leading digits; run 3's
+fix inserted a non-digit marker character right after the vendor prefix so every future
+run's ranges sort structurally outside any old digit-only-continuation row, regardless of
+how much stale test data accumulates. None of this touched application code past run 1 -
+runs 2-4 were exclusively fixing the test script's own data-isolation assumptions.
 
 ---
 
@@ -1212,6 +1248,13 @@ every other phase's two-pass close-out.
   backend-only; a Warranty Clerk/Accountant currently has to use Swagger or a script to
   aggregate/submit/credit a claim. Would need its own future frontend phase (there are
   currently 12 frontend phases, all covering earlier backend phases) if a UI is wanted.
+- **The dev database now has several inactive-in-practice, never-cleaned-up
+  `WarrantyMaster` test rows from the Phase 12 E2E script's first three live runs**
+  (ranges like `WCA00000-WCA99999`, `WCA6205700000-WCA6205799999`, real suppliers like
+  `WC-Vendor-A-15515`) - harmless (the script's run-4-onward fix structurally excludes new
+  runs from ever matching them again, see above), but they'll show up if anyone browses
+  `warranty-master` data directly. `createWarrantyMaster`/`findWarrantyBySerial` have no
+  delete/deactivate endpoint to clean these up if it's ever worth doing.
 
 ---
 
@@ -2696,9 +2739,9 @@ at some point instead:
 
 - BRD 18.2 Finance Dashboard, 18.3 Quality/Product Dashboard, 18.4 Operational Reports
   (see backend Phase 11) — read-only reports over data that already exists, low risk.
-- Warranty Claims — the backend module is now built (see backend Phase 12 above,
-  live-verification pending); no frontend screen exists for it yet, would need its own
-  future frontend phase.
+- Warranty Claims — the backend module is now built and live-verified (see backend
+  Phase 12 above); no frontend screen exists for it yet, would need its own future
+  frontend phase.
 - The genuine push-on-mutation WebSocket architecture (vs. the current poll-and-diff
   simplification) if true sub-second update detection ever becomes a real requirement.
 - The Appointment dashboard-stats endpoint (`GET /appointments/.../dashboard-stats` —

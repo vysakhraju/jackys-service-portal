@@ -2560,13 +2560,19 @@ pattern every other GL posting in this app uses).
   unclaimed.
 - Try `cancel` on a `SUBMITTED` claim → 400.
 - Try `credit-note` twice on the same claim → 400.
-- Live-verified via `scripts/warranty-claims-e2e-test.ps1` — drives the full pipeline (see
-  30a), exercises every check above against a real running server plus the partial-recovery
-  credit note and its GL posting, and checks `recovery-rate` across a credited vendor
-  (90%), a submitted-but-uncredited vendor (0%, not `null`), and a vendor with nothing
-  claimed at all (`null`). **Run it yourself and paste the OK/FAIL output back** — as of
-  this write-up it hasn't been run against your machine yet (unit tests only, 22 new,
-  514/514 passing app-wide).
+- **Live-verified via `scripts/warranty-claims-e2e-test.ps1`: 70/70 checks passed, zero
+  failures.** Drives the full pipeline (see 30a), exercises every check above against a
+  real running server plus the partial-recovery credit note and its GL posting, and checks
+  `recovery-rate` across a credited vendor (90%), a submitted-but-uncredited vendor (0%,
+  not `null`), and a vendor with nothing claimed at all (`null`). Took four live runs to
+  get there: run 1 caught a real backend bug (`aggregate()`/`recordCreditNote()` reading
+  their own just-written row through a different DB connection than the transaction that
+  wrote it — fixed by re-fetching through the transaction's own `manager`, see
+  STATUS_TRACKER.md's Phase 12 section for the full write-up) plus a cosmetic script-only
+  false positive (`"IN_WARRANTY"` vs. the enum's real `"IW"` value); runs 2-3 fixed the
+  script's own test-data isolation (a fixed literal `serialNumberRange` was colliding with
+  earlier runs' leftover `WarrantyMaster` rows in this never-reset dev DB). Unit tests: 23
+  new, 515/515 passing app-wide.
 
 ---
 
@@ -2600,9 +2606,8 @@ exactly as above — all 147 endpoints in Section 11 are live, plus the `/report
 channel (Section 17e). Your full post-MVP sequencing (AMC → Dismantling →
 Reports/Dashboards → Warranty Claims) is complete; BRD 18.2/18.3/18.4 (Finance/Quality/
 Operational dashboards) remain unbuilt and explicitly out of scope for now (see Section
-17's intro). **Phase 12 (Warranty Claims, Section 30) is unit-tested but not yet
-live-verified against your machine** — run `scripts/warranty-claims-e2e-test.ps1` and
-paste the output back.
+17's intro). **Phase 12 (Warranty Claims, Section 30) is unit-tested and live-verified
+against your machine — 70/70 checks passed** via `scripts/warranty-claims-e2e-test.ps1`.
 
 The React frontend (Sections 18–29) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
