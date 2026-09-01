@@ -1659,8 +1659,8 @@ sign-off exists and cancelling is blocked (mirrors Delivery's "only while PENDIN
 FR-20, NFR-02. Read-only Kanban board + three supporting reports over data every earlier
 phase already produces — no new entity, nothing to create here, just log in as
 SERVICE_HEAD/SUPER_ADMIN/TECHNICAL_TEAM_LEADER and look. 18.2 Finance Dashboard, 18.3
-Quality/Product Dashboard, and 18.4 Operational Reports are out of scope for this phase
-(see `docs/planning/STATUS_TRACKER.md`'s Phase 11 write-up for why).
+Quality/Product Dashboard, and 18.4 Operational Reports were deferred out of this phase -
+see Section 31 for those (Phase 13, built and unit-tested, awaiting live-verification).
 
 ### 17a. Job Status Board — GET /reports/dashboard/kanban
 ```
@@ -2576,6 +2576,74 @@ pattern every other GL posting in this app uses).
 
 ---
 
+## 31. Finance/Quality/Operational Dashboards (Phase 13, post-MVP, BRD 18.2/18.3/18.4)
+
+The three remaining BRD Workflow 14 dashboards that Phase 11 (Section 17) deferred - pure
+read-only reports over data every earlier phase already produces, no new entity, nothing
+to create here beyond the test data any of the earlier sections already gave you. Awaiting
+your live-verification run of `verify-phase13.ps1` (project root) - see
+`docs/planning/STATUS_TRACKER.md`'s Phase 13 write-up for the full the-fool pre-mortem
+findings baked into these endpoints' design (no blended revenue total, `null` instead of a
+fabricated OOW cost, B2B/B2C aging kept separate, etc).
+
+### 31a. Finance Dashboard (18.2) — Accountant/Finance Manager/Service Head/Super Admin
+```
+GET /reports/finance/summary?periodStart=2026-08-01&periodEnd=2026-08-31
+GET /reports/finance/gp-by-service-centre
+GET /reports/finance/interdepartment-recharge
+GET /reports/finance/unpaid-invoices
+GET /reports/finance/profit-trend?groupBy=month
+```
+`periodStart`/`periodEnd` are optional on every endpoint that takes them - omit both for
+an all-time total. `summary` never returns a single blended "Total Company Revenue" figure
+(OOW/IW-recharge/AMC are always separate) and any cost/profit/margin figure with no real
+data behind it is `null`, never `0` or a guess - read the `note`/`costTrackingNote` fields
+in the response for exactly why. `unpaid-invoices` buckets B2B and B2C separately
+(`0-2 days`/`3-7 days`/`8+ days` since invoice date, a different boundary set from Section
+14's existing B2B-only 30-day-credit aging report). `interdepartment-recharge` labels
+settlement `pendingCount`/`postedToGlCount`, never "Settled".
+
+### 31b. Quality / Product Team Dashboard (18.3) — Service Head/Team Leader/Super Admin
+```
+GET /reports/quality/product-failure-ratio?groupBy=month
+GET /reports/quality/repeat-complaints
+GET /reports/quality/rwr-analysis
+```
+`product-failure-ratio` (AC-22) takes optional `brand`/`modelNumber`/`faultCode` filters
+alongside `groupBy` (month/quarter/year). `repeat-complaints` (AC-23) lists every serial
+number with two Job Cards within 30 days of each other - empty on a fresh database, easy
+to trigger by creating two Job Cards against the same serial number the same day (see
+`verify-phase13.ps1`'s repeat-complaint pair for exactly how). `rwr-analysis` (AC-24)
+counts rejected Estimates (Section 9's reject flow) by model/reason/region - `reason` is
+the raw `responseNotes` text from a staff-recorded rejection (Section 9d), `"Not
+specified"` when blank; `region` is `ServiceCentre.city`, falling back to `country`.
+
+### 31c. Operational Reports (18.4) — Service Head/Team Leader/Super Admin
+```
+GET /reports/operational/technician-productivity
+GET /reports/operational/sla-breach?thresholdHours=48
+GET /reports/operational/spare-parts-consumption
+```
+`technician-productivity` has no `customerRating` field at all (omitted, not `null` -
+nothing captures it anywhere in this app). `sla-breach` defaults to a 48-hour threshold
+(`JobCard.createdAt` → `qcApprovedAt`, the BRD's own literal example) and reports the real
+`hoursOverThreshold` instead of a fabricated reason code. `spare-parts-consumption`
+returns `topByQuantity`/`topByValue` (top 10 each, value = `unitCost × quantityReserved`,
+a cost basis, never the customer-facing `unitPriceB2B/B2C`) plus `byModel`/
+`byWarrantyStatus` breakdowns.
+
+### 31d. Prove the guardrails work
+- Any of the 11 endpoints with no `Authorization` header → 401.
+- The Finance endpoints logged in as a role outside `ACCOUNTANT`/`FINANCE_MANAGER`/
+  `SERVICE_HEAD`/`SUPER_ADMIN` (e.g. `TECHNICIAN_FIELD`) → 403.
+- The Quality/Operational endpoints logged in as a role outside `SERVICE_HEAD`/
+  `SUPER_ADMIN`/`TECHNICAL_TEAM_LEADER` → 403 (same audience as Section 17's 18.1 board -
+  no dedicated Finance/Quality/Operations role exists in this app's `RoleName` enum beyond
+  the Finance-specific roles Finance's own endpoints already check).
+- Live-verification: run `./verify-phase13.ps1` from the project root and paste the
+  output back - see `docs/planning/STATUS_TRACKER.md`'s Phase 13 write-up for exactly what
+  it builds and checks.
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2598,16 +2666,18 @@ pattern every other GL posting in this app uses).
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 12** (Auth, Master Data, Appointments, Technician Mobile API,
+Everything through **Phase 13** (Auth, Master Data, Appointments, Technician Mobile API,
 Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
 + POD + OOW invoicing block, Finance extension + Customer Portal, AMC Management,
-Dismantling, Reports/Dashboards, Warranty Claims) is real, working code you can exercise
-exactly as above — all 147 endpoints in Section 11 are live, plus the `/reports` WebSocket
-channel (Section 17e). Your full post-MVP sequencing (AMC → Dismantling →
-Reports/Dashboards → Warranty Claims) is complete; BRD 18.2/18.3/18.4 (Finance/Quality/
-Operational dashboards) remain unbuilt and explicitly out of scope for now (see Section
-17's intro). **Phase 12 (Warranty Claims, Section 30) is unit-tested and live-verified
-against your machine — 70/70 checks passed** via `scripts/warranty-claims-e2e-test.ps1`.
+Dismantling, Reports/Dashboards (18.1-18.4), Warranty Claims) is real, working code you can
+exercise exactly as above — all 158 endpoints (147 through Phase 12, plus Phase 13's 11 new
+ones in Section 31) are live, plus the `/reports` WebSocket channel (Section 17e). Your full
+post-MVP sequencing (AMC → Dismantling → Reports/Dashboards 18.1 → Warranty Claims →
+Reports/Dashboards 18.2/18.3/18.4) is complete. **Phase 12 (Warranty Claims, Section 30) is
+unit-tested and live-verified against your machine — 70/70 checks passed** via
+`scripts/warranty-claims-e2e-test.ps1`. **Phase 13 (Finance/Quality/Operational
+Dashboards, Section 31) is unit-tested (553/553 app-wide) but not yet live-verified** -
+run `verify-phase13.ps1` and paste the output back.
 
 The React frontend (Sections 18–29) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the

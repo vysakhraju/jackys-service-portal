@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Backend Phase 12 — Warranty Claims — built, unit-tested (515/515), live-verified end-to-end against the real running server, 70/70 checks passed)
-**Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards, and Warranty Claims)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `ce3e900`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `ce3e900`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Last updated:** 2026-09-01 (Backend Phase 13 — Finance/Quality/Operational Dashboards — built, unit-tested (553/553), awaiting your live-verification run of `verify-phase13.ps1`)
+**Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `c7c3d2c`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `c7c3d2c`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -49,6 +49,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 10 | Dismantling (post-MVP) | ✅ Done — defective/DOA appliance recovery, harvest → verify → price-and-post (AC-31 three-actor segregation of duties), inventory adjustment + GL posting, live-verified (new, this session) |
 | 11 | Reports/Dashboards (post-MVP) | ✅ Done — BRD 18.1 Service Manager Dashboard: Job Status Board Kanban (REST + WebSocket real-time), Pending Approval Aging, Service Efficiency, First-Time Fix Rate; 18.2/18.3/18.4 explicitly out of scope, live-verified (new, this session) |
 | 12 | Warranty Claims (post-MVP, EPIC-007 "[Optional]") | ✅ Done — aggregation, submit, cancel/reclaim, credit-note + GL posting, recovery rate; unit-tested (23 new tests, 515/515 app-wide, `tsc` clean), live-verified against the real running server (70/70 checks passed) (new, this session) |
+| 13 | Finance/Quality/Operational Dashboards (BRD 18.2/18.3/18.4) | 🟡 Built + unit-tested (61 new tests, 553/553 app-wide, `tsc -b` clean) — awaiting live-verification, run `verify-phase13.ps1` and paste the output back (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -1208,6 +1209,111 @@ fix inserted a non-digit marker character right after the vendor prefix so every
 run's ranges sort structurally outside any old digit-only-continuation row, regardless of
 how much stale test data accumulates. None of this touched application code past run 1 -
 runs 2-4 were exclusively fixing the test script's own data-isolation assumptions.
+
+---
+
+## Phase 13: Finance/Quality/Operational Dashboards (BRD 18.2/18.3/18.4)
+
+BRD Workflow 14's three remaining dashboards - Phase 11 already built and live-verified
+18.1 (Service Manager Dashboard); 18.2/18.3/18.4 were explicitly deferred at that time.
+Unlike every other workflow, 18.2/18.3/18.4 have no FR/NFR line item and only three
+acceptance criteria total (AC-22/23/24, covering just 18.3) - just BRD report-spec tables
+naming a Report Name and its Fields, no numbered logic to implement against. This is a
+pure read/query module, same "no new entities, no new writes" precedent as 18.1: three new
+services/controllers (`FinanceReportsService`, `QualityReportsService`,
+`OperationalReportsService`) inside the existing `reports` module, 11 new GET endpoints,
+composed entirely from data the prior 12 phases already produce.
+
+1. **the-fool pre-mortem (mode: Find failure modes) ran before any code was written**,
+   specifically targeting the risk that a reporting module aimed at real Accountants/
+   Finance Managers is the one place in this app where a wrong-but-plausible number is
+   more dangerous than an honest gap. All five findings are baked directly into the final
+   design:
+   - **No blended "Total Company Revenue" figure exists anywhere.** OOW (`Invoice`), IW
+     recharge (`DebitNote`), and AMC (`AmcBillingInvoice`) revenue are always reported as
+     separate streams. A Job Card's effective `warrantyStatus` can be overridden (TL-
+     approved, fully audited) *after* a `DebitNote` has already been `POSTED` for it -
+     nothing in this schema retroactively voids that `DebitNote` or blocks an `Invoice`
+     from later being raised for the same underlying repair, so a naive sum across all
+     three sources could double-count one repair. `WarrantyClaim.creditNoteAmount` (vendor
+     recovery of a cost already counted once via the `DebitNote`) is never treated as
+     revenue either.
+   - **OOW cost is `null`, never `ServicePriceList.warrantyLaborCost`.** That column is an
+     internal transfer-pricing rate calibrated for warranty/interdepartment recovery, not a
+     market estimate of true OOW repair cost - reusing it would have produced a *wrong*
+     number (an implausible margin %) that looks authoritative, strictly worse than an
+     honest `null`. No OOW-specific cost field exists anywhere in this app's data model.
+   - **Every derived aggregate cascades `null`, never `?? 0`.** Total COGS / Gross Profit /
+     GP Margin % are `null` because OOW cost and AMC cost are both unknown - a fabricated
+     zero-cost fallback would have silently produced the exact inflated-margin problem the
+     second finding was written to avoid.
+   - **Unpaid Invoices splits B2B/B2C aging; Interdepartment Recharge settlement is
+     "Pending"/"Posted to GL", never "Settled".** B2C has no credit terms (expected to
+     settle at/near time of service), so bucketing it with B2B's 30-day-credit aging would
+     overstate AR risk; a `POSTED` Debit Note means the recharge was recognised in the GL,
+     not that the other department has actually settled it in cash.
+   - **Period filters use the field that represents recognition, not just row-creation.**
+     `DebitNote` uses `postedAt` (`DRAFT` rows excluded from period-scoped totals entirely);
+     `WarrantyClaim` uses `submittedAt` for claim activity and `creditReceivedAt` for
+     recoveries (two different questions, never conflated); `Invoice`/`Payment`/
+     `AmcBillingInvoice` only have `createdAt` (confirmed by reading each entity directly -
+     the draft design's first pass had wrongly assumed a `Payment.paidAt` field that
+     doesn't exist).
+2. **Two more documented gaps in Quality (AC-22/23/24) and Operational, same
+   omit-what-doesn't-exist pattern as every prior phase's "documented gap over silent
+   guess" decisions**: no dedicated region field on `ServiceCentre` (RWR Analysis "by
+   region" uses `city`, falling back to `country`); no structured RWR rejection-reason
+   code (`Estimate.responseNotes` is free text, only populated for staff-recorded
+   responses - grouped on the raw text where present, `"Not specified"` otherwise); no
+   customer-rating field anywhere (Technician Productivity omits the field entirely, not
+   `null` - the BRD itself hedges it `"(if captured)"`); no SLA-breach reason-code field
+   (SLA Breach Report reports the real `hoursOverThreshold` instead of a fabricated
+   category); no overhead-allocation concept anywhere in the app (GP per Service Centre
+   omits the `Overhead` field entirely, distinct from AMC's per-record-`null` treatment -
+   there's no modeled concept to even attempt).
+3. **Repeat Complaint Report (AC-23)** flags a serial number by checking only *adjacent*
+   gaps in its sorted-by-date job list, not every pair - provably sufficient: if any two
+   jobs (adjacent or not) fall within 30 days of each other, every adjacent gap between
+   them is individually ≤ 30 days too (non-negative gaps summing to ≤ 30 forces each one
+   to be ≤ 30), so checking consecutive pairs alone can never miss a qualifying S/N.
+4. **RWR Analysis (AC-24)** counts *rejected Estimates* (`EstimateStatus.REJECTED`), not
+   the current `JobCardStatus.RWR` - a job can be revised past RWR later
+   (`Estimate.revise()`), but the rejection event itself still happened and is worth
+   counting for a quality trend; counting live status alone would undercount every job
+   that has since moved forward.
+
+**REST**: 11 endpoints - `GET /reports/finance/{summary,gp-by-service-centre,
+interdepartment-recharge,unpaid-invoices,profit-trend}` (role-gated to
+`ACCOUNTANT`/`FINANCE_MANAGER`/`SERVICE_HEAD`/`SUPER_ADMIN` - narrower than 18.1, matching
+the Finance-only audience); `GET /reports/quality/{product-failure-ratio,
+repeat-complaints,rwr-analysis}` and `GET /reports/operational/{technician-productivity,
+sla-breach,spare-parts-consumption}` (both role-gated identically to 18.1's own
+`SERVICE_HEAD`/`SUPER_ADMIN`/`TECHNICAL_TEAM_LEADER` - no dedicated Quality/Product/
+Operations role exists in `RoleName`, same finding as the AMC/Dismantling phases).
+
+**Automated tests**: 61 new unit tests across `finance-reports.service.spec.ts` /
+`quality-reports.service.spec.ts` / `operational-reports.service.spec.ts` - the
+null-cascade discipline from finding 1 above (never a fabricated blended total,
+`warrantyLaborCost` never reused, every derived field that depends on an unknown input is
+itself `null`), the B2B/B2C aging split and exact 0-2/3-7/8+ day bucket boundaries, the
+Repeat Complaint adjacent-gap algorithm (including a 3-job case spread wide enough that no
+single pair should flag), the RWR `REJECTED`-only filter and reason/region fallbacks, the
+on-time-arrival zero-grace-period boundary (exactly-on-time counts, one millisecond late
+doesn't), the SLA Breach strictly-greater-than threshold boundary, and the Spare Parts
+Consumption cost-basis (`unitCost`, never `unitPriceB2B/B2C`) and top-10 truncation.
+**553/553 tests passing app-wide** (515 carried over + a full backend suite unaffected by
+these read-only additions), `tsc -b` clean.
+
+**Live-verification: pending your run.** `verify-phase13.ps1` (project root) builds one
+interdepartment (B2B_SALES_CHANNEL, in-warranty) job through to a `POSTED` Debit Note, one
+approved OOW job (fresh unpaid invoice, for revenue + the 0-2 day aging bucket), one
+rejected OOW estimate (for RWR Analysis), two job cards sharing one serial number on the
+same day (for the Repeat Complaint Report), and one AMC contract with a `PAID` billing
+invoice - then checks all 11 new endpoints, including three 403 role-gating checks and
+every null-cascade assertion from finding 1 above. Run it (`./verify-phase13.ps1` from the
+project root, same prerequisites as `verify-phase9.ps1` onward) and paste the output back;
+this section and the dashboard/testing guide get their final live-verified update once
+that's confirmed clean.
 
 ---
 
