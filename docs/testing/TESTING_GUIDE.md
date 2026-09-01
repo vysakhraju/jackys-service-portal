@@ -779,7 +779,7 @@ the first thing Phase 6 builds.
 
 ---
 
-## 11. Full endpoint index (134 endpoints, all documented above)
+## 11. Full endpoint index (147 endpoints, all documented above)
 
 Every route the app exposes, and exactly where in this guide it's covered. Use this to
 confirm nothing was missed — if you ever add a new endpoint and it doesn't show up here,
@@ -993,7 +993,18 @@ that's the signal to update this guide.
 | `GET /reports/dashboard/first-time-fix-rate` | 17d |
 | `GET /reports/dashboard/overview` | 17a |
 
-**Total: 140 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc + 7 dismantling + 6 reports.)
+### warranty-claims (7)
+| Endpoint | Section |
+|---|---|
+| `POST /warranty-claims/aggregate` | 30b |
+| `GET /warranty-claims` (`?supplier=`, `?status=`) | 30c |
+| `GET /warranty-claims/recovery-rate` (`?supplier=`) | 30c |
+| `GET /warranty-claims/:id` | 30c |
+| `POST /warranty-claims/:id/submit` | 30d |
+| `POST /warranty-claims/:id/cancel` | 30e |
+| `POST /warranty-claims/:id/credit-note` | 30f |
+
+**Total: 147 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc + 7 dismantling + 6 reports + 7 warranty-claims.)
 
 
 ## 12. QC gate + admin-assignable permissions + inventory consumption (Phase 6)
@@ -2443,6 +2454,122 @@ PowerShell.
 
 ---
 
+## 30. Warranty Claims — Vendor Claims & Credit Notes (Phase 12, post-MVP, BRD Workflow 12)
+
+Numbered 30 rather than slotted in after Section 17 to avoid renumbering every "Section
+18/19/20..." cross-reference already scattered through this guide's frontend sections
+below — this phase was built after all 12 frontend phases, not before. It's a
+**backend-only** module (no frontend screen exists for it yet), so this section is
+Swagger/API-driven like Sections 15-17, not a click-through walkthrough.
+
+BRD Workflow 12, explicitly marked `[Optional]`: groups warranty spares actually used
+(`InventoryReservation.status = CONSUMED`, set at QC approval) by vendor and time period
+into a claim, tracks it through submission to the vendor's own portal and the vendor's
+credit note, and posts the recovery to the GL.
+
+### 30a. Get some CONSUMED warranty spares to claim against
+
+Warranty Claims aggregates real consumption, so you need at least one Job Card that's
+IN_WARRANTY with a `warrantySupplier` and has had a spare part QC-approved (`CONSUMED`)
+against it. Two ways to get there:
+
+- **Easiest**: run `scripts/warranty-claims-e2e-test.ps1` (Section 30g) — it seeds a full
+  pipeline (a `WarrantyMaster` entry, an appointment, a field visit with a
+  warranty-matched serial number, a Job Card, a Workshop reservation, and QC approval) for
+  two vendors on its own, then exercises every endpoint below against real data.
+- **Manually**: create a `WarrantyMaster` row (`POST /master-data/warranty-master`) whose
+  `serialNumberRange` covers a serial you'll use, then follow Sections 6-8/10/12 to run a
+  Job Card through Technician capture → Workshop reservation → QC approval with that
+  serial number. The Job Card's `warrantyStatus` will come back `IN_WARRANTY` and its
+  `warrantySupplier` will be snapshotted from the matched `WarrantyMaster` row at creation.
+
+### 30b. Aggregate a claim (step 12.1) — Warranty Clerk/Service Head/Super Admin
+
+```
+POST /warranty-claims/aggregate
+{
+  "supplier": "Samsung Gulf FZE",
+  "periodStart": "2026-08-01",
+  "periodEnd": "2026-08-31"
+}
+```
+
+Finds every `CONSUMED` reservation on an `IN_WARRANTY` Job Card whose `warrantySupplier`
+matches exactly, `consumedAt` inside the period, and not already referenced by any other
+claim line (live or cancelled) — groups them into a new `DRAFT` claim numbered `WC-####`.
+400 if `periodStart` is after `periodEnd`, or if nothing unclaimed matches. Runs inside one
+transaction serialized per-supplier (a Postgres advisory lock), so calling this twice for
+the same vendor/period back-to-back will correctly find nothing left the second time —
+that's double-claim prevention working, not a bug.
+
+### 30c. Look around
+
+```
+GET /warranty-claims                    (?supplier=, ?status= filters)
+GET /warranty-claims/:id                (includes the full lines array)
+GET /warranty-claims/recovery-rate      (?supplier= optional — BRD 12.5)
+```
+All five roles can read (`WARRANTY_CLERK`/`ACCOUNTANT`/`FINANCE_MANAGER`/`SERVICE_HEAD`/
+`SUPER_ADMIN`) — matches Discovery's own role table for this workflow, wider than the
+write-side roles below. `recovery-rate`'s `rate` is `null` only when nothing's been
+claimed for that vendor at all; a claim that's `SUBMITTED` but has no credit note yet
+correctly shows `rate: 0`, not `null`.
+
+### 30d. Submit (step 12.3) — Warranty Clerk/Service Head/Super Admin
+
+```
+POST /warranty-claims/:id/submit
+{ "claimReferenceNumber": "VENDOR-CLM-2026-0912", "notes": "Invoices attached in vendor portal" }
+```
+Requires `DRAFT`. No real vendor-portal integration exists (same documented stub pattern
+as Notifications) — this just records that a Warranty Clerk uploaded it externally and
+flips status to `SUBMITTED`.
+
+### 30e. Cancel a mistaken DRAFT claim
+
+```
+POST /warranty-claims/:id/cancel
+{ "reason": "Wrong period selected - re-aggregating with the correct dates" }
+```
+Only while `DRAFT` — once `SUBMITTED`, it's out in the vendor's own portal and this app
+has no authority to unilaterally cancel it (400). Cancelling deletes the claim's lines (the
+claim itself stays as an audit record, flipped to `CANCELLED`), so their reservations
+become claimable again the next time you `aggregate()` that vendor/period — worth trying
+this yourself: aggregate, cancel, re-aggregate the same supplier/period, and watch the
+same spares come back into a fresh claim.
+
+### 30f. Record the vendor's credit note (step 12.4) — Accountant/Finance Manager/Super Admin
+
+```
+POST /warranty-claims/:id/credit-note
+{ "creditNoteNumber": "CN-2026-4471", "creditNoteAmount": 450.00 }
+```
+Requires `SUBMITTED`. The amount may be less than `totalClaimedAmount` (a partial
+recovery — the vendor disputed one line, say). On success: status → `CREDIT_RECEIVED`, and
+a `WARRANTY_CLAIM_CREDIT` entry appears in
+`GET /gl-postings?sourceType=WARRANTY_CLAIM_CREDIT` (Debit `2000-VENDOR-PAYABLE` / Credit
+`4020-WARRANTY-RECOVERY` per the BRD's own literal wording, same simplified two-line-entry
+pattern every other GL posting in this app uses).
+
+### 30g. Prove the guardrails work / live-verify
+
+- Try `aggregate` as a field technician or an Accountant → 403 (neither is a clerk role).
+- Try `credit-note` as a Warranty Clerk → 403 (not a credit-note role).
+- Try listing claims with no token → 401.
+- Try `aggregate` twice for the same vendor/period → the second call 400s, nothing left
+  unclaimed.
+- Try `cancel` on a `SUBMITTED` claim → 400.
+- Try `credit-note` twice on the same claim → 400.
+- Live-verified via `scripts/warranty-claims-e2e-test.ps1` — drives the full pipeline (see
+  30a), exercises every check above against a real running server plus the partial-recovery
+  credit note and its GL posting, and checks `recovery-rate` across a credited vendor
+  (90%), a submitted-but-uncredited vendor (0%, not `null`), and a vendor with nothing
+  claimed at all (`null`). **Run it yourself and paste the OK/FAIL output back** — as of
+  this write-up it hasn't been run against your machine yet (unit tests only, 22 new,
+  514/514 passing app-wide).
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2465,14 +2592,17 @@ PowerShell.
 
 ## What's testable right now vs. not yet
 
-Everything through **Phase 11** (Auth, Master Data, Appointments, Technician Mobile API,
+Everything through **Phase 12** (Auth, Master Data, Appointments, Technician Mobile API,
 Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
 + POD + OOW invoicing block, Finance extension + Customer Portal, AMC Management,
-Dismantling, Reports/Dashboards) is real, working code you can exercise exactly as above —
-all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel (Section
-17e). Your full post-MVP sequencing (AMC → Dismantling → Reports/Dashboards) is complete;
-BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
-out of scope for now (see Section 17's intro).
+Dismantling, Reports/Dashboards, Warranty Claims) is real, working code you can exercise
+exactly as above — all 147 endpoints in Section 11 are live, plus the `/reports` WebSocket
+channel (Section 17e). Your full post-MVP sequencing (AMC → Dismantling →
+Reports/Dashboards → Warranty Claims) is complete; BRD 18.2/18.3/18.4 (Finance/Quality/
+Operational dashboards) remain unbuilt and explicitly out of scope for now (see Section
+17's intro). **Phase 12 (Warranty Claims, Section 30) is unit-tested but not yet
+live-verified against your machine** — run `scripts/warranty-claims-e2e-test.ps1` and
+paste the output back.
 
 The React frontend (Sections 18–29) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the

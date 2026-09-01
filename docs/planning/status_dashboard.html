@@ -382,8 +382,8 @@
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
       <div class="stat"><span class="n mono">12 / 12</span><span class="l">Frontend phases built (all queued phases)</span></div>
-      <div class="stat"><span class="n mono">493 + 266</span><span class="l">Backend + frontend tests passing</span></div>
-      <div class="stat"><span class="n mono">70f51a5</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">514 + 266</span><span class="l">Backend + frontend tests passing</span></div>
+      <div class="stat"><span class="n mono">ce3e900</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -449,6 +449,11 @@
         <span class="phase-num mono">11</span>
         <div><div class="phase-name">Reports/Dashboards (post-MVP)</div><div class="phase-sub">Live-verified</div></div>
         <span class="chip done">Done</span>
+      </div>
+      <div class="phase current">
+        <span class="phase-num mono">12</span>
+        <div><div class="phase-name">Warranty Claims (post-MVP, EPIC-007 "Optional")</div><div class="phase-sub">Built, 22 new tests (514/514 app-wide), e2e script shipped — awaiting your live run</div></div>
+        <span class="chip pending">Live-Verify Pending</span>
       </div>
       <div class="phase done">
         <span class="phase-num mono">FE·1</span>
@@ -965,22 +970,58 @@
       </p>
       <span class="resolved-tag">Live-verified this phase</span>
     </div>
+    <div class="alert" style="border-color:var(--accent); background:var(--accent-wash); margin-top:14px;">
+      <h3 style="color:var(--accent);">Backend Phase 12: Warranty Claims — built, unit-tested, live-verification pending</h3>
+      <p>
+        The last of the four post-MVP directions (AMC → Dismantling → Reports/Dashboards →
+        Warranty Claims) — BRD Workflow 12, marked <span class="mono">[Optional]</span> in
+        the BRD. <span class="mono">the-fool</span> pre-mortem ran before any code was
+        written (mode: Find failure modes); all four findings were folded into the build
+        per your explicit instruction: a per-supplier Postgres advisory lock serializing
+        <span class="mono">aggregate()</span> inside one transaction (double-claim
+        prevention, backstopped by a unique index), permanent never-re-validated claim-line
+        snapshots, a new <span class="mono">CANCELLED</span> status fixing a DRAFT
+        dead-end, and a null-guarded dual-status <span class="mono">recoveryRate()</span>
+        denominator.
+      </p>
+      <p>
+        A real bug was caught before any test ran: the first draft joined
+        <span class="mono">JobCard</span> via an entity-class join with a raw ON condition,
+        which compiles cleanly but TypeORM silently never hydrates onto the parent entity
+        — every claim line's job-card number and serial would have saved as empty strings,
+        forever. Found by reading TypeORM's own source, fixed by joining through the real
+        relation path instead, and now has a dedicated regression test plus a live E2E
+        assertion. <span class="mono">test-master</span> coverage: 22 new tests,
+        <b>514/514 passing app-wide</b>, <span class="mono">tsc</span> clean.
+      </p>
+      <p>
+        Same "no network path to your machine" constraint as every phase: a new
+        <span class="mono">scripts/warranty-claims-e2e-test.ps1</span> drives the full real
+        pipeline (appointment → warranty-matched field visit → job card → workshop
+        reservation → QC approval) for two vendors, then exercises RBAC, aggregation,
+        double-claim prevention, the cancel-then-reclaim flow live, submission, a
+        partial-recovery credit note with its GL posting, and recovery-rate math — but it
+        hasn't been run against your machine yet. <b>Run it and paste the output back</b> —
+        this box gets a green update once you do, matching every other phase.
+      </p>
+      <span class="resolved-tag" style="background:var(--pending-wash); color:var(--pending);">Awaiting your live run</span>
+    </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>All 12 frontend phases</h3>
-        <h2>Built and live-verified</h2>
-        <p>The frontend build is complete. What's left: your own <span class="mono">git push</span>, the one manual WebSocket spot-check noted above, and any of the deferred, explicitly-out-of-scope follow-ups documented in STATUS_TRACKER.md if you want them at some point.</p>
+        <h3>Backend Phase 12: Warranty Claims</h3>
+        <h2>Run the live verification script</h2>
+        <p>Paste <span class="mono">scripts/warranty-claims-e2e-test.ps1</span>'s output back once you run it against your local server. After that: your own <span class="mono">git push</span> (2 commits ahead of <span class="mono">origin/main</span> as last checked this session — run <span class="mono">git log origin/main..main</span> yourself for the current count), the Reports/Dashboards WebSocket manual spot-check still outstanding from Frontend Phase 12, and any of the deferred, explicitly-out-of-scope follow-ups documented in STATUS_TRACKER.md if you want them at some point.</p>
       </div>
-      <div class="go">Done →</div>
+      <div class="go">Next →</div>
     </div>
   </div>
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 70f51a5 — awaiting push from your machine</span>
+    <span>master + main synced locally at ce3e900 — awaiting push from your machine</span>
   </footer>
 
 </div>

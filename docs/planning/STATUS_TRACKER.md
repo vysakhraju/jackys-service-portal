@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Frontend Phase 12 — Reports/Dashboards — live-verified, 36/36 checks passed)
-**Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases now built and live-verified)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `70f51a5`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `70f51a5`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Last updated:** 2026-09-01 (Backend Phase 12 — Warranty Claims — built, unit-tested (514/514), `warranty-claims-e2e-test.ps1` shipped, live-verification pending your run)
+**Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards, and Warranty Claims)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `ce3e900`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `ce3e900`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -48,6 +48,7 @@ This tracks where the build actually stands, phase by phase, against the 8-week 
 | 9 | AMC Management (post-MVP) | ✅ Done — contracts, auto-generated PM visit schedule, visit completion, renewal/cancellation, billing (full/half-yearly/quarterly split), manual renewal reminder, RWR upsell report, live-verified (new, this session) |
 | 10 | Dismantling (post-MVP) | ✅ Done — defective/DOA appliance recovery, harvest → verify → price-and-post (AC-31 three-actor segregation of duties), inventory adjustment + GL posting, live-verified (new, this session) |
 | 11 | Reports/Dashboards (post-MVP) | ✅ Done — BRD 18.1 Service Manager Dashboard: Job Status Board Kanban (REST + WebSocket real-time), Pending Approval Aging, Service Efficiency, First-Time Fix Rate; 18.2/18.3/18.4 explicitly out of scope, live-verified (new, this session) |
+| 12 | Warranty Claims (post-MVP, EPIC-007 "[Optional]") | 🟡 Built, unit-tested (22 new tests, 514/514 app-wide, `tsc` clean) — `scripts/warranty-claims-e2e-test.ps1` shipped, **live-verification pending your run** (new, this session) |
 
 `backend/` and `frontend/` top-level folders exist but are empty — actual backend code lives directly under `src/`, not `backend/src/` as the plan doc's tree diagram shows. Not a blocker, just worth knowing before the React frontend gets scaffolded (it should probably live in `frontend/`).
 
@@ -1047,6 +1048,133 @@ gate extends to the WS channel, not just REST. Zero failures on the final run.
 
 ---
 
+## Phase 12: Warranty Claims (post-MVP, EPIC-007 "[Optional]")
+
+BRD Workflow 12 is explicitly marked `[Optional]` and gets a thinner spec than every
+other workflow - a 5-step table with no numbered acceptance criteria: 12.1 System
+aggregates warranty spares by vendor/period/model; 12.2 Warranty Clerk generates a claim
+report (export to Excel/PDF, attach to vendor claim form); 12.3 Warranty Clerk uploads the
+claim to the vendor portal, System marks Claim Status = "Submitted"; 12.4 Accountant
+receives a Credit Note from the vendor, System posts Debit Vendor Payable / Credit
+Warranty Recovery Account; 12.5 System tracks Recovery Rate = Amount Recovered / Total
+Warranty Spares Cost * 100. This was the last of the four post-MVP directions from the
+Discovery/Implementation Plan docs (alongside AMC, Dismantling, and Reports/Dashboards,
+all already done) and the only one of the four never built until now.
+
+1. **Two pieces of this module were already anticipated by earlier phases, unbuilt but
+   waiting** - `RoleName.WARRANTY_CLERK` already existed and was already seeded in
+   `auth.service.ts`'s `seedRoles()` with `permissions: ['manage:warranty-claims',
+   'view:vendor-claims']`, and was already used in `master-data.controller.ts`'s
+   `@Roles()` for the warranty-master endpoints; `FINANCE_MANAGER` already carried
+   `'manage:vendor-claims'`. `TechnicianVisit.warrantySupplier` and
+   `.warrantyPeriodMonths` already existed and were already populated in
+   `captureSerialNumber()` from `MasterDataService.checkWarranty()`'s result. The one
+   genuine gap: `JobCard` never copied `warrantySupplier` from the visit at creation -
+   fixed this session (same snapshot pattern as `serialNumber`/`brand`).
+2. **Claim eligibility reads `JobCard.warrantyStatus` (current/effective), not
+   `originalWarrantyStatus` (immutable as-captured)** - a Team Leader's `warrantyOverride()`
+   (FR-17/AC-18, fully audited) is a real, audited determination of vendor liability (e.g.
+   a manufacturer extended-warranty card `WarrantyMaster` didn't know about), not just a
+   cosmetic badge change, so it's authoritative for whether the vendor should be billed.
+3. **"Consumed" is `InventoryReservation.status = CONSUMED`, the same signal
+   `DebitNotesService` already treats as "this repair genuinely cost the company money"**
+   - set permanently at QC approval (Main Store → Damage Location, never reversed).
+   `aggregate()`'s period window filters on `consumedAt` (the moment the cost was actually
+   realized), matching how every other GL-adjacent posting in this app anchors (QC
+   approval for `DebitNote`, price-and-post for `DismantlingRecord`).
+4. **the-fool pre-mortem (mode: Find failure modes) ran before any code was written, and
+   all four findings were folded into the build** (per your explicit "fold all four into
+   the build"):
+   - `aggregate()` runs inside one DB transaction serialized per-supplier via a Postgres
+     advisory lock (`pg_advisory_xact_lock(hashtext('warranty-claim-aggregate:' ||
+     supplier))`), preventing two concurrent aggregate() calls for the same vendor from
+     both reading the same "unclaimed" set before either writes its lines. The unique
+     index on `WarrantyClaimLine.inventoryReservationId` is the hard backstop if the lock
+     is ever bypassed (e.g. a lock-wait timeout) - a `23505` there aborts the whole
+     transaction, so the caller gets "nothing was created," never a half-built claim.
+   - Claim lines are **permanent snapshots, never re-validated against a later
+     `warrantyOverride()`** - eligibility is decided once, at aggregation time. This also
+     resolves the period-boundary question for free: an already-claimed reservation is
+     simply absent from the candidate pool any later `aggregate()` call sees, so two
+     overlapping period windows for the same vendor can never double-count.
+   - Added a **`CANCELLED` status + `cancel()`** (DRAFT-only) that deletes the claim's
+     `WarrantyClaimLine` rows so their reservations return to the claimable pool - without
+     this, a mistaken DRAFT claim would have permanently locked its spares out of ever
+     being claimed again, since `aggregate()` never re-offers a reservation that already
+     has a claim line, live or cancelled. Live-verified in the E2E script: aggregate →
+     cancel → re-aggregate picks up the exact same reservation.
+   - **`recoveryRate()`'s numerator is `creditNoteAmount` summed across `CREDIT_RECEIVED`
+     claims only; the denominator is `totalClaimedAmount` summed across `SUBMITTED` +
+     `CREDIT_RECEIVED`** (DRAFT excluded - not a real claim yet; CANCELLED excluded - never
+     became one). `rate: null` only when the denominator is zero, matching
+     `reports.service.ts`'s own null-guard convention for ratios - a submitted-but-not-yet-
+     credited claim correctly shows `rate: 0`, not `null`.
+5. **BRD 12.3's "upload to vendor portal" and 12.2's "export to Excel/PDF" are both the
+   same documented-stub pattern as `NotificationsService`** - no real vendor portal
+   integration or file-generation exists. `submit()` is a manual "I did this externally,
+   recording it" action (records a free-text `claimReferenceNumber`); `GET
+   /warranty-claims/:id` returns full structured JSON (every line's
+   jobCardNumber/serialNumber/sparePartCode/quantity/unitCost/lineAmount) for a future
+   frontend to render or export client-side, rather than generating a file server-side.
+6. **GL posting follows the BRD's literal wording, same as every other posting method in
+   this app** - `GlLedgerService.postWarrantyCreditNote()` posts Debit `2000-VENDOR-
+   PAYABLE` / Credit `4020-WARRANTY-RECOVERY` for the credit note amount (which may be
+   less than `totalClaimedAmount` - a partial recovery, live-verified in the E2E script).
+
+**REST**: 7 endpoints under `/warranty-claims` (`POST aggregate`, `GET /`, `GET /:id`,
+`POST /:id/submit`, `POST /:id/cancel`, `POST /:id/credit-note`, `GET recovery-rate`).
+Role-gated in three tiers: clerk-level actions (`aggregate`/`submit`/`cancel`) to
+`WARRANTY_CLERK`/`SERVICE_HEAD`/`SUPER_ADMIN`; the credit-note step to
+`ACCOUNTANT`/`FINANCE_MANAGER`/`SUPER_ADMIN` (matching BRD 12.4's "Accountant receives...");
+reads to all five of the above (matching Discovery's own role table for this workflow).
+
+**A real join-syntax bug was caught and fixed before any test ever ran** - the first draft
+of `aggregate()` joined `JobCard` via `.innerJoinAndSelect(JobCard, 'jc', 'jc.id =
+r.jobCardId')` (an entity-class join with a raw ON condition, not a relation property
+path). This compiles cleanly under `tsc` and looks correct, but TypeORM's
+`RawSqlResultsToEntityTransformer` only ever hydrates joined data onto the parent entity
+when the join was expressed via an actual relation path (`'r.jobCard'`) - an entity-class
+join has no `relation` metadata, so the transformer's `transformJoins()` silently skips
+attaching it, and `(reservation as any).jobCard` resolves to `undefined` at runtime. Left
+as written, every claim line's `jobCardNumber`/`serialNumber` would have silently saved as
+empty strings, forever, for every warranty claim ever created - not caught by `tsc`
+(compiles fine) and not something the earlier draft's tests would have caught either,
+since none had been written yet. Found by reading TypeORM's own join-attribute and
+result-transformer source before trusting the draft, fixed by joining via
+`InventoryReservation`'s existing `jobCard` relation (`.innerJoinAndSelect('r.jobCard',
+'jc')`) instead, and now has a dedicated regression test
+(`warranty-claims.service.spec.ts`'s "snapshots jobCardNumber/serialNumber..." test) plus a
+live E2E assertion that specifically checks these two fields are non-empty on a real
+aggregated claim line.
+
+**Automated tests**: 22 new tests in `src/warranty-claims/warranty-claims.service.spec.ts`
+- `aggregate()`'s transaction/advisory-lock call, the already-claimed exclusion filter, the
+correct `WHERE`/`innerJoinAndSelect` calls (including the join-syntax regression test
+above), `totalClaimedAmount` computation, sequential `WC-####` numbering, `findById`/
+`findAll`, `submit()`'s DRAFT-only guard, `cancel()`'s DRAFT-only guard + line deletion,
+`recordCreditNote()`'s SUBMITTED-only guard + GL posting call, and `recoveryRate()`'s
+null-guard + dual-status denominator. **514/514 tests passing app-wide** (492 carried over
++ 22 new, 22 suites). `tsc --noEmit` clean, `jest` clean. No controller-level tests, same
+as every other module in this codebase - RBAC is exercised live instead, in the E2E script
+below (this app has no `*.controller.spec.ts` files anywhere).
+
+**Live-verification: pending your run.** `scripts/warranty-claims-e2e-test.ps1` drives the
+full real pipeline - appointment → field visit with a warranty-master-matched serial
+number → job card (now snapshotting `warrantySupplier`) → workshop reservation → QC
+approval (consumes the reservation) - for two vendors, producing genuinely `CONSUMED`
+warranty spares to aggregate against. It then exercises RBAC (field tech and accountant
+both blocked from `aggregate`, no-token blocked from listing, warranty clerk and
+accountant both allowed to view), `aggregate()`'s validation (`periodStart` after
+`periodEnd`, a supplier with nothing consumed) and double-claim prevention (re-aggregating
+the same vendor/period finds nothing left), the cancel-then-reclaim flow live (the-fool
+finding #3), `submit()`, a partial-recovery credit note with its GL posting, and
+`recovery-rate` across a credited vendor (90%), a submitted-but-uncredited vendor (0%, not
+null), and a vendor with nothing claimed at all (`null`). Run it against your local server
+and paste the OK/FAIL output back - this section gets a second pass once you do, matching
+every other phase's two-pass close-out.
+
+---
+
 ## Known issues to fix later (not blocking)
 
 - `User.refreshTokenHash` (a bcrypt hash) is returned in nested user objects on some responses (e.g. `appointment.createdBy.refreshTokenHash`) because it lacks `select: false` and there's no active response-serialization filter. Not immediately exploitable, but worth tightening — add `select: false` similarly to `passwordHash`, with an explicit re-select where actually needed (`RefreshStrategy`).
@@ -1070,6 +1198,20 @@ gate extends to the WS channel, not just REST. Zero failures on the final run.
 - **No dedicated "Service Manager" role (Phase 10)** - same finding as Phase 9's AMC work; the BOM-to-spare/pricing/posting step is gated to `SERVICE_HEAD`/`SUPER_ADMIN`.
 - **Reports/Dashboards' WebSocket layer is poll-and-diff, not genuine push-on-mutation (Phase 11, deliberate)** - a 5-second poll interval means a status change can sit undetected for up to 5 seconds before a connected dashboard sees it; NFR-02's "<100ms" holds for the broadcast itself, not for detection. Revisit by adding an event-emitter call to every status-changing method across Appointments/TechnicianVisit/JobCards/Workshop/Delivery/Estimates if true sub-second detection is ever needed.
 - **BRD 18.2 Finance Dashboard, 18.3 Quality/Product Dashboard, and 18.4 Operational Reports are not built (Phase 11, explicitly deferred)** - only 18.1 Service Manager Dashboard was in FR-20/NFR-02's scope and the plan's 8-endpoint budget. All three are read-only reports over already-modeled data and are a natural, low-risk follow-up whenever they're wanted.
+- **No real vendor-portal integration or Excel/PDF export exists for Warranty Claims
+  (Phase 12, deliberate, same stub pattern as Notifications)** - `submit()` just records a
+  free-text external reference number; `GET /warranty-claims/:id` returns structured JSON
+  for a future frontend to render/export, not a generated file. Revisit only if a real
+  vendor portal API or a document-generation library is ever scoped for this workflow.
+- **`WarrantyClaim.supplier` is a plain string matched against `JobCard.warrantySupplier`
+  / `WarrantyMaster.supplier`, not a foreign key to a dedicated Vendor entity (Phase 12)**
+  - same "no separate master-data entity" simplification `WarrantyMaster` itself already
+    makes. A typo or renamed vendor string would silently split what should be one vendor's
+    claims into two. Revisit if a real Vendor master-data table is ever added.
+- **No Warranty Claims screen exists in the frontend yet (Phase 12)** - this phase is
+  backend-only; a Warranty Clerk/Accountant currently has to use Swagger or a script to
+  aggregate/submit/credit a claim. Would need its own future frontend phase (there are
+  currently 12 frontend phases, all covering earlier backend phases) if a UI is wanted.
 
 ---
 
@@ -2554,8 +2696,9 @@ at some point instead:
 
 - BRD 18.2 Finance Dashboard, 18.3 Quality/Product Dashboard, 18.4 Operational Reports
   (see backend Phase 11) — read-only reports over data that already exists, low risk.
-- Warranty Claims — unscoped beyond a mention in the implementation plan; would need its
-  own requirements pass before design.
+- Warranty Claims — the backend module is now built (see backend Phase 12 above,
+  live-verification pending); no frontend screen exists for it yet, would need its own
+  future frontend phase.
 - The genuine push-on-mutation WebSocket architecture (vs. the current poll-and-diff
   simplification) if true sub-second update detection ever becomes a real requirement.
 - The Appointment dashboard-stats endpoint (`GET /appointments/.../dashboard-stats` —
@@ -2579,6 +2722,6 @@ at some point instead:
 
 - Mobile framework decision: Flutter vs React Native
 - WhatsApp Business API account approval (2–4 weeks lead time) — now also blocking real Estimate notification delivery (Phase 4)
-- External Warranty API access/documentation
+- ~~External Warranty API access/documentation~~ — resolved: the S/N warranty check already uses the CSV-upload-fallback design Discovery itself proposed (`WarrantyMaster` table + `bulkImportWarrantyMaster()`), not a live external API integration, and Backend Phase 12 (Warranty Claims) builds on that same table for `JobCard.warrantySupplier`/vendor grouping. No live external API was ever wired up or is required for either module to work.
 - Acceptance criteria not yet validated with stakeholders
 - ~~`backend/`/`frontend/` folder layout vs. actual `src/` layout~~ — resolved: backend stays in `src/` as-is, the React frontend now lives in `frontend/` (Frontend Phase 1).
