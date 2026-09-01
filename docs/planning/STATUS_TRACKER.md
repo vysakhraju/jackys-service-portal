@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Frontend Phase 12 — Reports/Dashboards — built + test-master verified, live-verification pending)
-**Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases now built)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `972b8b4`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `972b8b4`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Last updated:** 2026-09-01 (Frontend Phase 12 — Reports/Dashboards — live-verified, 36/36 checks passed)
+**Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases now built and live-verified)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `70f51a5`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `70f51a5`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -2415,7 +2415,7 @@ and the status filter, serial lookup, and single-record GET.
 
 ---
 
-## Frontend Phase 12: Reports/Dashboards — built, test-master verified, live-verification pending
+## Frontend Phase 12: Reports/Dashboards — done, live-verified (36/36)
 
 BRD 18.1 "Service Manager Dashboard" / FR-20 / NFR-02. The last of the 12 queued frontend
 phases, and the first purely read-only screen in the app — no create/update/delete
@@ -2495,12 +2495,31 @@ WebSocket) — the script's header documents the manual browser check instead (o
 `/reports`, confirm the pill goes live, advance a Job Card in another tab, confirm the
 board updates within ~5s without a refresh).
 
-**Live-verification: pending** — run `./verify-phase12.ps1` and paste the output back;
-this closes out the last of the 12 queued frontend phases.
+**Live-verified — 36/36 passed, 0 failed**, no script fixes needed this time (unlike
+Phase 11). Confirmed live: RBAC exactly as designed — the technician got 403 on all 6
+endpoints, the unauthenticated request got 401, and the supervisor (`TECHNICAL_TEAM_LEADER`)
+succeeded; the Kanban board returned exactly the 8 documented columns in order with no
+`CANCELLED` column, and its counts summed correctly to `totalActiveJobs` (91, matching the
+summary variant exactly); Approval Aging returned `thresholdHours: 4` with its one item
+correctly flagged breached and correctly counted; Service Efficiency and First-Time Fix
+Rate both returned internally-consistent numbers against the real cumulative dataset left
+behind by every prior phase's testing (`sampleSize: 71`, `overallAvgHours: 0`,
+`rate: 0/71 = 0` — both round to zero because this run's seeded `TechnicianVisit`/`JobCard`
+timestamps across the whole project's test history are seconds apart, not hours apart, and
+none of those 71 completed jobs stayed on-site-only through to completion; genuinely low
+numbers from the test data's shape, not a computation bug — the math itself checked out
+via this script's own consistency assertions); and the combined `/overview` payload agreed
+with its own dedicated endpoints on every figure. The live WebSocket push (Kanban/Approval
+Aging over Socket.io) still needs the one-time manual browser check described in the
+script's header, since PowerShell can't drive that handshake — not covered by this run.
+
+This closes out the last of the 12 queued frontend phases — **the entire frontend build is
+now complete and live-verified**, pending only your own `git push` and the manual WebSocket
+spot-check above.
 
 ---
 
-## All 12 frontend phases now built
+## All 12 frontend phases now built and live-verified
 
 Frontend Phases 1–12 (Auth, Master Data, Appointment Scheduling + Technician Field View,
 Job Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory, QC
@@ -2519,11 +2538,16 @@ already-stable backend API, in the same order the backend itself was built in:
 9. ~~Finance extension + Customer Portal (public pages)~~ — done.
 10. ~~AMC Management~~ — done.
 11. ~~Dismantling~~ — done, live-verified (51/51 checks passed).
-12. ~~Reports/Dashboards~~ — done above, live-verification pending (`verify-phase12.ps1`).
+12. ~~Reports/Dashboards~~ — done above, live-verified (36/36 checks passed). One item
+    from this live run not covered by the script: the live WebSocket push itself still
+    needs the one manual browser check described in `verify-phase12.ps1`'s header
+    (PowerShell can't drive Socket.io's handshake) — everything else about this phase is
+    now fully closed out.
 
-What's left, once Phase 12 is live-verified: your own `git push` (repo is local-only from
-this build session's side, see Standing Practices), and any of the deferred follow-ups
-below if you want them at some point.
+**All 12 frontend phases are built and live-verified.** What's left: your own `git push`
+(repo is local-only from this build session's side, see Standing Practices), the one
+manual WebSocket spot-check noted above, and any of the deferred follow-ups below if you
+want them at some point.
 
 Known, explicitly-deferred follow-ups, unrelated to the frontend build, if you want them
 at some point instead:

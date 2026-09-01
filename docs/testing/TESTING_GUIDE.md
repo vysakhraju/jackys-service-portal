@@ -2435,10 +2435,11 @@ without a page refresh or a forced sign-out.
 board looks wrong given what you know is actually in the system (check
 `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 12 section if unsure, especially the
 two documented column simplifications in (d) above before assuming a missing/misplaced
-card is a bug). `verify-phase12.ps1` checks the 6 REST endpoints for internal consistency
-(not exact counts, since this module reads whatever data already exists from every prior
-phase's testing) - run it and paste the output back; live-WebSocket behavior itself needs
-the manual check in (c)/(g) above, since it can't be driven from PowerShell.
+card is a bug). `verify-phase12.ps1` has already run clean against the real backend
+(36/36 checks passed, 0 failed - RBAC, all 6 endpoint shapes, and every internal-
+consistency check), so this section is about the manual WebSocket check in (c)/(g) above -
+that's the one thing this phase's live run doesn't cover, since it can't be driven from
+PowerShell.
 
 ---
 
@@ -2481,12 +2482,14 @@ Estimates + the public customer approval link (Section 22), Workshop + Inventory
 Finance + Customer Portal (Section 26), AMC Management (Section 27), Dismantling
 (Section 28), and Reports/Dashboards (Section 29) - all 12 frontend phases are now built,
 and all are test-covered (266/266 automated frontend tests as of Section 29, run isolated
-ahead of each device merge, 38 test files). Sections 18-28 are all live-verified against
+ahead of each device merge, 38 test files). Sections 18-29 are all live-verified against
 the real backend (Section 26's `verify-phase9.ps1` run: 143/143 checks passed, 0 failed;
 Section 27's `verify-phase10.ps1` run: 66/66 checks passed, 0 failed; Section 28's
-`verify-phase11.ps1` run: 51/51 checks passed, 0 failed); Section 29's
-`verify-phase12.ps1` is drafted and awaiting its first live run (see that section's
-closing note). Everything else in the app still only has a Swagger-based way to test it
+`verify-phase11.ps1` run: 51/51 checks passed, 0 failed; Section 29's `verify-phase12.ps1`
+run: 36/36 checks passed, 0 failed) - the entire frontend build is now complete and
+live-verified, aside from Section 29's one manual WebSocket spot-check (PowerShell can't
+drive Socket.io's handshake). Everything else in the app still only has a Swagger-based
+way to test it
 until its own frontend phase ships. Starting with Section 22's phase, the frontend also
 has its own automated test suite (Vitest + React Testing Library, `npm test` in
 `frontend/`) - Phases 1-4 predate this and are covered only by the manual walkthroughs
