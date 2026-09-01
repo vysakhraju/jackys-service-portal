@@ -103,11 +103,25 @@ $supplierB = "WC-Vendor-B-$suffix"
 # and checkWarranty() could arbitrarily return an old run's supplier instead of this run's.
 # Caught live: second run's jcA1/jcB1.warrantySupplier came back as an EARLIER run's supplier
 # string, not this run's - not a PowerShell variable bug, a cross-run WarrantyMaster collision.
-Step "warranty-master: vendor A covers WCA${suffix5}00000-WCA${suffix5}99999" { Invoke-RestMethod -Uri "$base/master-data/warranty-master" -Method Post -Headers $H -ContentType "application/json" -Body (@{
-  serialNumberRange = "WCA${suffix5}00000-WCA${suffix5}99999"; brand = "Samsung"; model = "WCMODEL$suffix"; warrantyPeriodMonths = 24; supplier = $supplierA
+#
+# suffix5 alone still isn't enough, caught live on the THIRD run: BETWEEN on text is a plain
+# byte-wise lexicographic comparison, and a SHORTER bound string still legally bounds a LONGER
+# value if they agree up to the shorter one's length - e.g. "WCA00000" <= "WCA6205712345" <=
+# "WCA99999" is true (decided at the 4th character: '0' < '6' < '9'), so any *new* serial of the
+# form "WCA<digit><more digits>" still falls inside every runs-ago-fixed literal "WCA00000-
+# WCA99999" row still sitting in the DB from before this suffix5 embedding existed - the run's
+# own narrower range wasn't the problem, that OLD wide-open row swallowing it was. There's no
+# warranty-master delete/deactivate endpoint to clean those old rows up from this script, so
+# instead the "X" inserted right after "WCA"/"WCB" is a marker character, not part of the
+# suffix: 'X' (0x58) sorts after every digit '0'-'9' (0x30-0x39), so "WCAX..." is always
+# lexicographically GREATER than the old bound's "WCA9...." upper end, structurally excluding
+# this run's serials/range from ever matching any pre-existing digit-only-continuation row,
+# regardless of how many more such stale rows accumulate over future runs.
+Step "warranty-master: vendor A covers WCAX${suffix5}00000-WCAX${suffix5}99999" { Invoke-RestMethod -Uri "$base/master-data/warranty-master" -Method Post -Headers $H -ContentType "application/json" -Body (@{
+  serialNumberRange = "WCAX${suffix5}00000-WCAX${suffix5}99999"; brand = "Samsung"; model = "WCMODEL$suffix"; warrantyPeriodMonths = 24; supplier = $supplierA
 } | ConvertTo-Json) } | Out-Null
-Step "warranty-master: vendor B covers WCB${suffix5}00000-WCB${suffix5}99999" { Invoke-RestMethod -Uri "$base/master-data/warranty-master" -Method Post -Headers $H -ContentType "application/json" -Body (@{
-  serialNumberRange = "WCB${suffix5}00000-WCB${suffix5}99999"; brand = "Samsung"; model = "WCMODEL$suffix"; warrantyPeriodMonths = 24; supplier = $supplierB
+Step "warranty-master: vendor B covers WCBX${suffix5}00000-WCBX${suffix5}99999" { Invoke-RestMethod -Uri "$base/master-data/warranty-master" -Method Post -Headers $H -ContentType "application/json" -Body (@{
+  serialNumberRange = "WCBX${suffix5}00000-WCBX${suffix5}99999"; brand = "Samsung"; model = "WCMODEL$suffix"; warrantyPeriodMonths = 24; supplier = $supplierB
 } | ConvertTo-Json) } | Out-Null
 
 # ============================================================================
@@ -153,11 +167,11 @@ Write-Output "QC grant issued: id=$($grant.id)"
 #    500.00 total at unitCost 100), vendor B gets one (qty 1 = 100.00) held
 #    back for the cancel-flow test.
 # ============================================================================
-$jcA1 = Step "vendor A, job 1: full pipeline to CONSUMED (qty 2)" { NewWarrantyJob "WCA$suffix5" "A1" 2 }
+$jcA1 = Step "vendor A, job 1: full pipeline to CONSUMED (qty 2)" { NewWarrantyJob "WCAX$suffix5" "A1" 2 }
 Write-Output "jcA1 warrantySupplier=$($jcA1.warrantySupplier), status=$($jcA1.status)"
-$jcA2 = Step "vendor A, job 2: full pipeline to CONSUMED (qty 3)" { NewWarrantyJob "WCA$suffix5" "A2" 3 }
+$jcA2 = Step "vendor A, job 2: full pipeline to CONSUMED (qty 3)" { NewWarrantyJob "WCAX$suffix5" "A2" 3 }
 Write-Output "jcA2 warrantySupplier=$($jcA2.warrantySupplier), status=$($jcA2.status)"
-$jcB1 = Step "vendor B, job 1: full pipeline to CONSUMED (qty 1, for the cancel-flow test)" { NewWarrantyJob "WCB$suffix5" "B1" 1 }
+$jcB1 = Step "vendor B, job 1: full pipeline to CONSUMED (qty 1, for the cancel-flow test)" { NewWarrantyJob "WCBX$suffix5" "B1" 1 }
 Write-Output "jcB1 warrantySupplier=$($jcB1.warrantySupplier), status=$($jcB1.status)"
 
 if ($jcA1.warrantySupplier -ne $supplierA) { Write-Host "FAIL: jcA1.warrantySupplier expected '$supplierA', got '$($jcA1.warrantySupplier)'" } else { Write-Host "OK   jcA1.warrantySupplier snapshot matches vendor A" }
