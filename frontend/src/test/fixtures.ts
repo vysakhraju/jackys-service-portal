@@ -13,6 +13,15 @@ import type { PortalInvoiceView, PortalSummaryView, PortalTrackView } from '../l
 import type { AmcBillingInvoice, AmcContract, AmcScheduleVisit, AmcVisitCompletion, UpsellCandidate } from '../lib/amcTypes';
 import type { DismantlingRecord, HarvestedComponent } from '../lib/dismantlingTypes';
 import type { ComponentYieldMatrix } from '../lib/masterDataTypes';
+import type {
+  ApprovalAgingItem,
+  ApprovalAgingReport,
+  DashboardOverview,
+  FirstTimeFixRateReport,
+  KanbanBoard,
+  KanbanCard,
+  ServiceEfficiencyReport,
+} from '../lib/reportsTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -475,6 +484,108 @@ export function makeComponentYieldMatrix(overrides: Partial<ComponentYieldMatrix
     isActive: true,
     createdAt: '2026-08-01T08:00:00Z',
     updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+// Frontend Phase 12 additions below.
+
+export function makeKanbanCard(overrides: Partial<KanbanCard> = {}): KanbanCard {
+  return {
+    jobCardId: 'jc-1',
+    jobCardNumber: 'JC-0001',
+    status: 'IN_PROGRESS',
+    section: 'WORKSHOP_REPAIR',
+    serialNumber: 'SN-000123',
+    brand: 'Samsung',
+    warrantyStatus: 'OOW',
+    deliveryNumber: null,
+    updatedAt: '2026-09-01T09:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeKanbanBoard(overrides: Partial<KanbanBoard> = {}): KanbanBoard {
+  return {
+    asOf: '2026-09-01T09:00:05Z',
+    columns: [
+      { key: 'SCHEDULED', label: 'Scheduled', count: 0, jobCards: [] },
+      { key: 'ON_SITE', label: 'On-Site', count: 0, jobCards: [] },
+      { key: 'WIP', label: 'WIP', count: 1, jobCards: [makeKanbanCard()] },
+      { key: 'SPARE_PENDING', label: 'Spare Pending', count: 0, jobCards: [] },
+      { key: 'APPROVAL_PENDING', label: 'Approval Pending', count: 0, jobCards: [] },
+      { key: 'QC_COMPLETED', label: 'QC Completed', count: 0, jobCards: [] },
+      { key: 'OUT_FOR_DELIVERY', label: 'Out for Delivery', count: 0, jobCards: [] },
+      { key: 'DELIVERED', label: 'Delivered', count: 0, jobCards: [] },
+    ],
+    totalActiveJobs: 1,
+    ...overrides,
+  };
+}
+
+export function makeApprovalAgingItem(overrides: Partial<ApprovalAgingItem> = {}): ApprovalAgingItem {
+  return {
+    estimateId: 'est-1',
+    jobCardId: 'jc-1',
+    jobCardNumber: 'JC-0001',
+    sentAt: '2026-09-01T04:00:00Z',
+    ageHours: 5.25,
+    breached: true,
+    ...overrides,
+  };
+}
+
+export function makeApprovalAgingReport(overrides: Partial<ApprovalAgingReport> = {}): ApprovalAgingReport {
+  return {
+    asOf: '2026-09-01T09:00:00Z',
+    thresholdHours: 4,
+    breachedCount: 1,
+    items: [makeApprovalAgingItem()],
+    ...overrides,
+  };
+}
+
+export function makeServiceEfficiencyReport(overrides: Partial<ServiceEfficiencyReport> = {}): ServiceEfficiencyReport {
+  return {
+    asOf: '2026-09-01T09:00:00Z',
+    overallAvgHours: 3.5,
+    sampleSize: 4,
+    byTechnician: [{ key: 'user-1', label: 'Test Technician', jobCount: 4, avgHours: 3.5 }],
+    byCategory: [{ key: 'WASHING_MACHINE', label: 'WASHING_MACHINE', jobCount: 4, avgHours: 3.5 }],
+    ...overrides,
+  };
+}
+
+export function makeFirstTimeFixRateReport(overrides: Partial<FirstTimeFixRateReport> = {}): FirstTimeFixRateReport {
+  return {
+    asOf: '2026-09-01T09:00:00Z',
+    totalCompletedJobs: 10,
+    onSiteOnlyCompletedJobs: 6,
+    rate: 0.6,
+    ...overrides,
+  };
+}
+
+export function makeDashboardOverview(overrides: Partial<DashboardOverview> = {}): DashboardOverview {
+  return {
+    asOf: '2026-09-01T09:00:00Z',
+    kanbanSummary: {
+      asOf: '2026-09-01T09:00:00Z',
+      columns: [
+        { key: 'SCHEDULED', label: 'Scheduled', count: 0 },
+        { key: 'ON_SITE', label: 'On-Site', count: 0 },
+        { key: 'WIP', label: 'WIP', count: 1 },
+        { key: 'SPARE_PENDING', label: 'Spare Pending', count: 0 },
+        { key: 'APPROVAL_PENDING', label: 'Approval Pending', count: 0 },
+        { key: 'QC_COMPLETED', label: 'QC Completed', count: 0 },
+        { key: 'OUT_FOR_DELIVERY', label: 'Out for Delivery', count: 0 },
+        { key: 'DELIVERED', label: 'Delivered', count: 0 },
+      ],
+      totalActiveJobs: 1,
+    },
+    approvalAging: { breachedCount: 1, oldestAgeHours: 5.25 },
+    firstTimeFixRate: makeFirstTimeFixRateReport(),
+    serviceEfficiency: { overallAvgHours: 3.5, sampleSize: 4 },
     ...overrides,
   };
 }

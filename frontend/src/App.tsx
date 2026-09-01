@@ -47,6 +47,7 @@ import { ContractsPage } from './pages/amc/ContractsPage';
 import { ExpiringContractsPage } from './pages/amc/ExpiringContractsPage';
 import { UpsellCandidatesPage } from './pages/amc/UpsellCandidatesPage';
 import { DismantlingPage } from './pages/dismantling/DismantlingPage';
+import { ReportsPage } from './pages/reports/ReportsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -133,6 +134,7 @@ export function App() {
                 </Route>
 
                 <Route path="/dismantling" element={<DismantlingPage />} />
+                <Route path="/reports" element={<ReportsPage />} />
               </Route>
             </Route>
 

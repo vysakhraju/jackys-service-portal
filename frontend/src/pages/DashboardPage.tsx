@@ -12,7 +12,7 @@ const FRONTEND_PHASES = [
   { name: 'Finance & Customer Portal', status: 'done' as const },
   { name: 'AMC Management', status: 'done' as const },
   { name: 'Dismantling', status: 'done' as const },
-  { name: 'Reports & Dashboards (live Kanban)', status: 'planned' as const },
+  { name: 'Reports & Dashboards (live Kanban)', status: 'done' as const },
 ];
 
 export function DashboardPage() {
