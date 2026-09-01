@@ -2280,6 +2280,88 @@ yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 10 section if unsu
 
 ---
 
+## 28. Frontend — Dismantling (Frontend Phase 11)
+
+Adds a new **Dismantling** sidebar destination covering component recovery from a
+write-off appliance already sitting in Damage Location (BRD Workflow 15, FR-19,
+AC-29/30/31) - a standalone record, not tied to any Job Card, that moves through
+`PENDING_HARVEST → COMPONENTS_LOGGED → VERIFIED → POSTED` (or `CANCELLED`).
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a), or any
+technician/lead/`SERVICE_HEAD`/`ACCOUNTANT`/`FINANCE_MANAGER` account - the page itself is
+broad-access (everyone in those roles can view), but the three key actions are individually
+role- *and* status-gated: **Log Harvest** (technicians, leads, Service Head, Super Admin),
+**Verify** (leads, Service Head, Super Admin), **Price & Post** (Service Head, Super Admin
+only - there's no dedicated "Service Manager" role in this system).
+
+**b. The three-distinct-actor rule (AC-31)**: this is the module's defining constraint -
+the person who harvests, the person who verifies, and the person who prices-and-posts must
+be three genuinely different people. The frontend enforces this pre-emptively, not just by
+surfacing the backend's rejection after the fact: if you're logged in as the same person
+who harvested a record, its **Verify** button renders visibly disabled with an inline
+explanation ("You harvested this record — a different person must verify it") rather than
+letting you click it and hit a 400. Same for **Price & Post** against both the harvester
+and the verifier. To actually exercise the full lifecycle yourself you'll need at least two
+accounts beyond admin - see `verify-phase11.ps1`'s header comment for how to seed a second
+test account with any role via `scripts/seed-technician.ts`'s `SEED_TECH_ROLE` variable
+(despite its name, it's role-agnostic - "Phase 5: any seeded role name works").
+
+**c. Creating a record**: click **+ New Record** and fill in the appliance's serial
+number, model id, and optional damage-location notes - all free text, matching this app's
+established convention for fields with no picker. This creates the record at
+`PENDING_HARVEST` and opens its detail panel.
+
+**d. Log Harvest**: from a `PENDING_HARVEST` record, click **Log Harvest** to open a
+dynamic line-item form - add a row per component you pulled off the appliance, typing its
+original BOM item code (a shared dropdown, sourced from that model's Component Yield
+Matrix if one exists, offers known codes as you type - but you can still type a code
+that isn't listed), its tested condition (Good/Working or Damaged), and quantity. If a
+typed code doesn't match anything in the model's yield matrix, an inline amber warning
+appears right under that row before you submit - catching a typo now, since once the
+record leaves `PENDING_HARVEST` there's no way to re-harvest and an unmatched code can
+never become eligible for conversion. Submitting moves the record to `COMPONENTS_LOGGED`.
+
+**e. Verify**: from a `COMPONENTS_LOGGED` record, a permitted, different-from-the-harvester
+user clicks **Verify** (with optional notes) to move it to `VERIFIED`.
+
+**f. Price & Post - read the banner first**: from a `VERIFIED` record, a permitted, third
+distinct user clicks **Price & Post**. This is the single most consequential action in the
+module - the modal opens with an always-visible banner stating this is *the only pricing
+pass this record will ever get*. Only components flagged `eligibleForConversion` are
+selectable; tick a component's checkbox to select it, then enter its recovery unit price
+and (optionally) a quantity to convert, up to the harvested amount. If you select fewer
+than all the eligible components, a required "I understand the rest will be permanently
+forfeited" checkbox appears and must be ticked before **Post recovery** enables - selecting
+every eligible component skips that extra step entirely, since nothing is being left
+behind. On submit, the backend upserts recovered stock into Main Store inventory and posts
+to the GL; the record moves to `POSTED` and can never be posted again.
+
+**g. If Price & Post fails with a conflict**: if someone else posts the same record first
+(a genuine race, guarded server-side), you'll see a distinct amber "reload and retry"
+message rather than a generic red error - and critically, whatever prices/quantities you'd
+already typed stay exactly as you left them, so you don't have to redo the work before
+retrying against the refreshed record.
+
+**h. Cancel**: available on `PENDING_HARVEST` or `COMPONENTS_LOGGED` records only - once a
+record reaches `VERIFIED` it can no longer be cancelled (that would discard a supervisor's
+sign-off with nothing to show for it), so the Cancel button simply isn't offered past that
+point.
+
+**i. The harvested-components table**: on any record's detail panel, a component logged
+against a BOM code with no yield-matrix match at harvest time (so its category and
+convertible-part fields were never resolved) shows a distinct "⚠ not in yield matrix"
+badge, instead of blending in as if it were a genuine `CONSUMABLE`/`SCRAP` classification -
+worth checking deliberately if you tested (d)'s typo scenario.
+
+**j. What to report back**: same as Phases 1-10 - anything confusing, broken, or where a
+missing action looks like a bug rather than a status the backend genuinely hasn't reached
+yet (check `docs/planning/STATUS_TRACKER.md`'s Frontend Phase 11 section if unsure). One
+known, deliberate backend limitation, unreachable from this UI and not fixed: see that same
+STATUS_TRACKER section's note on a latent duplicate-conversion-line edge case in
+`priceAndPost()` - the built modal can never construct a request that triggers it.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2311,20 +2393,22 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–27) now exists at `http://localhost:5173` and covers
+The React frontend (Sections 18–28) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
 technician's Field View (Section 20), Job Cards + Warranty Override (Section 21),
 Estimates + the public customer approval link (Section 22), Workshop + Inventory
 (Section 23), QC + Permissions admin (Section 24), Delivery + Invoicing (Section 25),
-Finance + Customer Portal (Section 26), and AMC Management (Section 27) - all built and
-test-covered (246 automated frontend tests total as of Section 27); Sections 18-27 are
-all live-verified against the real backend (Section 26's `verify-phase9.ps1` run:
+Finance + Customer Portal (Section 26), AMC Management (Section 27), and Dismantling
+(Section 28) - all built and test-covered (227/227 automated frontend tests as of Section
+28, run isolated ahead of the device merge, on top of the earlier 246); Sections 18-27
+are all live-verified against the real backend (Section 26's `verify-phase9.ps1` run:
 143/143 checks passed, 0 failed; Section 27's `verify-phase10.ps1` run: 66/66 checks
-passed, 0 failed). Everything else in the app still only has a Swagger-based way to test
-it until its own frontend phase ships. Starting with Section 22's phase, the frontend
-also has its own automated test suite (Vitest + React Testing Library, `npm test` in
-`frontend/`) - Phases 1-4 predate this and are covered only by the manual walkthroughs
-above.
+passed, 0 failed). Section 28 (Dismantling) is built and test-covered but **not yet
+live-verified** - `verify-phase11.ps1` is ready to run against the real backend, pending
+results. Everything else in the app still only has a Swagger-based way to test it until
+its own frontend phase ships. Starting with Section 22's phase, the frontend also has its
+own automated test suite (Vitest + React Testing Library, `npm test` in `frontend/`) -
+Phases 1-4 predate this and are covered only by the manual walkthroughs above.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

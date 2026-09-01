@@ -381,9 +381,9 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">10 / 12</span><span class="l">Frontend phases built (+ AMC Management)</span></div>
-      <div class="stat"><span class="n mono">493 + 246</span><span class="l">Backend + frontend tests passing</span></div>
-      <div class="stat"><span class="n mono">75bf3df</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">11 / 12</span><span class="l">Frontend phases built (+ Dismantling)</span></div>
+      <div class="stat"><span class="n mono">493 + 473</span><span class="l">Backend + frontend tests passing</span></div>
+      <div class="stat"><span class="n mono">f0a2d39</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -499,6 +499,11 @@
         <span class="phase-num mono">FE·10</span>
         <div><div class="phase-name">Frontend Phase 10: AMC Management</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 246/246 sandbox tests + 66/66 live-verified</div></div>
         <span class="chip done">Done</span>
+      </div>
+      <div class="phase current">
+        <span class="phase-num mono">FE·11</span>
+        <div><div class="phase-name">Frontend Phase 11: Dismantling</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 227/227 sandbox tests — awaiting live verification</div></div>
+        <span class="chip current">Built</span>
       </div>
     </div>
   </div>
@@ -728,42 +733,126 @@
   </div>
 
   <div class="section">
+    <div class="section-head"><h2>Frontend Phase 11, in detail</h2></div>
+    <div class="card">
+      <h3 style="font-size:17px;">Dismantling — component recovery from write-off appliances, with a real three-distinct-actor rule</h3>
+      <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
+        Reads <span class="mono">dismantling.controller.ts</span>,
+        <span class="mono">dismantling.service.ts</span> (288 lines, including the
+        transactional <span class="mono">priceAndPost()</span> core), and all 5
+        <span class="mono">dismantling/dto/*.ts</span> files in full before designing
+        anything. A standalone entity — not tied to a Job Card — recovering components
+        from a write-off appliance already in Damage Location (BRD Workflow 15 / FR-19 /
+        AC-29–31), moving through <span class="mono">PENDING_HARVEST → COMPONENTS_LOGGED
+        → VERIFIED → POSTED</span>, with AC-31's rule that the harvester, verifier, and
+        pricer/poster must be three different people. <span class="mono">the-fool</span>
+        and <span class="mono">test-master</span> both invoked explicitly via the Skill
+        tool again this phase, per standing practice.
+      </p>
+
+      <div class="stat-tiles">
+        <div class="tile"><span class="n mono">0 + 5</span><span class="l">Backend guards changed + failure modes pressure-tested</span></div>
+        <div class="tile"><span class="n mono">11 / 12</span><span class="l">Frontend phases built</span></div>
+        <div class="tile"><span class="n mono">227</span><span class="l">New automated tests (Vitest + RTL)</span></div>
+        <div class="tile"><span class="n mono">473 / 473</span><span class="l">Total frontend tests passing</span></div>
+      </div>
+
+      <h3 style="margin-top:4px;">What the pre-mortem caught before it shipped</h3>
+      <ul class="findings">
+        <li>
+          <span class="tag">01</span>
+          <div><b>A BOM-code typo at harvest time silently and permanently drops a component's eligibility, with no re-harvest path once the record moves on.</b>
+          <p>Fixed: HarvestModal.tsx's BOM item code field is wired to a datalist sourced from the model's existing Component Yield Matrix, with a live inline warning under any line whose code doesn't match. The harvested-components table also flags a no-match component with a distinct "⚠ not in yield matrix" badge instead of blending it in with a genuine CONSUMABLE/SCRAP row.</p></div>
+        </li>
+        <li>
+          <span class="tag">02</span>
+          <div><b>Price-and-post is the only pricing pass a record ever gets — under-selecting looks recoverable but is actually permanent forfeiture.</b>
+          <p>Fixed: PriceAndPostModal.tsx shows an always-visible "this is the only pricing pass this record will ever get" banner, and a strict-subset selection requires an explicit "I understand the rest will be permanently forfeited" checkbox before submit enables.</p></div>
+        </li>
+        <li>
+          <span class="tag">03</span>
+          <div><b>A mid-submit 409 Conflict (two eligible people racing the same record) could silently discard a manager's typed-in prices.</b>
+          <p>Fixed: the mutation's onError branch shows a distinct "reload and retry" message for a 409 specifically, and never calls reset() on any error path — entered prices survive the race.</p></div>
+        </li>
+        <li>
+          <span class="tag">04</span>
+          <div><b>Client-side pre-emptive gating of Verify/Price & Post could create false confidence if it's ever wrong.</b>
+          <p>Kept deliberately as a UX hint layered on the backend's real enforcement, not a replacement for it: canVerifyAsUser()/canPriceAsUser() mirror the backend's exact same-person checks to pre-emptively disable the buttons with an inline AC-31 explanation.</p></div>
+        </li>
+        <li>
+          <span class="tag">05</span>
+          <div><b>Four overlapping role arrays (HARVEST/VERIFY/MANAGER/VIEW) — the same fragmentation risk the-fool flagged for AMC in Phase 10.</b>
+          <p>Fixed the same way: collapsed into a single dismantlingPermissions(roleName) helper from the start, tested exhaustively across representative roles.</p></div>
+        </li>
+      </ul>
+
+      <h3 style="margin-top:22px;">Backend review: complete and accurate — one gap noted, not fixed</h3>
+      <div class="verified">
+        <span><span class="mono">tsc -b && vite build</span> compile clean, zero errors (sandbox)</span>
+        <span>227/227 new Vitest + React Testing Library tests passing (473/473 total)</span>
+        <span>All 8 endpoints, 4 role arrays, and Swagger annotations reviewed — no backend or Swagger corrections needed</span>
+        <span>test-master caught a real production bug pre-ship: a stale useMemo in PriceAndPostModal kept "Post recovery" disabled even with a valid selection — fixed by removing the memoization</span>
+      </div>
+      <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
+        One latent backend-only gap was found during review and deliberately left unfixed:
+        <span class="mono">priceAndPost()</span> resolves each conversion line against the
+        record's already-fetched in-memory snapshot before opening its transaction, so a
+        request whose <span class="mono">conversions</span> array listed the same
+        <span class="mono">originalBomItemCode</span> twice wouldn't be caught by the
+        "already converted" guard and could double-apply the inventory increment.
+        <span class="mono">PriceAndPostModal.tsx</span> can never construct such a request
+        (each harvested line appears once, selected or not), so this is unreachable from
+        the built UI — flagged for future awareness, not fixed this phase, per your
+        instruction to defer anything beyond this phase's scope.
+        <span class="mono">verify-phase11.ps1</span> is drafted and pushed to your machine,
+        covering the full lifecycle including AC-31's rejections in both directions — it
+        needs a second seeded test account (any <span class="mono">VERIFY_ROLES</span>
+        role) beyond the existing technician one, since admin alone can't exercise three
+        distinct actors. <b>Live verification pending</b> — run it and paste back the
+        results.
+      </p>
+    </div>
+  </div>
+
+  <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
-      <h3 style="color:var(--success);">Standing practices, held for a sixth phase in a row</h3>
+    <div class="alert" style="border-color:var(--accent); background:var(--accent-wash);">
+      <h3 style="color:var(--accent);">Standing practices, held for a seventh phase in a row</h3>
       <p>
         <span class="mono">the-fool</span> pre-mortem before build, then
         <span class="mono">test-master</span> coverage in an isolated sandbox before any
         file reaches your machine — both invoked explicitly via the Skill tool again this
-        phase. Five failure modes surfaced this time (the most of any phase so far), all
-        fixed at both the API and frontend layers before this section's screens existed.
-        Frontend test count is now 246 (186 from Phases 1–9 + 60 new), every one passing;
-        backend gained 4 new unit tests for the two new guards (493 total).
+        phase. Five failure modes surfaced (matching Phase 10's count), all five folded
+        into the build per your explicit instruction, at both the API-adjacent design
+        layer and the frontend. Backend endpoints and Swagger were reviewed end-to-end
+        this phase too, per your instruction — found already complete and accurate, no
+        corrections needed. Frontend test count is now 473 (246 from Phases 1–10 + 227
+        new), every one passing; backend stays at 493, unchanged, since no backend code
+        needed to change.
       </p>
       <p>
         Also as before: this build session has no network path to anything running on
         your machine — only a file bridge. Each frontend phase ships with a small
         PowerShell script (<span class="mono">verify-phaseN.ps1</span>) you run yourself
         with both dev servers up; you paste back the output and anything that fails gets
-        fixed from that. <span class="mono">verify-phase10.ps1</span> came back
-        <b>66 passed, 0 failed</b> — a clean first-try run. One environment snag this
-        session, unrelated to any Phase 10 code: the device-side
-        <span class="mono">npm install</span> for <span class="mono">frontend/</span> hit
-        very slow rename syscalls on the mounted drive and didn't finish — if
-        <span class="mono">npm test</span> reports a missing module locally, a normal
-        <span class="mono">npm install</span> run from your own terminal should resolve it
-        at native disk speed.
+        fixed from that. <span class="mono">verify-phase11.ps1</span> is pushed to your
+        machine and ready to run — it needs one extra prerequisite this time: a second
+        seeded test account (any <span class="mono">VERIFY_ROLES</span> role, e.g.
+        <span class="mono">TECHNICAL_TEAM_LEADER</span>) via
+        <span class="mono">SEED_TECH_ROLE=TECHNICAL_TEAM_LEADER npm run seed:technician</span>,
+        since AC-31's three-distinct-actor rule needs three real accounts and admin alone
+        can't stand in for two of the three roles.
       </p>
-      <span class="resolved-tag">Live-verified this phase</span>
+      <span class="resolved-tag" style="background:var(--accent); color:var(--accent-ink);">Awaiting live verification</span>
     </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Frontend Phase 11</h3>
-        <h2>Dismantling</h2>
-        <p>Defective/DOA appliance recovery screens, next in the same order the backend itself was built in — then Reports/Dashboards last, ending with the live Kanban board.</p>
+        <h3>Next up · Frontend Phase 12</h3>
+        <h2>Reports/Dashboards</h2>
+        <p>The last frontend phase — the live WebSocket Kanban board — once Phase 11's live verification results are back and this dashboard reflects them.</p>
       </div>
       <div class="go">Up next →</div>
     </div>
@@ -771,7 +860,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 75bf3df — awaiting push from your machine</span>
+    <span>master + main synced locally at f0a2d39 — awaiting push from your machine</span>
   </footer>
 
 </div>

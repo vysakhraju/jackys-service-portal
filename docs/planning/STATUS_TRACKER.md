@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Frontend Phase 10 live-verified — 66/66 checks passed)
+**Last updated:** 2026-09-01 (Frontend Phase 11 — Dismantling — built, tested (227/227), awaiting live verification; Phase 10 remains live-verified — 66/66 checks passed)
 **Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `b7b113c`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `b7b113c`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `f0a2d39`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `f0a2d39`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -2286,15 +2286,120 @@ excluding them the moment an ACTIVE AMC contract exists on that same phone numbe
 
 ---
 
-## Next: Frontend Phase 11 (Dismantling) — 2 phases queued
+## Frontend Phase 11: Dismantling — done this session
+
+Research-first, per the established process: read the entity, controller, service
+(288 lines, including the transactional `priceAndPost()` core), all 5 DTOs, the
+`ComponentYieldMatrix` master-data entity/DTO, and `GlLedgerService.postDismantlingRecovery()`
+in full before designing anything. Dismantling (BRD Workflow 15 / FR-19 / AC-29-31) is a
+standalone entity — not tied to `JobCard` — recovering components from a write-off
+appliance already sitting in Damage Location, with a `PENDING_HARVEST → COMPONENTS_LOGGED
+→ VERIFIED → POSTED` status machine and AC-31's three-distinct-actor segregation-of-duties
+rule (the harvester, the verifier, and the person who prices & posts must all be different
+people, enforced as real backend guards).
+
+**the-fool pre-mortem (Find the Failure Modes)** surfaced 5 findings, all folded into the
+build per your explicit instruction:
+
+1. **Silent, permanent loss of recoverable-component value from BOM-code typos.**
+   `harvest()`'s `ComponentYieldMatrix` lookup is an exact string match on
+   `modelId` + `originalBomItemCode`; a typo'd code gets no matrix match, silently
+   computes `eligibleForConversion: false`, and harvest is one-shot — there's no
+   re-harvest endpoint once a record leaves `PENDING_HARVEST`, so the mistake is
+   undiscoverable until `price-and-post`, by which point it's unrecoverable. Fixed:
+   `HarvestModal.tsx`'s BOM item code field is wired to a `<datalist>` sourced from the
+   already-existing `listYieldByModel()` master-data wrapper (built in Frontend Phase 2,
+   never previously used for this), with a live inline warning under any line whose code
+   doesn't match the model's known yield matrix. The harvested-components table in the
+   detail panel also flags a `category: null` component with a distinct "⚠ not in yield
+   matrix" badge, instead of blending it in with a genuine `CONSUMABLE`/`SCRAP` row.
+2. **Under-conversion at price-and-post looks like "save for later" when it's actually
+   "forfeit forever."** Price-and-post is the only pricing pass a record ever gets — once
+   it posts, the record is terminal (`POSTED`), and any harvested component not selected,
+   or converted at less than its full harvested quantity, is permanently unrecoverable.
+   Fixed: `PriceAndPostModal.tsx` shows an unmissable "this is the only pricing pass this
+   record will ever get" banner at all times, and submitting a selection that's a strict
+   subset of the eligible components requires an additional explicit "I understand the
+   rest will be permanently forfeited" confirmation checkbox before submit enables.
+3. **A mid-submit 409 Conflict could silently discard a manager's typed-in prices.** Two
+   people with price-and-post access opening the same `VERIFIED` record (plausible on a
+   small team rotating through all three AC-31 roles) can race; the backend's
+   re-check-inside-the-advisory-lock throws `ConflictException` on the loser. Fixed: the
+   mutation's `onError` branch checks specifically for `response?.status === 409` and
+   shows a distinct "reload and retry" message instead of the generic error box, and —
+   critically — never calls `reset()` on any error path, so a manager's entered prices
+   survive the race instead of vanishing.
+4. **Client-side pre-emptive gating of Verify/Price & Post could create false confidence
+   if it's ever wrong.** Added `canVerifyAsUser()`/`canPriceAsUser()` as pure helpers
+   mirroring the backend's exact same-person checks, used to pre-emptively disable (with
+   an inline AC-31 explanation) the Verify and Price & Post trigger buttons whenever the
+   current user is the harvester/verifier — but kept explicitly as a UX hint layered on
+   top of the backend's real enforcement, not a replacement for it.
+5. **Four-role fragmentation.** `HARVEST_ROLES`/`VERIFY_ROLES`/`MANAGER_ROLES`/`VIEW_ROLES`
+   (copied verbatim from `dismantling.controller.ts`) collapsed into a single
+   `dismantlingPermissions(roleName)` helper from the start, the same fix
+   `amcPermissions()` applied for AMC's identical fragmentation risk in Phase 10.
+
+Backend review (entity, controller, all 8 endpoints' Swagger annotations, all 5 DTOs) found
+it already complete and accurate — no backend or Swagger corrections were needed this
+phase. One latent backend-only gap was noted during review, not fixed (out of scope for a
+frontend phase, and not reachable from this app's UI): `priceAndPost()` resolves each
+conversion line against the record's already-fetched in-memory snapshot before opening its
+transaction, so if a single request's `conversions` array listed the same
+`originalBomItemCode` twice, the "already converted" guard wouldn't catch the second
+occurrence and the inventory increment would double-apply. `PriceAndPostModal.tsx` can
+never construct such a request (each harvested line appears once, either selected or not),
+so this is flagged for future awareness rather than fixed now.
+
+New frontend files: `lib/dismantlingTypes.ts` (status/condition enums, the four role
+arrays collapsed into `dismantlingPermissions()`, `canVerifyAsUser()`/`canPriceAsUser()`),
+`lib/dismantlingApi.ts` (all 8 endpoints), `pages/dismantling/DismantlingPage.tsx`
+(status-filterable list + `?recordId=`-deep-linked detail panel, modeled on
+`ContractsPage.tsx`'s Phase 10 pattern), `pages/dismantling/HarvestModal.tsx`,
+`pages/dismantling/PriceAndPostModal.tsx`. Modified `StatusBadge.tsx` (4 new status
+colors), `App.tsx` (routing), `AppLayout.tsx` (nav path), `DashboardPage.tsx` (marked
+done).
+
+**test-master** ran after the design was settled: 227/227 sandbox tests pass (all new —
+`dismantlingTypes.test.ts` covers `dismantlingPermissions()` exhaustively across
+representative roles plus `canVerifyAsUser()`/`canPriceAsUser()`'s exact same-person
+exclusion logic and the undefined-user edge case; `DismantlingPage.test.tsx` covers the
+status filter, role-gated create button, record creation navigating `?recordId=`, every
+status+role action-button gating combination including the AC-31 disabled-with-explanation
+states, and the harvested-components table's category-warning badge; `HarvestModal.test.tsx`
+covers the yield-matrix-mismatch warning appearing/not-appearing correctly; `PriceAndPostModal.test.tsx`
+covers the finality banner, the partial-selection confirmation requirement, and both the
+409-specific and generic error paths). `tsc -b` and `vite build` both clean. Test-master
+verification caught one real bug before it shipped: `PriceAndPostModal`'s `selectedRows`
+was wrapped in a reference-keyed `useMemo` that missed updates because react-hook-form's
+`watch()` reuses/mutates array instances across renders — the submit button stayed
+disabled even after selecting components and entering valid prices. Fixed by removing the
+unnecessary memoization (the array is tiny; recomputing every render is simpler and
+correct) rather than trying to fix the dependency tracking.
+
+All 14 new/modified files pushed to the device and committed. `verify-phase11.ps1`
+drafted (root + `frontend/` copies) — covers create → harvest (eligible / consumable /
+unmatched-code / damaged-condition components) → verify (self-verify rejection, then a
+real second-account verify) → price-and-post (harvester-rejected, verifier-rejected,
+unlogged-code-rejected, ineligible-component-rejected, over-quantity-rejected, then a real
+successful post with inventory + GL) → cancel (allowed pre-verification, blocked once
+VERIFIED) → the status-filtered list, serial lookup, and single-record GET. Needs a second
+seeded test account (any `VERIFY_ROLES` role, e.g. `TECHNICAL_TEAM_LEADER`) beyond the
+existing technician one, so AC-31's three-distinct-actor rule can be exercised for real —
+the script's header comment has the one-line `seed:technician` command for it. **Live
+verification pending** — run `verify-phase11.ps1` and paste the output back.
+
+---
+
+## Next: Frontend Phase 12 (Reports/Dashboards) — 1 phase queued
 
 The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
-Phases 1–10 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
+Phases 1–11 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
 Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory,
 QC + Permissions admin, Delivery + Invoicing, Finance extension + Customer Portal, AMC
-Management) are all built. The remaining 2 frontend phases are queued, in the same order
-the backend itself was built in, so each screen has an already-tested, already-stable
-API to build against:
+Management, Dismantling) are all built. The remaining 1 frontend phase is queued, in the
+same order the backend itself was built in, so each screen has an already-tested,
+already-stable API to build against:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
@@ -2306,7 +2411,7 @@ API to build against:
 8. ~~Delivery + Invoicing~~ — done.
 9. ~~Finance extension + Customer Portal (public pages)~~ — done.
 10. ~~AMC Management~~ — done above.
-11. Dismantling
+11. ~~Dismantling~~ — done above (built this session; live verification pending).
 12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
     easiest to get right once the simpler ones establish the patterns)
 
