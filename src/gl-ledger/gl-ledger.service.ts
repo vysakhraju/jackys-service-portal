@@ -18,6 +18,12 @@ const ACCOUNTS = {
   INVENTORY_SPARES: '1040-INVENTORY-SPARES',
   SERVICE_REVENUE: '4000-SERVICE-REVENUE',
   DISMANTLING_RECOVERY_INCOME: '4010-DISMANTLING-RECOVERY',
+  // Backend Phase 12 (Warranty Claims): account pairing follows the BRD's own literal
+  // wording ("Debit Vendor Payable, Credit Warranty Recovery Account") rather than a
+  // textbook-correct receivable/recovery pairing - same simplified-journal-entry
+  // convention every other posting in this file already uses.
+  VENDOR_PAYABLE: '2000-VENDOR-PAYABLE',
+  WARRANTY_RECOVERY_INCOME: '4020-WARRANTY-RECOVERY',
 };
 
 function debitAccountForPaymentMethod(method: PaymentMethod): string {
@@ -90,6 +96,24 @@ export class GlLedgerService {
       description: `Recovered component value posted for ${params.recordNumber}`,
       debitAccount: ACCOUNTS.INVENTORY_SPARES,
       creditAccount: ACCOUNTS.DISMANTLING_RECOVERY_INCOME,
+      amount: params.amount,
+    });
+    return this.glPostingRepository.save(posting);
+  }
+
+  /** Called by WarrantyClaimsService.recordCreditNote() - one posting per WarrantyClaim,
+   * when its vendor credit note is recorded (BRD 12.4). */
+  async postWarrantyCreditNote(params: {
+    warrantyClaimId: string;
+    claimNumber: string;
+    amount: number;
+  }): Promise<GlPosting> {
+    const posting = this.glPostingRepository.create({
+      sourceType: GlSourceType.WARRANTY_CLAIM_CREDIT,
+      sourceId: params.warrantyClaimId,
+      description: `Vendor credit note received for ${params.claimNumber}`,
+      debitAccount: ACCOUNTS.VENDOR_PAYABLE,
+      creditAccount: ACCOUNTS.WARRANTY_RECOVERY_INCOME,
       amount: params.amount,
     });
     return this.glPostingRepository.save(posting);

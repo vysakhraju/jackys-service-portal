@@ -158,6 +158,7 @@ export class JobCardsService {
       symptomCode: visit.symptomCode,
       originalWarrantyStatus: visit.warrantyStatus,
       warrantyStatus: visit.warrantyStatus,
+      warrantySupplier: visit.warrantySupplier,
       createdById: userId,
       // Phase 8 Customer Portal: a read-only tracking link, live for this job's whole
       // lifecycle (see the entity's doc comment on why this differs from Estimate's

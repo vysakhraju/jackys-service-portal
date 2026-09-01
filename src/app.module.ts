@@ -20,6 +20,7 @@ import { CustomerPortalModule } from './customer-portal/customer-portal.module';
 import { AmcModule } from './amc/amc.module';
 import { DismantlingModule } from './dismantling/dismantling.module';
 import { ReportsModule } from './reports/reports.module';
+import { WarrantyClaimsModule } from './warranty-claims/warranty-claims.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { ReportsModule } from './reports/reports.module';
     AmcModule,
     DismantlingModule,
     ReportsModule,
+    WarrantyClaimsModule,
   ],
 })
 export class AppModule {}

@@ -98,6 +98,15 @@ export class JobCard {
   @Column({ type: 'enum', enum: WarrantyStatus })
   warrantyStatus: WarrantyStatus;
 
+  // Snapshotted from TechnicianVisit.warrantySupplier at creation time (same pattern as
+  // serialNumber/brand above) - Backend Phase 12 (Warranty Claims): this is how a claim's
+  // aggregate() step groups consumed warranty spares by vendor. Deliberately NOT re-read
+  // live from WarrantyMaster later - if that master data changes or a row is
+  // deactivated, this Job Card's record of which supplier was actually responsible at
+  // service time must not silently drift.
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  warrantySupplier: string | null;
+
   // Gate 2: a CCE (or above) manually confirms the captured S/N matches the physical
   // invoice. Business rule: "no Job Card without invoice verification."
   @Column({ type: 'boolean', default: false })

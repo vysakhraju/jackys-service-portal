@@ -30,6 +30,12 @@ export enum GlSourceType {
   // at the same moment DismantlingService.priceAndPost() commits the inventory increase -
   // see gl-ledger.service.ts's postDismantlingRecovery() for the account pairing.
   DISMANTLING_RECOVERY = 'DISMANTLING_RECOVERY',
+  // Backend Phase 12 (Warranty Claims, BRD Workflow 12 / EPIC-007): posted once per
+  // WarrantyClaim, when an Accountant records the vendor's credit note - see
+  // gl-ledger.service.ts's postWarrantyCreditNote() for the account pairing (follows the
+  // BRD's own literal wording, not necessarily a textbook-correct journal entry, same as
+  // every other posting method in this file).
+  WARRANTY_CLAIM_CREDIT = 'WARRANTY_CLAIM_CREDIT',
 }
 
 @Entity('gl_postings')
