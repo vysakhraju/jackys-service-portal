@@ -4,6 +4,17 @@
 **Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `c7c3d2c`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `c7c3d2c`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Next session:** all 13 backend phases + all 12 frontend phases are built and
+live-verified — nothing is blocking. You chose the small polish items over the
+mobile app / offline-mode decision, then asked to pick this back up tomorrow rather
+than start tonight. Pick one to start with when you resume: **GL Postings UI**
+(`GET /gl-postings?sourceType=...` already built + role-gated, just needs a small
+read-only Finance screen), **Appointment dashboard-stats widget** (`GET
+/appointments/.../dashboard-stats` already typed on the frontend, no screen or
+widget spec exists yet), or **POD signature-pad** (replace POD's plain file upload
+with a real signature-pad/camera-capture component). See "Known issues to fix
+later" below for the full description of each. The mobile app / offline-mode
+decision (Flutter vs React Native) stays open and deferred, not chosen against.
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
