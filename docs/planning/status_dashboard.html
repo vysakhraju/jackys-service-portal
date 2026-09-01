@@ -381,9 +381,9 @@
     </div>
     <div class="stat-row">
       <div class="stat"><span class="n mono">MVP + 3</span><span class="l">Backend phases done</span></div>
-      <div class="stat"><span class="n mono">11 / 12</span><span class="l">Frontend phases built (+ Dismantling)</span></div>
-      <div class="stat"><span class="n mono">493 + 473</span><span class="l">Backend + frontend tests passing</span></div>
-      <div class="stat"><span class="n mono">cea653c</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">12 / 12</span><span class="l">Frontend phases built (all queued phases)</span></div>
+      <div class="stat"><span class="n mono">493 + 266</span><span class="l">Backend + frontend tests passing</span></div>
+      <div class="stat"><span class="n mono">972b8b4</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -504,6 +504,11 @@
         <span class="phase-num mono">FE·11</span>
         <div><div class="phase-name">Frontend Phase 11: Dismantling</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 227/227 sandbox tests + 51/51 live-verified</div></div>
         <span class="chip done">Done</span>
+      </div>
+      <div class="phase current">
+        <span class="phase-num mono">FE·12</span>
+        <div><div class="phase-name">Frontend Phase 12: Reports/Dashboards</div><div class="phase-sub">the-fool pre-mortem + test-master coverage, 266/266 sandbox tests — live-verification pending</div></div>
+        <span class="chip current">Built</span>
       </div>
     </div>
   </div>
@@ -832,45 +837,127 @@
   </div>
 
   <div class="section">
+    <div class="section-head"><h2>Frontend Phase 12, in detail</h2></div>
+    <div class="card">
+      <h3 style="font-size:17px;">Reports/Dashboards — the live Job Status Board, plus three supporting reports</h3>
+      <p style="color:var(--ink-muted); font-size:14.5px; margin-top:8px;">
+        Reads <span class="mono">reports.controller.ts</span>,
+        <span class="mono">reports.service.ts</span> (399 lines), and
+        <span class="mono">reports.gateway.ts</span> in full before designing anything —
+        BRD 18.1 "Service Manager Dashboard" / FR-20 / NFR-02. The last of the 12 queued
+        frontend phases, and the first purely read-only screen in the app: no
+        create/update/delete anywhere, so a single <span class="mono">canViewReports()</span>
+        boolean replaces the per-action <span class="mono">*Permissions()</span> helper
+        every earlier module needed. <span class="mono">the-fool</span> and
+        <span class="mono">test-master</span> both invoked explicitly via the Skill tool
+        again this phase, per standing practice.
+      </p>
+
+      <div class="stat-tiles">
+        <div class="tile"><span class="n mono">0</span><span class="l">Backend changes needed (pure consumption target)</span></div>
+        <div class="tile"><span class="n mono">12 / 12</span><span class="l">Frontend phases built</span></div>
+        <div class="tile"><span class="n mono">39</span><span class="l">New automated tests (Vitest + RTL)</span></div>
+        <div class="tile"><span class="n mono">266 / 266</span><span class="l">Total frontend tests passing</span></div>
+      </div>
+
+      <h3 style="margin-top:4px;">What the pre-mortem caught before it shipped</h3>
+      <ul class="findings">
+        <li>
+          <span class="tag">01</span>
+          <div><b>A token captured once at mount goes stale after the 15-minute access-token lifetime, and Socket.io does not auto-reconnect after a server-initiated disconnect.</b>
+          <p>Fixed: useReportsSocket.ts passes a function-form auth option (io(url, &#123; auth: cb =&gt; cb(&#123;token&#125;) &#125;)) that reads the token fresh on every (re)connection attempt, and on an "io server disconnect" event proactively calls GET /auth/profile — piggybacking on api.ts's existing silent-refresh interceptor — before manually calling socket.connect() again.</p></div>
+        </li>
+        <li>
+          <span class="tag">02</span>
+          <div><b>A dropped live connection can look exactly like a quiet moment with nothing to report.</b>
+          <p>Fixed: a ConnectionPill always visibly renders connecting/live/reconnecting/offline, escalating to offline only after 5 consecutive connect_error events so ordinary transient retries don't false-alarm.</p></div>
+        </li>
+        <li>
+          <span class="tag">03</span>
+          <div><b>The backend's own poll-and-diff design means "live" can lag up to 5 seconds by design — presenting it as instant risks false urgency or false calm.</b>
+          <p>Fixed: a shared formatAsOf() helper renders the backend's own asOf timestamp on every card, so current vs. a few seconds behind vs. point-in-time report is always legible, never implied.</p></div>
+        </li>
+        <li>
+          <span class="tag">04</span>
+          <div><b>Service Efficiency and First-Time Fix Rate are never pushed by the gateway — blending them into the live feed would read as a bug, not a design choice.</b>
+          <p>Fixed: both get their own useQuery calls, their own manual Refresh button, and their own captured-at-fetch asOf, visually tagged "Report" against the "Live" tag on the Kanban/Approval Aging cards.</p></div>
+        </li>
+        <li>
+          <span class="tag">05</span>
+          <div><b>REPORTS_VIEW_ROLES is unusually narrow (no ACCOUNTANT/FINANCE_MANAGER, unlike every other module) — a restricted role must never even attempt the WebSocket handshake.</b>
+          <p>Fixed: canViewReports() runs first in ReportsPage, gating both the REST queries (enabled: canView) and useReportsSocket(canView) before any network or WS attempt.</p></div>
+        </li>
+      </ul>
+
+      <h3 style="margin-top:22px;">Backend review: complete, no changes needed. test-master: 266/266, zero failures. Live-verification pending</h3>
+      <div class="verified">
+        <span><span class="mono">tsc -b && vite build</span> compile clean, zero errors (sandbox)</span>
+        <span>39/39 new Vitest + React Testing Library tests passing (266/266 total, 38 files)</span>
+        <span>All 6 endpoints, the WebSocket gateway's auth/role handling, and the poll-and-diff design reviewed — pure consumption target, no backend or Swagger corrections needed</span>
+        <span><span class="mono">verify-phase12.ps1</span> drafted (root + <span class="mono">frontend/</span> copies) — awaiting your live run</span>
+      </div>
+      <p style="margin-top:14px; font-size:14px; color:var(--ink-muted);">
+        Unlike Phase 11, this backend review found nothing to fix — <span class="mono">reports.service.ts</span>
+        and <span class="mono">reports.gateway.ts</span> already document their own honest
+        simplifications in their own code comments (CANCELLED dropped from the Kanban
+        board, READY_FOR_QC folded into WIP, and FR-20's literal "push from every
+        status-changing method" spec replaced with a 5-second poll-and-diff broadcast) —
+        this phase's work was entirely about building a frontend that surfaces those
+        limitations honestly rather than hiding them, which is exactly what the-fool's
+        five findings above are about.
+      </p>
+      <p style="margin-top:10px; font-size:14px; color:var(--ink-muted);">
+        Four tests needed fixing after the first sandbox run — all test-file bugs, not app
+        bugs. Two were ambiguous text matches: the app deliberately shows "Live" in two
+        places (the connection pill, and the Approval Aging card's own data-source tag),
+        and the Service Efficiency fixture's overall average happens to equal its one
+        technician's average — both needed a CSS-selector scope rather than a bare text
+        match. The other two grabbed a Refresh button synchronously while it still read
+        "Refreshing…" from the initial in-flight fetch — fixed with
+        <span class="mono">findAllByRole</span> instead of <span class="mono">getAllByRole</span>,
+        so the query waits for the button to settle. Re-run: 266/266, zero failures.
+      </p>
+    </div>
+  </div>
+
+  <div class="section">
     <div class="section-head"><h2>Worth knowing</h2></div>
-    <div class="alert" style="border-color:var(--success); background:var(--success-wash);">
-      <h3 style="color:var(--success);">Standing practices, held for a seventh phase in a row</h3>
+    <div class="alert" style="border-color:var(--accent); background:var(--accent-wash);">
+      <h3 style="color:var(--accent);">All 12 frontend phases built — Phase 12 awaiting your live-verification run</h3>
       <p>
         <span class="mono">the-fool</span> pre-mortem before build, then
         <span class="mono">test-master</span> coverage in an isolated sandbox before any
         file reaches your machine — both invoked explicitly via the Skill tool again this
-        phase. Five failure modes surfaced (matching Phase 10's count), all five folded
-        into the build per your explicit instruction, at both the API-adjacent design
-        layer and the frontend. Backend endpoints and Swagger were reviewed end-to-end
-        this phase too, per your instruction — found already complete and accurate, no
-        corrections needed. Frontend test count is now 473 (246 from Phases 1–10 + 227
-        new), every one passing; backend stays at 493, unchanged, since no backend code
-        needed to change.
+        phase. Five failure modes surfaced, all five folded into the build per your
+        explicit instruction. Backend endpoints and the WebSocket gateway were reviewed
+        end-to-end this phase too — found already complete and accurate, nothing to fix.
+        Frontend test count is now 266 (227 from Phases 1–11 + 39 new), every one passing;
+        backend stays at 493, unchanged, since no backend code needed to change.
       </p>
       <p>
         Also as before: this build session has no network path to anything running on
-        your machine — only a file bridge. Each frontend phase ships with a small
-        PowerShell script (<span class="mono">verify-phaseN.ps1</span>) you run yourself
-        with both dev servers up; you paste back the output and anything that fails gets
-        fixed from that. This phase needed one extra prerequisite: a second seeded test
-        account (<span class="mono">SEED_TECH_ROLE=TECHNICAL_TEAM_LEADER</span>) since
-        AC-31's three-distinct-actor rule needs three real accounts and admin alone can't
-        stand in for two of the three roles. <span class="mono">verify-phase11.ps1</span>'s
-        first run came back 34/39 — five failures, all in the script itself (a wrong UUID
-        field, and three tests whose chosen actors got blocked by the RBAC guard before
-        AC-31's own check could run) rather than the app; both issues were fixed and the
-        script re-run came back <b>51 passed, 0 failed</b>.
+        your machine — only a file bridge. This phase's script,
+        <span class="mono">verify-phase12.ps1</span>, is different from every prior one:
+        since Reports/Dashboards is purely read-only, it seeds nothing — it just hits all
+        6 GET endpoints against whatever data your prior phases' testing already left
+        behind, and checks internal consistency (column counts sum correctly, no
+        CANCELLED column, approval-aging items ordered correctly, rate math checks out)
+        rather than specific numbers. It also can't drive the live WebSocket channel
+        itself from plain PowerShell — Socket.io's handshake framing isn't a raw
+        WebSocket — so the script's header documents a short manual browser check instead.
+        Run it with both dev servers up and paste the output back — that's the last thing
+        standing between this build and all 12 frontend phases being fully closed out.
       </p>
-      <span class="resolved-tag">Live-verified this phase</span>
+      <span class="resolved-tag" style="background:var(--accent); color:var(--accent-ink);">Awaiting your live-verification run</span>
     </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Next up · Frontend Phase 12</h3>
-        <h2>Reports/Dashboards</h2>
-        <p>The last frontend phase — the live WebSocket Kanban board — once Phase 11's live verification results are back and this dashboard reflects them.</p>
+        <h3>Next up</h3>
+        <h2>Run verify-phase12.ps1</h2>
+        <p>All 12 frontend phases are now built and test-master verified. Run <span class="mono">verify-phase12.ps1</span> against your real backend and paste the output back — once that's green, the frontend build is fully closed out and all that's left is your own <span class="mono">git push</span>.</p>
       </div>
       <div class="go">Up next →</div>
     </div>
@@ -878,7 +965,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at cea653c — awaiting push from your machine</span>
+    <span>master + main synced locally at 972b8b4 — awaiting push from your machine</span>
   </footer>
 
 </div>

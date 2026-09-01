@@ -2365,6 +2365,83 @@ about manual/UI exploration, not first-pass API verification.
 
 ---
 
+## 29. Frontend — Reports/Dashboards (Frontend Phase 12, the live Kanban board)
+
+Adds the **Reports & Dashboards** sidebar destination (BRD 18.1 "Service Manager
+Dashboard", FR-20, NFR-02) - the last of the 12 frontend phases, and the first purely
+read-only screen in the app: nothing here creates, updates, or deletes anything.
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a), any
+`SERVICE_HEAD`, or any `TECHNICAL_TEAM_LEADER` - these are the *only* three roles that can
+see this page (`REPORTS_VIEW_ROLES`, notably narrower than every other module: no
+`ACCOUNTANT`/`FINANCE_MANAGER` this time). Click **Reports & Dashboards** in the sidebar.
+
+**b. If you're signed in as anyone else** (a technician, `CCE`, `ACCOUNTANT`,
+`FINANCE_MANAGER`): you'll see a plain restricted-access message and nothing else - no
+data ever loads and no connection is ever attempted, by design (the-fool pre-mortem
+finding #5). Worth deliberately testing once: sign in as an Accountant and confirm this
+page shows the restricted message instead of an error or a blank screen.
+
+**c. The connection pill** (top right): watch it go `Connecting…` → `Live` within a
+couple of seconds of the page loading, with a small timestamp underneath reading "as of
+HH:MM:SS" - that timestamp is the backend's own snapshot time, not just "when your browser
+last repainted." If you ever see `Reconnecting…` or `Offline - live updates paused`, that's
+a real, visible signal something's wrong with the live channel - it's deliberately built to
+never look like a quiet moment (the-fool finding #2).
+
+**d. The Kanban board**: 8 columns - Scheduled, On-Site, WIP, Spare Pending, Approval
+Pending, QC Completed, Out for Delivery, Delivered. Two documented simplifications worth
+knowing about, not bugs: a cancelled Job Card never appears on this board at all (still
+findable via normal Job Card search), and a job sitting at "Ready for QC" shows up under
+WIP rather than its own column (the BRD's column list has no separate bucket for it). Each
+card shows the Job Card number, serial + brand, its warranty badge, the delivery number if
+one's been assigned, and when it last updated. On first paint (before the socket's own
+snapshot has arrived) you may briefly see just counts with no cards inside each column -
+that's the overview endpoint's placeholder data, and it's replaced by the real cards within
+a second or two once the socket connects.
+
+**e. Pending Approval Aging**: OOW estimates sent to the customer with no response yet,
+oldest-waiting first, with anything past 4 hours highlighted in red and a "N past
+threshold" summary line when at least one is breached. Shows "Waiting for the live feed…"
+for a moment on first load, same as the Kanban board's placeholder-to-live transition.
+
+**f. Service Efficiency / First-Time Fix Rate**: these two are visually distinct "Report"
+cards, not "Live" ones - deliberately, since the backend's gateway never pushes updates for
+them (the-fool finding #4). Each shows a "No completed jobs yet" zero-state if nothing
+qualifies yet, otherwise its own numbers plus its own "as of" timestamp captured at the
+moment it was fetched. Click either card's **Refresh** button and confirm its timestamp
+updates and the button briefly reads "Refreshing…" - this is a manual pull, not something
+that happens automatically in the background.
+
+**g. What "live" actually means here** (read this before reporting a lag as a bug): the
+Kanban board is driven by a 5-second server-side poll that only broadcasts when something
+actually changed - so a status change can take up to ~5 seconds to appear, not
+instantaneously. Approval Aging refreshes every 15 minutes on its own broadcast schedule
+(matching BRD 18.1). This is a documented, deliberate simplification of FR-20's literal
+"push from every status-changing method" spec (see `reports.gateway.ts`'s own doc comment)
+- genuinely real-time push would mean touching six already-shipped backend modules, which
+wasn't done as part of this phase. To see it in action: open `/reports` in one tab, advance
+any Job Card's status in another tab (e.g. via Appointments/Job Cards), and watch the
+Kanban board update within about 5 seconds without a page refresh.
+
+**h. Token refresh on reconnect** (optional, advanced): this page is built to survive a
+server-initiated disconnect (e.g. your access token expiring mid-session, 15-minute
+lifetime) by silently refreshing the token and reconnecting - you shouldn't normally need
+to do anything. If you want to see it happen, leave `/reports` open and idle for over 15
+minutes; the pill should briefly show `Reconnecting…` and then return to `Live` on its own,
+without a page refresh or a forced sign-out.
+
+**i. What to report back**: same as Phases 1-11 - anything confusing, broken, or where the
+board looks wrong given what you know is actually in the system (check
+`docs/planning/STATUS_TRACKER.md`'s Frontend Phase 12 section if unsure, especially the
+two documented column simplifications in (d) above before assuming a missing/misplaced
+card is a bug). `verify-phase12.ps1` checks the 6 REST endpoints for internal consistency
+(not exact counts, since this module reads whatever data already exists from every prior
+phase's testing) - run it and paste the output back; live-WebSocket behavior itself needs
+the manual check in (c)/(g) above, since it can't be driven from PowerShell.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2396,21 +2473,24 @@ all 140 endpoints in Section 11 are live, plus the `/reports` WebSocket channel 
 BRD 18.2/18.3/18.4 (Finance/Quality/Operational dashboards) remain unbuilt and explicitly
 out of scope for now (see Section 17's intro).
 
-The React frontend (Sections 18–28) now exists at `http://localhost:5173` and covers
+The React frontend (Sections 18–29) now exists at `http://localhost:5173` and covers
 sign-in/sign-out, all 9 Master Data sub-modules, Appointment Scheduling + the
 technician's Field View (Section 20), Job Cards + Warranty Override (Section 21),
 Estimates + the public customer approval link (Section 22), Workshop + Inventory
 (Section 23), QC + Permissions admin (Section 24), Delivery + Invoicing (Section 25),
-Finance + Customer Portal (Section 26), AMC Management (Section 27), and Dismantling
-(Section 28) - all built and test-covered (227/227 automated frontend tests as of Section
-28, run isolated ahead of the device merge, on top of the earlier 246); Sections 18-28
-are all live-verified against the real backend (Section 26's `verify-phase9.ps1` run:
-143/143 checks passed, 0 failed; Section 27's `verify-phase10.ps1` run: 66/66 checks
-passed, 0 failed; Section 28's `verify-phase11.ps1` run: 51/51 checks passed, 0 failed).
-Everything else in the app still only has a Swagger-based way to test it until its own
-frontend phase ships. Starting with Section 22's phase, the frontend also has its own
-automated test suite (Vitest + React Testing Library, `npm test` in `frontend/`) - Phases
-1-4 predate this and are covered only by the manual walkthroughs above.
+Finance + Customer Portal (Section 26), AMC Management (Section 27), Dismantling
+(Section 28), and Reports/Dashboards (Section 29) - all 12 frontend phases are now built,
+and all are test-covered (266/266 automated frontend tests as of Section 29, run isolated
+ahead of each device merge, 38 test files). Sections 18-28 are all live-verified against
+the real backend (Section 26's `verify-phase9.ps1` run: 143/143 checks passed, 0 failed;
+Section 27's `verify-phase10.ps1` run: 66/66 checks passed, 0 failed; Section 28's
+`verify-phase11.ps1` run: 51/51 checks passed, 0 failed); Section 29's
+`verify-phase12.ps1` is drafted and awaiting its first live run (see that section's
+closing note). Everything else in the app still only has a Swagger-based way to test it
+until its own frontend phase ships. Starting with Section 22's phase, the frontend also
+has its own automated test suite (Vitest + React Testing Library, `npm test` in
+`frontend/`) - Phases 1-4 predate this and are covered only by the manual walkthroughs
+above.
 
 One known, deliberate gap to be aware of while testing:
 - **Notifications** (WhatsApp/SMS/Email) only *attempt* sends right now — no real provider

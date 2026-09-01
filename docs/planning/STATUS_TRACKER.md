@@ -1,9 +1,9 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Frontend Phase 11 — Dismantling — live-verified, 51/51 checks passed)
-**Stack:** NestJS + PostgreSQL + JWT + React (frontend build now underway, see below)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `cea653c`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `cea653c`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Last updated:** 2026-09-01 (Frontend Phase 12 — Reports/Dashboards — built + test-master verified, live-verification pending)
+**Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases now built)
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `972b8b4`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `972b8b4`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -2415,15 +2415,98 @@ and the status filter, serial lookup, and single-record GET.
 
 ---
 
-## Next: Frontend Phase 12 (Reports/Dashboards) — 1 phase queued
+## Frontend Phase 12: Reports/Dashboards — built, test-master verified, live-verification pending
 
-The backend is fully built (MVP + AMC + Dismantling + Reports/Dashboards); Frontend
-Phases 1–11 (Auth, Master Data, Appointment Scheduling + Technician Field View, Job
-Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory,
-QC + Permissions admin, Delivery + Invoicing, Finance extension + Customer Portal, AMC
-Management, Dismantling) are all built. The remaining 1 frontend phase is queued, in the
-same order the backend itself was built in, so each screen has an already-tested,
-already-stable API to build against:
+BRD 18.1 "Service Manager Dashboard" / FR-20 / NFR-02. The last of the 12 queued frontend
+phases, and the first purely read-only screen in the app — no create/update/delete
+anywhere, so a single `canViewReports()` boolean gate replaces the per-action
+`*Permissions()` helpers every earlier module needed.
+
+**Backend review:** `reports.controller.ts` / `reports.service.ts` / `reports.gateway.ts`
+read in full — pure consumption target, no backend changes needed this phase (unlike
+Phase 11, which found and fixed real script/verification issues, this phase's backend was
+already correct as reviewed).
+
+**the-fool pre-mortem** ("Find the Failure Modes") surfaced 5 risks, all folded into the
+build:
+
+1. **WS auth token staleness on reconnect.** A token captured once at mount would go
+   stale after NFR-04's 15-minute access-token lifetime, and Socket.io does *not*
+   auto-reconnect after a server-initiated disconnect (`reason === 'io server
+   disconnect'`) — an auth-rejected reconnect attempt would leave the dashboard silently,
+   permanently stale. Fixed: `useReportsSocket.ts` passes a *function-form* `auth` option
+   (reads the token fresh on every (re)connection attempt), and on a server-initiated
+   disconnect proactively calls `GET /auth/profile` — piggybacking on `api.ts`'s existing
+   silent-refresh-on-401 interceptor — before manually calling `socket.connect()` again.
+2. **Silent staleness looks like a quiet moment.** Fixed: a `ConnectionPill` always
+   visibly renders one of connecting/live/reconnecting/offline (escalating to offline only
+   after 5 consecutive `connect_error` events, so normal transient retries don't
+   false-alarm).
+3. **False urgency or false calm.** The backend's own poll-and-diff design means change
+   detection can lag up to 5 seconds by design (documented candidly in
+   `reports.gateway.ts`'s own doc comment — FR-20's literal "push from every
+   status-changing method" spec was not built; a 5s poll + cheap-diff broadcast was, and
+   NFR-02's "<100ms" is met for the broadcast fan-out itself, not for change detection).
+   Fixed: every card shows its own `asOf` via a shared `formatAsOf()` helper, so
+   "current" vs. "a few seconds behind" vs. "point-in-time report" is always legible.
+4. **Mixed freshness reading as a bug.** Service Efficiency and First-Time Fix Rate are
+   never pushed by the gateway (only Kanban + Approval Aging are). Fixed: those two get
+   their own `useQuery` calls with manual Refresh buttons and their own captured-at-fetch
+   `asOf`, visually tagged "Report" vs. the "Live" tag on the Kanban/Approval Aging cards.
+5. **Unusually narrow role gate.** `REPORTS_VIEW_ROLES` is `SERVICE_HEAD` / `SUPER_ADMIN`
+   / `TECHNICAL_TEAM_LEADER` only — no `ACCOUNTANT`/`FINANCE_MANAGER`, unlike every other
+   module. Fixed: `canViewReports()` runs first in `ReportsPage`, gating both the REST
+   queries (`enabled: canView`) and `useReportsSocket(canView)` so a restricted role never
+   fires a single network or WebSocket call.
+
+**Built:** `lib/reportsTypes.ts` (mirrors the backend's interfaces, `REPORTS_VIEW_ROLES`,
+`canViewReports()`, `formatAsOf()`), `lib/reportsApi.ts` (6 GET wrappers),
+`lib/useReportsSocket.ts` (the WebSocket hook carrying all 5 mitigations above),
+`pages/reports/ReportsPage.tsx` (the single page — connection pill, Kanban board with a
+counts-only-summary fallback until the socket's full board arrives, Approval Aging card,
+Service Efficiency + First-Time Fix Rate report cards). `App.tsx`/`AppLayout.tsx` wired up
+the `/reports` route and nav link; `DashboardPage.tsx`'s build-progress list marked this
+row done (that's a *different* page — the post-login landing page — not this new one, see
+the code comment left there to avoid future confusion between the two).
+
+**test-master:** 266/266 Vitest + RTL tests passing project-wide (38 test files, +39 new
+this phase: `reportsTypes.test.ts`, `useReportsSocket.test.ts` — full event-branch
+coverage of the WebSocket hook via a hand-rolled fake socket, including the token-refresh-
+then-reconnect flow — and `ReportsPage.test.tsx`). `npx tsc -b` and `npx vite build` both
+clean. Four tests needed fixing after the first run (all test-file bugs, not app bugs):
+two ambiguous-text-match failures (the app deliberately shows "Live" in two places — the
+connection pill and the Approval Aging card's data-source tag — and the Service Efficiency
+fixture's overall average happens to equal its one technician's average, so both needed a
+`selector` scope rather than a bare text match), and two Refresh-button tests that grabbed
+the button synchronously while it still read "Refreshing…" from the initial in-flight
+fetch (fixed with `findAllByRole` instead of `getAllByRole`, so the query waits for the
+button to settle).
+
+**`verify-phase12.ps1`** drafted (root + `frontend/` copies) — since this module is purely
+read-only, the script runs no seeding at all; it hits all 6 GET endpoints and asserts
+internal consistency (column counts sum to totals, no `CANCELLED` column, approval-aging
+items ordered oldest-first, rate/count relationships hold) rather than specific numbers,
+since the underlying data is cumulative from every prior phase's live-verification runs.
+RBAC checked directly: the technician account gets 403 on all 6 endpoints (confirming
+`REPORTS_VIEW_ROLES`'s unusually narrow gate), an unauthenticated request gets 401, and
+the supervisor account (`TECHNICAL_TEAM_LEADER`) succeeds. The live WebSocket push itself
+can't be driven from plain PowerShell (Socket.io's handshake framing isn't a raw
+WebSocket) — the script's header documents the manual browser check instead (open
+`/reports`, confirm the pill goes live, advance a Job Card in another tab, confirm the
+board updates within ~5s without a refresh).
+
+**Live-verification: pending** — run `./verify-phase12.ps1` and paste the output back;
+this closes out the last of the 12 queued frontend phases.
+
+---
+
+## All 12 frontend phases now built
+
+Frontend Phases 1–12 (Auth, Master Data, Appointment Scheduling + Technician Field View,
+Job Cards + Warranty Override, Estimates + Public Approval Link, Workshop + Inventory, QC
++ Permissions admin, Delivery + Invoicing, Finance extension + Customer Portal, AMC
+Management, Dismantling, Reports/Dashboards) are all built against the already-tested,
+already-stable backend API, in the same order the backend itself was built in:
 
 1. ~~Authentication & Authorization~~ — done.
 2. ~~Master Data Management~~ — done.
@@ -2434,10 +2517,13 @@ already-stable API to build against:
 7. ~~QC + Permissions admin~~ — done.
 8. ~~Delivery + Invoicing~~ — done.
 9. ~~Finance extension + Customer Portal (public pages)~~ — done.
-10. ~~AMC Management~~ — done above.
-11. ~~Dismantling~~ — done above, live-verified (51/51 checks passed).
-12. Reports/Dashboards (the live WebSocket Kanban board, last — the most complex screen,
-    easiest to get right once the simpler ones establish the patterns)
+10. ~~AMC Management~~ — done.
+11. ~~Dismantling~~ — done, live-verified (51/51 checks passed).
+12. ~~Reports/Dashboards~~ — done above, live-verification pending (`verify-phase12.ps1`).
+
+What's left, once Phase 12 is live-verified: your own `git push` (repo is local-only from
+this build session's side, see Standing Practices), and any of the deferred follow-ups
+below if you want them at some point.
 
 Known, explicitly-deferred follow-ups, unrelated to the frontend build, if you want them
 at some point instead:
