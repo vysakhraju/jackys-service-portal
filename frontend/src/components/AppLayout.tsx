@@ -16,7 +16,7 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Delivery & Invoicing', path: '/delivery' },
   { label: 'Finance & Customer Portal', path: '/finance' },
   { label: 'AMC Contracts', path: '/amc' },
-  { label: 'Dismantling' },
+  { label: 'Dismantling', path: '/dismantling' },
   { label: 'Reports & Dashboards' },
 ];
 

@@ -11,6 +11,8 @@ import type { Delivery, ReadyForDeliveryRow } from '../lib/deliveryTypes';
 import type { AgingBucket, Invoice, Payment } from '../lib/invoicingTypes';
 import type { PortalInvoiceView, PortalSummaryView, PortalTrackView } from '../lib/customerPortalTypes';
 import type { AmcBillingInvoice, AmcContract, AmcScheduleVisit, AmcVisitCompletion, UpsellCandidate } from '../lib/amcTypes';
+import type { DismantlingRecord, HarvestedComponent } from '../lib/dismantlingTypes';
+import type { ComponentYieldMatrix } from '../lib/masterDataTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -413,6 +415,66 @@ export function makeUpsellCandidate(overrides: Partial<UpsellCandidate> = {}): U
     customerName: 'Jane Doe',
     customerPhone: '+971509998888',
     estimateAmount: 420,
+    ...overrides,
+  };
+}
+
+// Frontend Phase 11 additions below.
+
+export function makeHarvestedComponent(overrides: Partial<HarvestedComponent> = {}): HarvestedComponent {
+  return {
+    originalBomItemCode: 'COMP-COMPRESSOR-01',
+    itemName: 'Compressor Assembly',
+    category: 'RECOVERABLE_SPARE',
+    convertedSparePartCode: 'SP-COMPRESSOR-01',
+    testedCondition: 'GOOD_WORKING',
+    quantity: 1,
+    eligibleForConversion: true,
+    selectedForConversion: false,
+    recoveryUnitPrice: null,
+    quantityConverted: null,
+    convertedSparePartId: null,
+    ...overrides,
+  };
+}
+
+export function makeDismantlingRecord(overrides: Partial<DismantlingRecord> = {}): DismantlingRecord {
+  return {
+    id: 'dism-1',
+    recordNumber: 'DISM-0001',
+    applianceSerialNumber: 'SN-000987',
+    modelId: 'M100',
+    damageLocationNotes: 'Confirmed DOA, water damage, bay 3',
+    status: 'PENDING_HARVEST',
+    harvestedComponents: [],
+    createdById: 'user-1',
+    harvestedByUserId: null,
+    harvestedAt: null,
+    verifiedByUserId: null,
+    verifiedAt: null,
+    verificationNotes: null,
+    pricedByUserId: null,
+    postedAt: null,
+    totalRecoveredValue: 0,
+    cancellationReason: null,
+    createdAt: '2026-08-01T08:00:00Z',
+    updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeComponentYieldMatrix(overrides: Partial<ComponentYieldMatrix> = {}): ComponentYieldMatrix {
+  return {
+    id: 'cym-1',
+    modelId: 'M100',
+    originalBomItemCode: 'COMP-COMPRESSOR-01',
+    itemName: 'Compressor Assembly',
+    category: 'RECOVERABLE_SPARE',
+    defaultRecoveryEvaluation: 85,
+    convertedSparePartCode: 'SP-COMPRESSOR-01',
+    isActive: true,
+    createdAt: '2026-08-01T08:00:00Z',
+    updatedAt: '2026-08-01T08:00:00Z',
     ...overrides,
   };
 }

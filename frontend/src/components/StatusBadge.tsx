@@ -49,6 +49,12 @@ const COLOR_BY_STATUS: Record<string, string> = {
   // EXPIRED/CANCELLED reuse the colors already defined above (Estimates/Appointments).
   ACTIVE: 'bg-emerald-50 text-emerald-700',
   RENEWED: 'bg-slate-100 text-slate-500',
+  // Dismantling records (src/dismantling/entities/dismantling-record.entity.ts's
+  // DismantlingStatus) - CANCELLED reuses the color already defined above.
+  PENDING_HARVEST: 'bg-slate-100 text-slate-600',
+  COMPONENTS_LOGGED: 'bg-amber-50 text-amber-700',
+  VERIFIED: 'bg-sky-50 text-sky-700',
+  POSTED: 'bg-emerald-50 text-emerald-700',
 };
 
 export function StatusBadge({ status }: { status: string }) {

@@ -46,6 +46,7 @@ import { AmcHome } from './pages/amc/AmcHome';
 import { ContractsPage } from './pages/amc/ContractsPage';
 import { ExpiringContractsPage } from './pages/amc/ExpiringContractsPage';
 import { UpsellCandidatesPage } from './pages/amc/UpsellCandidatesPage';
+import { DismantlingPage } from './pages/dismantling/DismantlingPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -130,6 +131,8 @@ export function App() {
                   <Route path="expiring" element={<ExpiringContractsPage />} />
                   <Route path="upsell" element={<UpsellCandidatesPage />} />
                 </Route>
+
+                <Route path="/dismantling" element={<DismantlingPage />} />
               </Route>
             </Route>
 
