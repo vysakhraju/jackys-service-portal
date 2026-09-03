@@ -3201,6 +3201,45 @@ sides - all in the isolated cloud sandbox. Targeted re-run on your machine: 28/2
 
 ---
 
+## Mobile Phase 1 (2026-09-03): RN/Expo app skeleton, JWT auth, Today's Schedule
+
+New `mobile/` directory - the first code for the mobile app scoped on 2026-09-03
+(`docs/planning/MOBILE_APP_SCOPE_v1.md`), stress-tested in a the-fool pre-mortem before
+this build started (same doc, §9) rather than going straight to code.
+
+Expo SDK 57, TypeScript, `expo-router` for navigation - confirmed against the versioned
+Expo docs before scaffolding that Router (not bare `@react-navigation`) is the current
+strategic default for new apps on this SDK version, since training-data assumptions
+about a fast-moving framework like Expo are exactly the kind of thing worth checking
+rather than trusting.
+
+Built this phase: JWT login (same backend/credentials as the web app - `src/lib/api.ts`
+and `src/context/AuthContext.tsx` deliberately mirror the web app's `src/lib/api.ts`/
+`src/lib/auth.tsx` file-for-file where the platform allows it, tokens in
+`expo-secure-store` instead of `localStorage` being the one real difference), and
+Today's Schedule (`GET /technician/schedule`, read-only, date navigation,
+pull-to-refresh, `@tanstack/react-query`). Auth gating uses `expo-router`'s
+`Stack.Protected` (also confirmed against current docs) - login vs schedule screens
+switch automatically on auth state.
+
+**Verified:** 15/15 tests (`jest-expo` + `@testing-library/react-native` - session
+restore/login/logout/401 handling, and the schedule screen's sort/empty/error states/
+date nav), `tsc --noEmit` clean - both in the isolated cloud sandbox. `node_modules` is
+gitignored, not committed. Committed as `b1f5209`.
+
+**Not yet done:** `npm install` + a real device/emulator run - Metro/Expo needs to run
+locally and stay open, which neither the cloud sandbox nor the device bridge used for
+these commits can do (the same constraint already documented for the backend's
+`npm run start:dev`). **Run `npm install` inside `mobile/` on your machine, then
+`npm start`, to see it live** - point `EXPO_PUBLIC_API_BASE_URL` in a new `mobile/.env`
+at your backend's LAN IP first (see `mobile/README.md`/`mobile/.env.example` -
+`localhost` only works from a simulator on the same machine as the backend).
+
+Next: Phase 2 (Start Visit + GPS capture, online-only) - see
+`docs/planning/MOBILE_APP_SCOPE_v1.md` §7 for the full phased build order.
+
+---
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet

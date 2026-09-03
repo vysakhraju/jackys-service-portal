@@ -1165,10 +1165,50 @@
         phased build order. One of its two open questions is now settled — a queued Need
         Spare request will route through Team Leader review first, the same pattern the
         existing idle/stale-reservation review already uses, rather than an immediate
-        auto-reservation — leaving one open question (confirming Workshop Technician is
-        genuinely out of v1 scope) before backend work starts.
+        auto-reservation.
       </p>
-      <span class="resolved-tag" style="background:var(--success);">Scoped this session — not yet built</span>
+      <p>
+        A the-fool pre-mortem (mode: Find failure modes) ran on this whole plan before any
+        code was written — it settled the remaining open question (Workshop Technician
+        stays out of v1) and Complete's shape (status-flip + optional notes, offline-queued,
+        in-app signal rather than a promised push), and produced one new decision:
+        <b>Need Spare gets real server-side idempotency enforcement</b> — the one action in
+        this app with financial/inventory consequences, so a retried sync can't create two
+        spare requests — plus a new guardrail on the existing web UI's appointment
+        reassignment path (blocked while a technician holds any active spare-parts
+        reservation). See <span class="mono">MOBILE_APP_SCOPE_v1.md</span> §9 for the full
+        write-up.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Scoped and pre-mortemed this session</span>
+    </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Mobile Phase 1 (2026-09-03): RN/Expo app skeleton, JWT auth, Today's Schedule</h3>
+      <p>
+        First code for the mobile app: a new <span class="mono">mobile/</span> Expo Router
+        (TypeScript) project on Expo SDK 57. JWT login reuses the same backend/credentials
+        as the web app — <span class="mono">src/lib/api.ts</span> and
+        <span class="mono">src/context/AuthContext.tsx</span> deliberately mirror the web
+        app's equivalents file-for-file where the platform allows it, tokens living in
+        <span class="mono">expo-secure-store</span> (Keychain/Keystore) instead of
+        <span class="mono">localStorage</span> being the one real difference. Today's
+        Schedule (<span class="mono">GET /technician/schedule</span>) is read-only with
+        date navigation and pull-to-refresh. Auth gating uses expo-router's
+        <span class="mono">Stack.Protected</span> — both this and the choice of Expo Router
+        itself over bare React Navigation were confirmed against the current versioned Expo
+        docs before writing code, rather than assumed from training data, since Expo's APIs
+        move fast enough for that gap to matter.
+      </p>
+      <p>
+        <span class="mono">test-master</span> coverage: 15/15 tests (session restore, login,
+        logout, 401 handling, and the schedule screen's sort/empty/error states and date
+        nav), <span class="mono">tsc --noEmit</span> clean — both in the isolated cloud
+        sandbox. Committed as <span class="mono">b1f5209</span>. Not yet run on a real
+        device/emulator — Metro needs to run locally and stay open, the same constraint
+        already true of the backend's dev server — <b>run <span class="mono">npm install</span>
+        inside <span class="mono">mobile/</span> on your machine, then <span class="mono">npm start</span>,
+        to see it live.</b>
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session — Phase 1 of 5</span>
     </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Extra Role Access (2026-09-03): admin can delegate a role's access to any user</h3>
@@ -1252,21 +1292,20 @@
   <div class="section">
     <div class="next">
       <div>
-        <h3>Extra Role Access shipped. Mobile app still scoped, not built — plus your own push</h3>
-        <h2>Admin can now delegate role access per user. Mobile app v1: scoped (Field Techs, offline-in). Customer portal: polish what exists.</h2>
-        <p>Nothing is blocking. <b>Extra Role Access</b> is live — an admin can grant any
-        user another role's access, time-boxed and previewed before confirming, on top of
-        User Management's account creation and role changes (see the card above). The
-        <b>mobile app</b> (React Native) still has just a v1 scope, not code — Field
-        Technicians only, iOS + Android together, offline mode built in from the start, and
-        Need Spare's server-side review flow now decided too — see
-        <span class="mono">MOBILE_APP_SCOPE_v1.md</span> for the one open question left
-        before backend work on it starts. The <b>customer portal</b> will get a
-        branding/visual polish pass on the existing no-login
+        <h3>Mobile app Phase 1 shipped (of 5). Customer portal next up after that — plus your own push</h3>
+        <h2>Field Technician app: login + schedule live, Phase 2 (Start Visit + GPS) next. Customer portal: polish what exists.</h2>
+        <p>Nothing is blocking. The <b>mobile app</b> (React Native/Expo) has real code now
+        — login and Today's Schedule, Phase 1 of the 5-phase build order in
+        <span class="mono">MOBILE_APP_SCOPE_v1.md</span> §7. Next up is Phase 2 (Start Visit
+        + GPS capture, online-only) once you've run it locally to confirm it boots on your
+        machine. <b>Extra Role Access</b> is live — an admin can grant any user another
+        role's access, time-boxed and previewed before confirming, on top of User
+        Management's account creation and role changes. The <b>customer portal</b> will get
+        a branding/visual polish pass on the existing no-login
         <span class="mono">/track/:token</span> page rather than a full customer-login
-        system — not started yet. <b>WhatsApp Business API</b> stays paused until the
-        company creates its own WhatsApp Business account — not a technical blocker here.
-        Still open: your own <span class="mono">git push</span> (run
+        system — not started yet, queued behind the mobile app. <b>WhatsApp Business API</b>
+        stays paused until the company creates its own WhatsApp Business account — not a
+        technical blocker here. Still open: your own <span class="mono">git push</span> (run
         <span class="mono">git log origin/main..main</span> yourself for the current count)
         and the Reports/Dashboards WebSocket manual spot-check from Frontend Phase 12.</p>
       </div>
