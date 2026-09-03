@@ -46,6 +46,24 @@ These four screens can be built directly against the existing API with no backen
 The BRD describes the field technician flow as a 4-button workflow: **Start / Need Spare / Complete / QC**. Item 3 above (Start) and the diagnostic capture steps map to what's built. The other two buttons don't have a technician-facing endpoint today:
 
 - **Need Spare.** Spare part reservations are created by `WorkshopService` calling `InventoryService.reserve()` — a workshop-side action. There is no endpoint today that lets a field technician request a spare directly from an on-site visit. Building this button means adding a new technician-facing endpoint (or exposing `reserve()` through a technician-appropriate gate), not just a client screen. **Decided 2026-09-03: Need Spare is offline-first, like every other capture action** — the technician taps it in the field (possibly with no signal at all), it's captured and queued on-device immediately, and it's pushed to the server as an actual spare request only once the app reconnects. See §5 and §8.
+
+  **Decided 2026-09-03 (the-fool pre-mortem):** Need Spare is financially/inventory-sensitive
+  in a way the other three capture actions aren't, so it does NOT reuse the existing
+  `TechnicianController` pattern's "a retry that double-submits is harmless" tolerance. It
+  gets its own dedicated endpoint (not a repurposed existing one), and it is the ONE action
+  in this app whose idempotency key is actually checked and enforced server-side — a
+  retried sync must not create two spare requests. The request is captured with the spare
+  part(s) and quantity the technician entered and stored in a new `PENDING_REVIEW`
+  reservation state (no stock movement yet, `custodianUserId` = the field technician) —
+  distinct from the existing idle/stale-reservation `review()` flow, which decides the fate
+  of stock already reserved; this is a pre-reservation approval gate instead. The field
+  technician is never blocked on the approval — they carry on and complete their visit at
+  the customer's site regardless. Once a Team Leader approves it (online, back at the
+  review queue), THAT is when stock actually moves and the financial/inventory records
+  update; a rejection simply closes the pending request with no stock ever touched. Start
+  Visit / serial-number / fault-symptom capture keep the original tolerant behavior — a
+  duplicate resubmission there has no financial or inventory consequence, so no
+  idempotency-key enforcement is being added to those three.
 - **Complete / QC handoff.** Job completion and QC approve/reject live in the Job Cards and QC modules, gated to `QC_OFFICER` behind the `QC_APPROVAL` grant (the dynamic permission system from Phase 6). A field technician isn't meant to perform QC — realistically their "Complete" button means "my on-site work is done, hand this off," which needs its own small endpoint rather than reusing the QC-gated ones as-is.
 
 Neither gap is a blocker — both are normal, boundable backend work — but they mean v1 isn't purely a client-side build. Recommend building these two endpoints in Phase 5 (see §7), once the core capture flow (which needs no backend work at all) is proven on-device.
@@ -83,7 +101,54 @@ Since offline was chosen for v1 rather than deferred, this is the single largest
 
 ## 8. Open questions before backend work starts on this
 
-- Confirm Workshop Technician is genuinely out of v1 — bench-based work, not field/GPS-based, so it doesn't fit this app's shape even though the BRD's role table lists it alongside Field Technician.
+- ~~Confirm Workshop Technician is genuinely out of v1~~ — **confirmed 2026-09-03 (the-fool pre-mortem):** stays out. Bench-based work doesn't fit the field/GPS shape of this app, and keeping the boundary firm also avoids a worse problem found during the pre-mortem — a shared review queue between workshop reservations and field Need Spare requests would confuse Team Leaders about which type of request they're looking at (see §9, finding #4).
 - ~~Should Need Spare be queueable offline?~~ — **decided 2026-09-03: yes.** The technician can tap Need Spare with no connectivity at all; it's captured client-side and only pushed to the server as a spare request once the device is back online — the same offline-first pattern as Start/S-N/Fault-Symptom (§5).
-- ~~What happens server-side once a queued Need Spare request lands?~~ — **decided 2026-09-03: it routes through Team Leader review first**, the same pattern `InventoryController`'s existing idle/stale-reservation review already uses (`POST /inventory/reservations/:id/review` — TL+ approves reallocation or rejects it), rather than going straight to an immediate auto-reservation like the workshop's own `reserve()` call does today. Not yet built: the new Need Spare endpoint (§4) should create its reservation in a pending/awaiting-review state rather than calling `InventoryService.reserve()` directly, so it lands in front of a Team Leader rather than silently consuming stock. Worth deciding alongside the endpoint's build: is this the *same* stale-reservation review queue TLs already check, or a separate "new spare requests" queue - the existing review screen may need a small extension either way.
-- For **Complete**: what should actually happen server-side when a field technician taps it — is it enough to just mark the visit's on-site work done and hand the Job Card to the next stage, or does it need to carry anything else (photos, notes)? And should Complete queue offline the same way Need Spare now does, or does it need connectivity (e.g. because it should trigger an immediate notification to QC)?
+- ~~What happens server-side once a queued Need Spare request lands?~~ — **decided 2026-09-03: it routes through Team Leader review first**, the same pattern `InventoryController`'s existing idle/stale-reservation review already uses (`POST /inventory/reservations/:id/review` — TL+ approves reallocation or rejects it), rather than going straight to an immediate auto-reservation like the workshop's own `reserve()` call does today. Refined during the pre-mortem (§9, finding #1): this is a genuinely new `PENDING_REVIEW` state and approval path, not a reuse of the existing idle-reservation `review()` method - see §4.
+- ~~For **Complete**: what should actually happen server-side, and does it queue offline?~~ — **decided 2026-09-03 (the-fool pre-mortem):** a status-flip plus optional notes, no mandatory photo capture in v1 - matches how the other capture steps stay lightweight. Queues offline like every other action for consistency (a technician finishing in a dead zone shouldn't be blocked). The QC notification is an in-app/pull-refresh signal once synced, not a promised immediate push - push notifications are already deferred to v1.1 app-wide, so Complete doesn't need special-cased connectivity-required behavior to work around that.
+- **New, found during the pre-mortem, not yet resolved:** what should the offline sync engine do when a queued item fails to replay for a reason unrelated to reassignment (e.g. the appointment was cancelled while the technician was offline)? Retry forever, surface an error to the technician, or skip and flag for a supervisor? Needs an answer before Phase 4 (offline queue layer) is built - see §9, finding #3.
+- **New, found during the pre-mortem, not yet resolved:** GPS/location handling when a fix can't be acquired (poor signal, denied permission) - does Start Visit block, or degrade to a best-effort/null location? Needs an answer before Phase 2 (Start Visit) is built - see §9, finding #5. Also worth planning around: iOS App Store review specifically scrutinizes location-permission justification and can add real schedule risk to a plan that assumes iOS+Android ship together.
+
+---
+
+## 9. the-fool pre-mortem (2026-09-03) and its resolutions
+
+Run before any code was written, given this is the largest remaining piece of unbuilt scope,
+carries real GPS/location data, and its offline-sync mechanism (idempotency + last-write-wins)
+is genuinely novel for this codebase. Five failure modes were raised; two were resolved
+immediately by your calls (folded into §4 and §8 above), one produced a new cross-cutting
+guardrail on top of already-shipped code, and two remain open design questions to settle
+during the relevant build phase rather than blocking the plan now.
+
+1. **Idempotency was a client-side promise the server never enforced.** Resolved - scoped
+   down to just the Need Spare endpoint (§4), since that's the one action with real
+   financial/inventory consequences; the other three capture actions keep their original
+   "a retry that overwrites is fine" tolerance, by your explicit call.
+2. **Last-write-wins trusts a client clock nobody controls.** Not separately resolved, but
+   substantially de-risked as a side effect of #1: the one action with real financial/stock
+   weight (Need Spare) no longer depends on client-timestamp ordering at all, since nothing
+   financial happens until an online Team Leader approves it. Clock skew now only affects
+   which version of non-financial capture data (S/N, fault/symptom notes) ends up displayed
+   - low stakes, no action taken.
+3. **A single stuck queue item could silently jam a technician's whole backlog.** Partially
+   resolved: **a new guardrail is now locked in** - reassigning the technician on an
+   Appointment (`AppointmentsService.update()`, the same endpoint the existing web UI already
+   uses) must be blocked while that Appointment's Job Card has any active spare-parts
+   reservation (`HELD`, `PARTIALLY_RESERVED`, or the new `PENDING_REVIEW`) held in that
+   technician's custody. A job can only be reassigned once it holds no spares - and if a
+   genuine reassignment is needed, the real-world process is that customer care hears from
+   the current technician first, and the whole job moves to the new technician rather than a
+   partial handoff. This applies to in-house/workshop technicians too, not just field techs
+   (workshop-side already can't be reassigned once `WORKSHOP_ASSIGNED` today - confirmed by
+   reading `JobCardsService.assignWorkshopTechnician()` - so this guardrail is new surface
+   area only for the Appointment-level field-technician reassignment path). This needs
+   implementing in `AppointmentsService.update()` as part of Phase 5 (Need Spare), since
+   there's no way for a field-technician-held reservation to exist before then. Still open:
+   what the sync engine does when a queued item fails to replay for an UNRELATED reason
+   (e.g. the appointment was cancelled while offline) - see §8.
+4. **Need Spare's Team Leader review routing could make the "faster" path slower than
+   today's workshop-only flow**, since push notifications are deferred to v1.1 and nothing
+   proactively alerts a TL that a time-sensitive field request just landed. Not resolved -
+   noted as an operational risk to watch once this ships, not a design flaw to fix now.
+5. **GPS/permission handling isn't addressed in the plan** (poor signal, denied permission,
+   iOS App Store review scrutiny of location justification). Not resolved - carried forward
+   as an open question to settle when Phase 2 (Start Visit) is actually built, per §8.
