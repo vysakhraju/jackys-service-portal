@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
   ParseUUIDPipe,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
@@ -91,9 +92,18 @@ export class AuthController {
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: "Deactivate a user - blocked (409) until every open job assignment and inventory custody they hold is cleared" })
   @ApiResponse({ status: 200, description: 'User deactivated' })
+  @ApiResponse({ status: 403, description: 'Cannot deactivate your own account' })
   @ApiResponse({ status: 404, description: 'User not found' })
   @ApiResponse({ status: 409, description: 'User still holds open job assignments or spare-part custody - see blockers[] in the response' })
-  async deactivateUser(@Param('id', ParseUUIDPipe) id: string) {
+  async deactivateUser(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() currentUser: User) {
+    // the-fool pre-mortem finding #1 (2026-09-03, User Management module): an admin
+    // deactivating their own account - especially the only remaining SUPER_ADMIN/
+    // SERVICE_HEAD - locks everyone (including themselves) out of every admin-only
+    // screen, with no frontend path back in. Symmetric with the same check on
+    // UsersController's role-change endpoint.
+    if (currentUser.id === id) {
+      throw new ForbiddenException('You cannot deactivate your own account - ask another admin.');
+    }
     return this.authService.deactivateUser(id);
   }
 

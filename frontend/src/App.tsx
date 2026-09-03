@@ -5,6 +5,7 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { AppLayout } from './components/AppLayout';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { UsersPage } from './pages/users/UsersPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { MasterDataLayout } from './pages/masterData/MasterDataLayout';
 import { MasterDataHome } from './pages/masterData/MasterDataHome';
@@ -80,6 +81,7 @@ export function App() {
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route path="/" element={<DashboardPage />} />
+                <Route path="/users" element={<UsersPage />} />
 
                 <Route path="/master-data" element={<MasterDataLayout />}>
                   <Route index element={<MasterDataHome />} />

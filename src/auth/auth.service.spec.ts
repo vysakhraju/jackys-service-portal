@@ -1,4 +1,4 @@
-import { UnauthorizedException, NotFoundException, ConflictException } from '@nestjs/common';
+import { UnauthorizedException, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
@@ -44,12 +44,14 @@ describe('AuthService', () => {
     userRepository = {
       createQueryBuilder: jest.fn(),
       findOne: jest.fn(),
+      find: jest.fn(),
       update: jest.fn(),
       create: jest.fn((data) => data),
       save: jest.fn((data) => Promise.resolve({ ...data, id: data.id || 'new-user-id' })),
     };
     roleRepository = {
       findOne: jest.fn(),
+      find: jest.fn(),
       create: jest.fn((data) => data),
       save: jest.fn((data) => Promise.resolve(data)),
     };
@@ -415,6 +417,182 @@ describe('AuthService', () => {
         expect(response.blockers.join(' ')).toContain('res-1');
       }
       expect(userRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reactivateUser', () => {
+    it('flips an INACTIVE user back to ACTIVE and logs the status change', async () => {
+      const user = { id: 'tech-1', email: 'tech@jackys.com', status: UserStatus.INACTIVE } as User;
+      userRepository.findOne.mockResolvedValue(user);
+
+      const result = await service.reactivateUser('tech-1', { user: { id: 'admin-1' }, headers: {} });
+
+      expect(result.status).toBe(UserStatus.ACTIVE);
+      expect(userRepository.save).toHaveBeenCalledWith(expect.objectContaining({ status: UserStatus.ACTIVE }));
+      expect(auditLogRepository.save).toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the user does not exist', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.reactivateUser('missing', { user: {}, headers: {} })).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ConflictException (not a silent no-op) when the user is already ACTIVE', async () => {
+      const user = { id: 'tech-1', email: 'tech@jackys.com', status: UserStatus.ACTIVE } as User;
+      userRepository.findOne.mockResolvedValue(user);
+
+      await expect(service.reactivateUser('tech-1', { user: {}, headers: {} })).rejects.toThrow(ConflictException);
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listUsers', () => {
+    it('returns every user ordered newest-first', async () => {
+      const users = [baseUser()];
+      userRepository.find.mockResolvedValue(users);
+
+      const result = await service.listUsers();
+
+      expect(result).toBe(users);
+      expect(userRepository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
+    });
+  });
+
+  describe('listCreatableRoles', () => {
+    it('excludes CUSTOMER from the returned roles (the-fool finding #3)', async () => {
+      const roles = [{ id: 'r1', name: 'CCE' }];
+      roleRepository.find.mockResolvedValue(roles);
+
+      const result = await service.listCreatableRoles();
+
+      expect(result).toBe(roles);
+      const callArg = roleRepository.find.mock.calls[0][0];
+      // Not() wraps the excluded value - assert the query targets CUSTOMER specifically
+      // rather than asserting on typeorm's internal Not() object shape.
+      expect(JSON.stringify(callArg)).toContain('CUSTOMER');
+    });
+  });
+
+  describe('updateUser', () => {
+    const activeUser = () =>
+      ({
+        id: 'user-2',
+        email: 'tl@jackys.com',
+        firstName: 'Tara',
+        lastName: 'Lee',
+        employeeId: 'E-2',
+        phone: null,
+        status: UserStatus.ACTIVE,
+        roleId: 'role-tl',
+        role: { id: 'role-tl', name: 'TECHNICAL_TEAM_LEADER' },
+      } as unknown as User);
+
+    it('throws ForbiddenException when an admin tries to modify their own account (the-fool finding #1)', async () => {
+      await expect(
+        service.updateUser('admin-1', 'admin-1', { firstName: 'New' }, { user: { id: 'admin-1' }, headers: {} }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(userRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the target user does not exist', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updateUser('missing', 'admin-1', { firstName: 'New' }, { user: { id: 'admin-1' }, headers: {} }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ConflictException when the new employee ID is already taken by someone else', async () => {
+      userRepository.findOne
+        .mockResolvedValueOnce(activeUser()) // the target user lookup
+        .mockResolvedValueOnce({ id: 'someone-else' } as User); // the employeeId collision check
+
+      await expect(
+        service.updateUser('user-2', 'admin-1', { employeeId: 'E-99' }, { user: { id: 'admin-1' }, headers: {} }),
+      ).rejects.toThrow(ConflictException);
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('re-runs the open-assignment blocker check on an actual role change (the-fool finding #4)', async () => {
+      userRepository.findOne.mockResolvedValueOnce(activeUser());
+      roleRepository.findOne.mockResolvedValue({ id: 'role-cce', name: 'CCE' });
+      appointmentRepository.find.mockResolvedValue([{ id: 'appt-1', status: 'ON_SITE' }]);
+      jobCardRepository.find.mockResolvedValue([]);
+      inventoryReservationRepository.find.mockResolvedValue([]);
+
+      await expect(
+        service.updateUser('user-2', 'admin-1', { roleName: 'CCE' }, { user: { id: 'admin-1' }, headers: {} }),
+      ).rejects.toThrow(ConflictException);
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('changes the role and logs a ROLE_CHANGE audit entry when there are no open blockers', async () => {
+      userRepository.findOne.mockResolvedValueOnce(activeUser());
+      roleRepository.findOne.mockResolvedValue({ id: 'role-cce', name: 'CCE' });
+      appointmentRepository.find.mockResolvedValue([]);
+      jobCardRepository.find.mockResolvedValue([]);
+      inventoryReservationRepository.find.mockResolvedValue([]);
+
+      const result = await service.updateUser(
+        'user-2',
+        'admin-1',
+        { roleName: 'CCE' },
+        { user: { id: 'admin-1' }, headers: {} },
+      );
+
+      expect(result.role).toEqual({ id: 'role-cce', name: 'CCE' });
+      expect(auditLogRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ action: AuditAction.ROLE_CHANGE }),
+      );
+    });
+
+    it('does not run the blocker check or touch the role when roleName matches the current role', async () => {
+      userRepository.findOne.mockResolvedValueOnce(activeUser());
+
+      await service.updateUser(
+        'user-2',
+        'admin-1',
+        { roleName: 'TECHNICAL_TEAM_LEADER', firstName: 'Tara-Updated' },
+        { user: { id: 'admin-1' }, headers: {} },
+      );
+
+      expect(appointmentRepository.find).not.toHaveBeenCalled();
+      expect(roleRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('updates profile fields and logs a single UPDATE audit entry', async () => {
+      userRepository.findOne.mockResolvedValueOnce(activeUser());
+
+      const result = await service.updateUser(
+        'user-2',
+        'admin-1',
+        { firstName: 'Tara-Updated', phone: '+971500000000' },
+        { user: { id: 'admin-1' }, headers: {} },
+      );
+
+      expect(result.firstName).toBe('Tara-Updated');
+      expect(result.phone).toBe('+971500000000');
+      expect(auditLogRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.UPDATE,
+          newValues: { firstName: 'Tara-Updated', phone: '+971500000000' },
+        }),
+      );
+    });
+
+    it('is a no-op (no save, no audit log) when the dto matches the existing values exactly', async () => {
+      userRepository.findOne.mockResolvedValueOnce(activeUser());
+
+      await service.updateUser(
+        'user-2',
+        'admin-1',
+        { firstName: 'Tara', lastName: 'Lee', employeeId: 'E-2' },
+        { user: { id: 'admin-1' }, headers: {} },
+      );
+
+      expect(userRepository.save).not.toHaveBeenCalled();
+      expect(auditLogRepository.save).not.toHaveBeenCalled();
     });
   });
 });

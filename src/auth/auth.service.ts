@@ -2,17 +2,18 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
   InternalServerErrorException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Not } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { User } from './entities/user.entity';
 import { UserStatus } from './entities/user.entity';
-import { Role } from './entities/role.entity';
+import { Role, RoleName } from './entities/role.entity';
 import { AuditLog } from './entities/audit-log.entity';
 import { AuditAction } from './entities/audit-log.entity';
 import { LoginDto } from './dto/login.dto';
@@ -58,6 +59,25 @@ export class AuthService {
       throw new NotFoundException(`User ${id} not found`);
     }
 
+    const blockers = await this.findOpenAssignmentBlockers(id);
+    if (blockers.length > 0) {
+      throw new ConflictException({
+        message: `Cannot deactivate ${user.email}: they still hold ${blockers.length} open item(s). Clear these first.`,
+        blockers,
+      });
+    }
+
+    user.status = UserStatus.INACTIVE;
+    return this.userRepository.save(user);
+  }
+
+  /**
+   * Shared by deactivateUser() above and updateUser()'s role-change path below - the-fool
+   * pre-mortem finding #4 (2026-09-03): a role change bypassing this same check could
+   * orphan an open appointment/job card/inventory custody just as easily as deactivating
+   * the user outright would. One list of blockers, one place it's computed.
+   */
+  private async findOpenAssignmentBlockers(id: string): Promise<string[]> {
     const blockers: string[] = [];
 
     const openAppointments = await this.appointmentRepository.find({
@@ -91,15 +111,118 @@ export class AuthService {
       blockers.push(`Inventory reservation ${r.id} (${r.quantityReserved} units, status ${r.status}) still in this user's custody`),
     );
 
-    if (blockers.length > 0) {
-      throw new ConflictException({
-        message: `Cannot deactivate ${user.email}: they still hold ${blockers.length} open item(s). Clear these first.`,
-        blockers,
-      });
+    return blockers;
+  }
+
+  /**
+   * The inverse of deactivateUser() - flips INACTIVE back to ACTIVE. Deliberately a no-op
+   * conflict (not a silent success) if the user is already ACTIVE, matching
+   * PermissionsService.revoke()'s existing "nothing to do" idiom elsewhere in this app.
+   * SUSPENDED is left alone on purpose - that status isn't wired to any flow yet, so
+   * reactivating from it would be guessing at a meaning nothing currently assigns.
+   */
+  async reactivateUser(id: string, req: any): Promise<User> {
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`User ${id} not found`);
+    }
+    if (user.status === UserStatus.ACTIVE) {
+      throw new ConflictException(`${user.email} is already active`);
     }
 
-    user.status = UserStatus.INACTIVE;
-    return this.userRepository.save(user);
+    const previousStatus = user.status;
+    user.status = UserStatus.ACTIVE;
+    await this.userRepository.save(user);
+
+    await this.logAudit(
+      req.user,
+      AuditAction.STATUS_CHANGE,
+      'User',
+      id,
+      { status: previousStatus },
+      { status: UserStatus.ACTIVE },
+      req,
+    );
+
+    return user;
+  }
+
+  /** Roster view for the User Management screen - newest hires first. */
+  async listUsers(): Promise<User[]> {
+    return this.userRepository.find({ order: { createdAt: 'DESC' } });
+  }
+
+  /**
+   * Roles selectable in the User Management create/edit form. CUSTOMER is excluded - see
+   * CreateUserDto's own comment (the-fool finding #3): it has no matching login flow
+   * anywhere in the frontend, so offering it here would be a dead end, not a feature.
+   */
+  async listCreatableRoles(): Promise<Role[]> {
+    return this.roleRepository.find({ where: { name: Not(RoleName.CUSTOMER) }, order: { displayName: 'ASC' } });
+  }
+
+  /**
+   * Edits an existing user's profile fields and/or role. Email is intentionally not
+   * editable here (see UpdateUserDto's comment). Two safety properties, both from the
+   * the-fool pre-mortem run before this module was built (2026-09-03):
+   *  - #1: an admin can never modify their own account through this endpoint (self-lockout
+   *    prevention) - symmetric with the self-check on deactivateUser's controller route.
+   *  - #4: an actual role change re-runs the exact same open-assignment blocker check
+   *    deactivateUser already enforces, so reassigning someone off a role never silently
+   *    orphans a job they're still mid-way through.
+   */
+  async updateUser(id: string, actingUserId: string, dto: { firstName?: string; lastName?: string; employeeId?: string; phone?: string; roleName?: string }, req: any): Promise<User> {
+    if (id === actingUserId) {
+      throw new ForbiddenException('You cannot modify your own account from this screen - ask another admin.');
+    }
+
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`User ${id} not found`);
+    }
+
+    if (dto.employeeId && dto.employeeId !== user.employeeId) {
+      const existing = await this.userRepository.findOne({ where: { employeeId: dto.employeeId } });
+      if (existing) {
+        throw new ConflictException(`Employee ID ${dto.employeeId} is already in use`);
+      }
+    }
+
+    if (dto.roleName && dto.roleName !== user.role.name) {
+      const newRole = await this.roleRepository.findOne({ where: { name: dto.roleName as any } });
+      if (!newRole) {
+        throw new NotFoundException(`Role ${dto.roleName} not found`);
+      }
+
+      const blockers = await this.findOpenAssignmentBlockers(id);
+      if (blockers.length > 0) {
+        throw new ConflictException({
+          message: `Cannot change ${user.email}'s role: they still hold ${blockers.length} open item(s) tied to their current role. Clear these first.`,
+          blockers,
+        });
+      }
+
+      const previousRoleName = user.role.name;
+      user.roleId = newRole.id;
+      user.role = newRole;
+      await this.userRepository.save(user);
+      await this.logAudit(req.user, AuditAction.ROLE_CHANGE, 'User', id, { role: previousRoleName }, { role: newRole.name }, req);
+    }
+
+    const profileChanges: Record<string, any> = {};
+    (['firstName', 'lastName', 'employeeId', 'phone'] as const).forEach((field) => {
+      if (dto[field] !== undefined && dto[field] !== (user as any)[field]) {
+        profileChanges[field] = dto[field];
+        (user as any)[field] = dto[field];
+      }
+    });
+
+    if (Object.keys(profileChanges).length > 0) {
+      await this.userRepository.save(user);
+      await this.logAudit(req.user, AuditAction.UPDATE, 'User', id, null, profileChanges, req);
+    }
+
+    return user;
   }
 
   async validateUser(email: string, password: string): Promise<User | null> {

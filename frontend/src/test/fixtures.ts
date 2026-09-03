@@ -24,6 +24,7 @@ import type {
 } from '../lib/reportsTypes';
 import type { AppointmentDashboardStats } from '../lib/appointmentsTypes';
 import type { GlPosting } from '../lib/glLedgerTypes';
+import type { Role, User } from '../lib/types';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -610,6 +611,35 @@ export function makeGlPosting(overrides: Partial<GlPosting> = {}): GlPosting {
     creditAccount: '4000-SERVICE-REVENUE',
     amount: 250,
     postedAt: '2026-09-01T09:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeRole(overrides: Partial<Role> = {}): Role {
+  return {
+    id: 'role-cce',
+    name: 'CCE',
+    displayName: 'Customer Care Executive',
+    description: 'Customer care executive',
+    permissions: ['manage:appointments', 'manage:job-cards'],
+    isSystem: true,
+    ...overrides,
+  };
+}
+
+export function makeUser(overrides: Partial<User> = {}): User {
+  return {
+    id: 'user-2',
+    firstName: 'Priya',
+    lastName: 'Nair',
+    email: 'priya@jackys.com',
+    employeeId: 'E-2',
+    phone: null,
+    status: 'ACTIVE',
+    role: makeRole(),
+    lastLoginAt: null,
+    createdAt: '2026-08-01T08:00:00Z',
+    updatedAt: '2026-08-01T08:00:00Z',
     ...overrides,
   };
 }

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { TechnicianModule } from './technician/technician.module';
@@ -43,6 +44,7 @@ import { WarrantyClaimsModule } from './warranty-claims/warranty-claims.module';
       }),
     }),
     AuthModule,
+    UsersModule,
     MasterDataModule,
     AppointmentsModule,
     TechnicianModule,

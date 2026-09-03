@@ -7,6 +7,7 @@ import { useAuth } from '../lib/auth';
 // always-up-to-date progress list as each frontend phase ships.
 const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Dashboard', path: '/' },
+  { label: 'Users', path: '/users' },
   { label: 'Master Data', path: '/master-data' },
   { label: 'Appointments', path: '/appointments' },
   { label: 'Job Cards', path: '/job-cards' },
