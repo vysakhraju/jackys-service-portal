@@ -1141,24 +1141,49 @@
       </p>
       <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
     </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Mobile app scoping (2026-09-03): v1 scoped, not built yet</h3>
+      <p>
+        Before any mobile code gets written: <b>Field Technicians only</b> for v1 (Drivers
+        already have a working web path through Delivery &amp; Invoicing; Workshop
+        Technicians are flagged as an assumption to confirm, not built for — bench-based
+        work doesn't fit the on-site GPS visit flow this app models). <b>iOS + Android</b>
+        together from one React Native codebase. <b>Offline mode built into v1</b>
+        (NFR-03: queue actions, sync on reconnect, last-write-wins + audit) rather than
+        deferred — flagged as the plan's single biggest technical unknown, with a short
+        offline-queue spike recommended before the full four-screen build. Push
+        notifications deferred to v1.1 — pull-to-refresh in v1.
+      </p>
+      <p>
+        Also surfaced a real gap: the BRD's "Need Spare" and "Complete/QC handoff" buttons
+        need two backend endpoints that don't exist yet — today's <span class="mono">technician</span>
+        module only covers Start + diagnostic capture (S/N, warranty, fault/symptom), all
+        already built and tested and directly reusable (the web app's
+        <span class="mono">FieldVisitsPage.tsx</span> is an explicit prototype of the same
+        flow, calling the same endpoints a native client would use). See
+        <span class="mono">docs/planning/MOBILE_APP_SCOPE_v1.md</span> for the full plan,
+        phased build order, and two open questions before backend work starts.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Scoped this session — not yet built</span>
+    </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Two decisions made, both not yet started — plus your own push</h3>
-        <h2>User Management shipped. Mobile app: React Native. Customer portal: polish what exists.</h2>
-        <p>Nothing is blocking. Two direction calls were made this session: the <b>mobile
-        app</b> will be built in <b>React Native</b> (shares TypeScript and much of the
-        existing frontend's API/auth/type layer with the current React app — not started
-        yet), and the <b>customer portal</b> will get a branding/visual polish pass on the
-        existing no-login <span class="mono">/track/:token</span> page rather than a full
-        customer-login system — also not started. <b>WhatsApp Business API</b> stays
-        paused until the company creates its own WhatsApp Business account — not a
-        technical blocker here. Still open: your own <span class="mono">git push</span>
-        (run <span class="mono">git log origin/main..main</span> yourself for the current
-        count) and the Reports/Dashboards WebSocket manual spot-check from Frontend Phase
-        12.</p>
+        <h3>Mobile app is scoped, not built. Two other calls made too — plus your own push</h3>
+        <h2>User Management shipped. Mobile app v1: scoped (Field Techs, offline-in). Customer portal: polish what exists.</h2>
+        <p>Nothing is blocking. The <b>mobile app</b> (React Native) now has a v1 scope —
+        Field Technicians only, iOS + Android together, offline mode built in from the
+        start — see the card above and <span class="mono">MOBILE_APP_SCOPE_v1.md</span> for
+        the two open questions before backend work on it starts. The <b>customer portal</b>
+        will get a branding/visual polish pass on the existing no-login
+        <span class="mono">/track/:token</span> page rather than a full customer-login
+        system — not started yet. <b>WhatsApp Business API</b> stays paused until the
+        company creates its own WhatsApp Business account — not a technical blocker here.
+        Still open: your own <span class="mono">git push</span> (run
+        <span class="mono">git log origin/main..main</span> yourself for the current count)
+        and the Reports/Dashboards WebSocket manual spot-check from Frontend Phase 12.</p>
       </div>
       <div class="go">Next →</div>
     </div>

@@ -3,16 +3,25 @@
 **Last updated:** 2026-09-03 (User Management shipped - admin can create staff
 accounts and assign/change roles from the frontend; see the write-up below. 13 new
 backend tests, 11 new frontend tests, 566/566 + 313/313 passing app-wide, `tsc -b`
-clean on both sides)
+clean on both sides. Mobile app (React Native) v1 scoping is also done - see
+`docs/planning/MOBILE_APP_SCOPE_v1.md` - no mobile code written yet, scoping only)
 **Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `121a671`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `121a671`, your machine has already pushed through `5f52aaa` (confirmed via `git fetch`) - check `git log origin/main..main` for the current count once you've pushed again (this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
-**Next session:** User Management is done. Two decisions were made this session (see
-"Open items / blockers" below for the full picture): **mobile app framework -
-React Native**, chosen but not yet started; **customer portal - polish the existing
-link-based `/track/:token` page** (branding/visual pass), not a full customer-login
-system, also not yet started. WhatsApp Business API stays paused until the company
-creates its WhatsApp Business account - not a technical blocker on this end.
+**Next session:** User Management is done. Mobile app v1 is now scoped (see
+`docs/planning/MOBILE_APP_SCOPE_v1.md`): **Field Technicians only** for v1 (Drivers
+already have a working web path; Workshop Technicians are flagged as an assumption
+to confirm, not built for), **iOS + Android together**, **offline mode built into
+v1** (not deferred - this is the plan's biggest technical unknown, a short
+offline-queue spike is recommended before the full build), **push notifications
+deferred** to v1.1 (pull-to-refresh in v1). The scoping doc also surfaces a real gap:
+the BRD's "Need Spare" and "Complete/QC handoff" buttons need two new backend
+endpoints that don't exist yet (today's `technician` module only covers Start +
+diagnostic capture) - see the doc's open questions before that work starts.
+**Customer portal - polish the existing link-based `/track/:token` page**
+(branding/visual pass), not a full customer-login system, also not yet started.
+WhatsApp Business API stays paused until the company creates its WhatsApp Business
+account - not a technical blocker on this end.
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -3007,6 +3016,12 @@ the already-documented rolldown native-binding install quirk (unrelated to this 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
   started (shares TypeScript and much of the existing frontend's API/auth/type layer
   with the current React app, unlike Flutter's separate Dart ecosystem).
+- ~~Mobile app v1 scope~~ — scoped 2026-09-03, not yet built: see
+  `docs/planning/MOBILE_APP_SCOPE_v1.md`. Field Technicians only for v1; iOS +
+  Android together; offline mode (NFR-03) built into v1 rather than deferred; push
+  notifications deferred to v1.1. Two open questions remain before backend work
+  starts (Workshop Technician in/out, and exactly what "Need Spare"/"Complete"
+  should do server-side) - both are in the doc's own "Open questions" section.
 - WhatsApp Business API account approval — paused, not actively pursued right now:
   waiting on the company itself to create a WhatsApp Business account first (your
   instruction, 2026-09-03). Still blocking real Estimate notification delivery
