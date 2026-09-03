@@ -115,10 +115,24 @@ export interface AppointmentListResult {
   limit: number;
 }
 
-// Matches AppointmentsService.getDashboardStats()'s real return shape exactly.
+// Matches AppointmentsService.getDashboardStats()'s real return shape exactly. Despite the
+// field name, `week` is a ROLLING 7-day window ending today (today-7d through tomorrow,
+// see getDashboardStats()'s own Between() call) - not a calendar week (Mon-Sun or
+// Sun-Sat). The dashboard-stats widget deliberately labels this "Last 7 days", not "This
+// week", so the number matches what a reader would get counting it by hand.
 export interface AppointmentDashboardStats {
   today: { scheduled: number; confirmed: number; onSite: number; completed: number; cancelled: number };
   week: { total: number; byStatus: Record<string, number> };
+}
+
+// Same @Roles(...) list as AppointmentsController.getDashboardStats() - a technician or CCE
+// booking desk role other than these four never even fires the query (mirrors
+// reportsTypes.ts's canViewReports pattern: gated client-side too, not just refused
+// server-side).
+export const DASHBOARD_STATS_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
+
+export function canViewDashboardStats(roleName: string | undefined): boolean {
+  return !!roleName && DASHBOARD_STATS_ROLES.includes(roleName);
 }
 
 // === Technician visits (src/technician) ===

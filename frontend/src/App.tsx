@@ -40,6 +40,7 @@ import { FinanceLayout } from './pages/finance/FinanceLayout';
 import { FinanceHome } from './pages/finance/FinanceHome';
 import { InvoicesPage } from './pages/finance/InvoicesPage';
 import { AgingReportPage } from './pages/finance/AgingReportPage';
+import { GlPostingsPage } from './pages/finance/GlPostingsPage';
 import { CustomerPortalPage } from './pages/customerPortal/CustomerPortalPage';
 import { AmcLayout } from './pages/amc/AmcLayout';
 import { AmcHome } from './pages/amc/AmcHome';
@@ -124,6 +125,7 @@ export function App() {
                   <Route index element={<FinanceHome />} />
                   <Route path="invoices" element={<InvoicesPage />} />
                   <Route path="aging" element={<AgingReportPage />} />
+                  <Route path="gl-postings" element={<GlPostingsPage />} />
                 </Route>
 
                 <Route path="/amc" element={<AmcLayout />}>

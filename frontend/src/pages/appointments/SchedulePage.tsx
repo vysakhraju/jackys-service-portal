@@ -7,6 +7,7 @@ import { DataTable, ErrorNotice, type Column } from '../../components/DataTable'
 import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
+import { DashboardStatsWidget } from './DashboardStatsWidget';
 import {
   assignTechnician,
   cancelAppointment,
@@ -248,6 +249,8 @@ export function SchedulePage() {
 
   return (
     <div className="space-y-4">
+      <DashboardStatsWidget serviceCentreId={filters.serviceCentreId || undefined} />
+
       <div className="flex flex-wrap items-end justify-between gap-4">
         <p className="max-w-2xl text-sm text-slate-500">
           Every filter below maps directly to a real <code>GET /appointments</code> query

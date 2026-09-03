@@ -1,7 +1,10 @@
 // Color-coded status pill shared across the Appointments and Job Cards screens - status
 // names come straight from the backend's AppointmentStatus/WarrantyStatus/JobCardStatus
 // enums, not re-worded.
-const COLOR_BY_STATUS: Record<string, string> = {
+// Exported so other small status-driven UI (e.g. the Appointments dashboard-stats widget)
+// can reuse the exact same status → color mapping instead of inventing a second one that
+// could drift out of sync with this one.
+export const COLOR_BY_STATUS: Record<string, string> = {
   SCHEDULED: 'bg-slate-100 text-slate-600',
   CONFIRMED: 'bg-sky-50 text-sky-700',
   TECHNICIAN_ASSIGNED: 'bg-indigo-50 text-indigo-700',

@@ -14,6 +14,7 @@ export const FINANCE_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN', 'S
 const TABS: { label: string; path: string }[] = [
   { label: 'Invoices', path: '/finance/invoices' },
   { label: 'B2B Aging Report', path: '/finance/aging' },
+  { label: 'GL Postings', path: '/finance/gl-postings' },
 ];
 
 export function FinanceLayout() {
@@ -30,10 +31,13 @@ export function FinanceLayout() {
         <p className="mt-1 max-w-3xl text-sm text-slate-500">
           "Invoices" is the full system-of-record view (all statuses, B2C and B2B) that
           Delivery's in-context payment flow doesn't give you. "B2B Aging Report" is AC-16's
-          0-30/31-60/61-90/90+ days-past-due breakdown of unpaid B2B Credit balances. The
-          customer-facing tracking page (status, what's owed, a downloadable summary) is a
-          separate public link shared per Job Card - see the "Customer tracking link" on
-          that Job Card's own detail screen, not part of this staff section.
+          0-30/31-60/61-90/90+ days-past-due breakdown of unpaid B2B Credit balances. "GL
+          Postings" is a read-only view of the internal journal log (invoice payments, debit
+          notes, dismantling recoveries, warranty credit notes) - system-generated only, no
+          manual entry. The customer-facing tracking page (status, what's owed, a
+          downloadable summary) is a separate public link shared per Job Card - see the
+          "Customer tracking link" on that Job Card's own detail screen, not part of this
+          staff section.
         </p>
         {canView && (
           <nav className="mt-4 -mb-px flex flex-wrap gap-1 overflow-x-auto">

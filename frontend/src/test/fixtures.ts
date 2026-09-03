@@ -22,6 +22,8 @@ import type {
   KanbanCard,
   ServiceEfficiencyReport,
 } from '../lib/reportsTypes';
+import type { AppointmentDashboardStats } from '../lib/appointmentsTypes';
+import type { GlPosting } from '../lib/glLedgerTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -586,6 +588,28 @@ export function makeDashboardOverview(overrides: Partial<DashboardOverview> = {}
     approvalAging: { breachedCount: 1, oldestAgeHours: 5.25 },
     firstTimeFixRate: makeFirstTimeFixRateReport(),
     serviceEfficiency: { overallAvgHours: 3.5, sampleSize: 4 },
+    ...overrides,
+  };
+}
+
+export function makeAppointmentDashboardStats(overrides: Partial<AppointmentDashboardStats> = {}): AppointmentDashboardStats {
+  return {
+    today: { scheduled: 2, confirmed: 3, onSite: 1, completed: 4, cancelled: 0 },
+    week: { total: 20, byStatus: { SCHEDULED: 2, CONFIRMED: 3, ON_SITE: 1, COMPLETED: 13, CANCELLED: 1 } },
+    ...overrides,
+  };
+}
+
+export function makeGlPosting(overrides: Partial<GlPosting> = {}): GlPosting {
+  return {
+    id: 'gl-1',
+    sourceType: 'INVOICE_PAYMENT',
+    sourceId: 'inv-1',
+    description: 'Payment received for INV-0001 (CASH)',
+    debitAccount: '1000-CASH',
+    creditAccount: '4000-SERVICE-REVENUE',
+    amount: 250,
+    postedAt: '2026-09-01T09:00:00Z',
     ...overrides,
   };
 }

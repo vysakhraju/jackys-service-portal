@@ -5,6 +5,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
+import { SignaturePad } from '../../components/SignaturePad';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAuth } from '../../lib/auth';
 import {
@@ -230,11 +231,14 @@ function DispatchAndCancel({ delivery, onChanged }: { delivery: Delivery; onChan
   );
 }
 
-// AC-12: POD mandatory (signature OR photo). No signature-pad library or camera capture
-// component exists in this app yet - both fields are plain file uploads, read client-side
-// into a base64 data URI via FileReader and sent as-is (the backend just stores the string,
-// capped ~2.8M chars - it doesn't care about the format). Flagged as a known UX gap in
-// STATUS_TRACKER's deferred-follow-ups list, not fixed this phase.
+// AC-12: POD mandatory (signature OR photo). Signature capture uses a real canvas-based
+// SignaturePad (components/SignaturePad.tsx) - previously a known UX gap in STATUS_TRACKER's
+// deferred-follow-ups list ("no signature-pad library... plain file upload only"), fixed as
+// a small polish item. Photo capture stays a plain file upload (camera-capture wasn't part
+// of this round). Both still end up as the same base64 data URI string the backend has
+// always stored as-is (capped ~2.8M chars, format-agnostic) - SignaturePad's onChange and
+// the photo input's FileReader both just call setSignatureBase64/setPhotoBase64, so nothing
+// downstream of this form changed.
 function CapturePodForm({ delivery, onChanged }: { delivery: Delivery; onChanged: () => void }) {
   const { register, handleSubmit, watch } = useForm<{ recipientName: string; notes: string }>({
     defaultValues: { recipientName: '', notes: '' },
@@ -279,16 +283,8 @@ function CapturePodForm({ delivery, onChanged }: { delivery: Delivery; onChanged
           <input className={inputClass} {...register('recipientName', { required: true })} />
         </Field>
         <div className="grid gap-2 sm:grid-cols-2">
-          <Field label="Signature (image file)" hint={signatureBase64 ? 'Attached' : 'Signature OR photo is required'}>
-            <input
-              type="file"
-              accept="image/*"
-              className={inputClass}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) readAsDataUrl(file, setSignatureBase64);
-              }}
-            />
+          <Field label="Signature" hint={signatureBase64 ? 'Attached' : 'Signature OR photo is required'}>
+            <SignaturePad onChange={setSignatureBase64} />
           </Field>
           <Field label="Photo (image file)" hint={photoBase64 ? 'Attached' : 'Signature OR photo is required'}>
             <input

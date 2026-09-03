@@ -2,8 +2,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { makeAppointment } from '../../test/fixtures';
+import { makeAppointment, makeAppointmentDashboardStats } from '../../test/fixtures';
 
+vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/appointmentsApi', () => ({
   assignTechnician: vi.fn(),
   cancelAppointment: vi.fn(),
@@ -11,13 +12,30 @@ vi.mock('../../lib/appointmentsApi', () => ({
   confirmAppointment: vi.fn(),
   createAppointment: vi.fn(),
   deleteAppointment: vi.fn(),
+  getAppointmentDashboardStats: vi.fn(),
   getVisit: vi.fn(),
   listAppointments: vi.fn(),
   markAppointmentOnSite: vi.fn(),
 }));
 
-import { listAppointments } from '../../lib/appointmentsApi';
+import { useAuth } from '../../lib/auth';
+import { getAppointmentDashboardStats, listAppointments } from '../../lib/appointmentsApi';
 import { SchedulePage } from './SchedulePage';
+
+// This page (unlike Finance/AMC) has no layout-level role gate at all - every logged-in
+// user reaches it. Only the dashboard-stats widget it now renders is itself role-gated
+// (DashboardStatsWidget checks canViewDashboardStats client-side), so most of this file's
+// existing tests don't care who's logged in - default to a role that CAN see it so the
+// widget's own query resolves quietly in the background rather than sitting disabled.
+function mockUser(roleName = 'SUPER_ADMIN') {
+  vi.mocked(useAuth).mockReturnValue({
+    user: { id: 'u1', firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } },
+    isLoading: false,
+    isAuthenticated: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+  } as any);
+}
 
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -32,6 +50,8 @@ function renderPage() {
 
 beforeEach(() => {
   vi.mocked(listAppointments).mockReset();
+  vi.mocked(getAppointmentDashboardStats).mockReset().mockResolvedValue(makeAppointmentDashboardStats());
+  mockUser();
 });
 
 // Regression test for the-fool's most severe Frontend Phase 10 finding: an AMC-type,
