@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { DiscoveryModule } from '@nestjs/core';
 import { PermissionsService } from './permissions.service';
 import { PermissionsController } from './permissions.controller';
+import { RoleCapabilitiesService } from './role-capabilities.service';
 import { UserPermissionGrant } from './entities/user-permission-grant.entity';
 import { User } from '../auth/entities/user.entity';
 import { AuthModule } from '../auth/auth.module';
@@ -14,11 +16,16 @@ import { AuthModule } from '../auth/auth.module';
     // dependency for what's really just an entity relation.
     TypeOrmModule.forFeature([UserPermissionGrant, User]),
     // Needed because PermissionsController's @UseInterceptors(AuditInterceptor) resolves
-    // AuditInterceptor -> AuthService, which AuthModule provides/exports.
+    // AuditInterceptor -> AuthService, and now also RoleAccessService (extra role-access
+    // grants), both of which AuthModule provides/exports.
     AuthModule,
+    // Backs RoleCapabilitiesService's live route introspection for the role-access grant
+    // preview - lets it enumerate every registered controller/route via the app's own
+    // real metadata instead of a hand-maintained list.
+    DiscoveryModule,
   ],
   controllers: [PermissionsController],
-  providers: [PermissionsService],
+  providers: [PermissionsService, RoleCapabilitiesService],
   exports: [PermissionsService],
 })
 export class PermissionsModule {}

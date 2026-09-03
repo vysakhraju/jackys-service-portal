@@ -20,6 +20,7 @@ import { User } from '../auth/entities/user.entity';
 import { InventoryService } from '../inventory/inventory.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { PermissionType } from '../permissions/entities/user-permission-grant.entity';
+import { RequiresPermissionGrant } from '../permissions/decorators/requires-permission-grant.decorator';
 
 // Creation/validation/section-assignment/approval: same office-side role set used
 // elsewhere (Appointments' CCE-facing endpoints). Warranty override is deliberately
@@ -165,6 +166,7 @@ export class JobCardsController {
 
   @Post(':id/qc/approve')
   @Roles(...QC_GATE_ROLES)
+  @RequiresPermissionGrant(PermissionType.QC_APPROVAL)
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.QC_APPROVE,
@@ -185,6 +187,7 @@ export class JobCardsController {
 
   @Post(':id/qc/reject')
   @Roles(...QC_GATE_ROLES)
+  @RequiresPermissionGrant(PermissionType.QC_APPROVAL)
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.QC_REJECT,

@@ -11,6 +11,8 @@ import { User } from './entities/user.entity';
 import { Role } from './entities/role.entity';
 import { AuditLog } from './entities/audit-log.entity';
 import { RolesGuard } from './guards/roles.guard';
+import { RoleAccessService } from './role-access.service';
+import { RoleAccessGrant } from './entities/role-access-grant.entity';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { JobCard } from '../job-cards/entities/job-card.entity';
@@ -22,7 +24,13 @@ import { InventoryReservation } from '../inventory/entities/inventory-reservatio
     // their owning modules) purely for the deactivateUser() custody-clearance check
     // below - avoids a circular module dependency, since AppointmentsModule/JobCardsModule
     // both already import AuthModule for AuditInterceptor.
-    TypeOrmModule.forFeature([User, Role, AuditLog, Appointment, JobCard, InventoryReservation]),
+    // RoleAccessGrant lives here (not in permissions/, where UserPermissionGrant lives)
+    // specifically so RolesGuard - a provider of THIS module, used via @UseGuards(RolesGuard)
+    // by nearly every controller in the app - can inject RoleAccessService without every
+    // one of those controllers' modules needing to import a separate module for it. Every
+    // module that already imports AuthModule (virtually all of them, for AuditInterceptor)
+    // gets this for free.
+    TypeOrmModule.forFeature([User, Role, AuditLog, Appointment, JobCard, InventoryReservation, RoleAccessGrant]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -45,8 +53,9 @@ import { InventoryReservation } from '../inventory/entities/inventory-reservatio
     JwtStrategy,
     RefreshStrategy,
     RolesGuard,
+    RoleAccessService,
     AuditInterceptor,
   ],
-  exports: [AuthService, JwtModule, RolesGuard, AuditInterceptor],
+  exports: [AuthService, JwtModule, RolesGuard, RoleAccessService, AuditInterceptor],
 })
 export class AuthModule {}

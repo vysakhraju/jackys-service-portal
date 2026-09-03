@@ -25,6 +25,7 @@ import type {
 import type { AppointmentDashboardStats } from '../lib/appointmentsTypes';
 import type { GlPosting } from '../lib/glLedgerTypes';
 import type { Role, User } from '../lib/types';
+import type { RoleAccessGrant, RoleCapabilityModule } from '../lib/roleAccessTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -640,6 +641,32 @@ export function makeUser(overrides: Partial<User> = {}): User {
     lastLoginAt: null,
     createdAt: '2026-08-01T08:00:00Z',
     updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeRoleAccessGrant(overrides: Partial<RoleAccessGrant> = {}): RoleAccessGrant {
+  return {
+    id: 'grant-1',
+    userId: 'user-2',
+    grantedRoleName: 'TECHNICAL_TEAM_LEADER',
+    grantedByUserId: 'admin-1',
+    grantedAt: '2026-09-03T08:00:00Z',
+    expiresAt: '2026-09-20T08:00:00Z',
+    revokedAt: null,
+    revokedByUserId: null,
+    notes: null,
+    ...overrides,
+  };
+}
+
+export function makeRoleCapabilityModule(overrides: Partial<RoleCapabilityModule> = {}): RoleCapabilityModule {
+  return {
+    module: 'job-cards',
+    endpoints: [
+      { method: 'POST', path: '/job-cards/:id/warranty-override', summary: 'Warranty Override (FR-17/AC-18)', requiresSeparatePermissionGrant: null },
+      { method: 'POST', path: '/job-cards/:id/qc/approve', summary: 'QC approve (FR-10)', requiresSeparatePermissionGrant: 'QC_APPROVAL' },
+    ],
     ...overrides,
   };
 }

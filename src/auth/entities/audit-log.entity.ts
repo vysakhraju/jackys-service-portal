@@ -35,6 +35,9 @@ export enum AuditAction {
   // Phase 7
   DELIVERY_DISPATCH = 'DELIVERY_DISPATCH',
   DELIVERY_POD = 'DELIVERY_POD',
+  // Extra role access grants (2026-09-03)
+  ROLE_ACCESS_GRANT = 'ROLE_ACCESS_GRANT',
+  ROLE_ACCESS_REVOKE = 'ROLE_ACCESS_REVOKE',
 }
 
 @Entity('audit_logs')
