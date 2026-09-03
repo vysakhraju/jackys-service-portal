@@ -1209,6 +1209,44 @@
       </p>
       <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
     </div>
+    <div class="alert" style="border-color:var(--critical); background:var(--critical-wash); margin-top:14px;">
+      <h3 style="color:var(--critical);">Post-ship outage (2026-09-03): GL Ledger module crashed the whole app at boot — found, fixed, and independently re-tested same day</h3>
+      <p>
+        The first time <span class="mono">npm run start:dev</span> restarted after Extra
+        Role Access shipped, the backend failed to boot at all
+        (<span class="mono">UnknownDependenciesException</span> on
+        <span class="mono">RolesGuard</span>) — both Swagger and the frontend login showed
+        "could not reach the server" because the server process wasn't running, not because
+        of a frontend bug. <b>Root cause:</b> Extra Role Access gave
+        <span class="mono">RolesGuard</span> a new constructor dependency
+        (<span class="mono">RoleAccessService</span>, from <span class="mono">AuthModule</span>)
+        — NestJS imports aren't transitive, so every module using
+        <span class="mono">RolesGuard</span> needs its own <span class="mono">AuthModule</span>
+        import. 18 of 19 already had one for other reasons; <span class="mono">GlLedgerModule</span>
+        was the one exception. <b>Fix:</b> added the missing import, plus a new general-purpose
+        static regression test (<span class="mono">roles-guard-wiring.spec.ts</span>) that checks
+        <i>every</i> controller using <span class="mono">RolesGuard</span> has its owning module
+        import <span class="mono">AuthModule</span> — this catches this exact class of mistake for
+        any future module, not just this one. Committed as <span class="mono">cb9c13c</span>.
+      </p>
+      <p>
+        <b>Independent <span class="mono">test-master</span> QA pass</b> run the same day at
+        your request, specifically to get a second, independent look at both changes rather than
+        relying only on tests written by the same session that built the feature. Found and fixed
+        two real gaps: (1) the capability-preview service only read
+        <i>method</i>-level <span class="mono">@Roles()</span> metadata, so every endpoint on the
+        5 controllers that apply <span class="mono">@Roles()</span> once above the class
+        (<span class="mono">ReportsController</span> and 4 others) was silently missing from every
+        role's access preview — hit the flagship "delegate Team Leader access to a CCE" scenario
+        directly; (2) two role-access endpoints had no runtime validation on their
+        <span class="mono">:roleName</span> path param. Also documented (not fixed, by deliberate
+        scope decision) a low-likelihood race condition in the role-access grant check, with a
+        test that demonstrates it and a recommended fix for a future session. Verified
+        <b>601/601 backend + 324/324 frontend passing app-wide</b>, <span class="mono">tsc -b</span>
+        clean both sides. Committed as <span class="mono">9633d61</span>.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Fixed and re-tested this session</span>
+    </div>
   </div>
 
   <div class="section">

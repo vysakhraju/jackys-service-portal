@@ -3153,6 +3153,52 @@ used for git/file operations here is a separate sandbox that can't hold open a l
 dev server or port 3000) - **restart `npm run start:dev` on your machine to confirm the
 server now boots and login works.**
 
+### Test-master QA pass (2026-09-03): independent review of Extra Role Access + the GL Ledger fix
+
+Run at the user's request specifically to get an independent look at both of today's
+changes, rather than relying only on tests written by the same session that wrote the
+feature. Found and fixed two real gaps, documented one deliberately-unfixed gap.
+
+**Finding #1 (Critical/High) - fixed.** `RoleCapabilitiesService` (the capability-preview
+service backing the role-access grant form) only read METHOD-level `@Roles()` metadata.
+Five real controllers apply `@Roles()` once above the class instead of per-method
+(`ReportsController`, `FinanceReportsController`, `QualityReportsController`,
+`OperationalReportsController`, `UsersController`) - every endpoint on all five was
+silently missing from every role's capability preview. This hit the flagship "delegate
+TECHNICAL_TEAM_LEADER to a CCE" scenario directly, since `ReportsController`'s whole
+Kanban board is class-level `@Roles()`. Fixed by reading class-level metadata as a
+fallback, mirroring `RolesGuard`'s own
+`reflector.getAllAndOverride(key, [handler, class])` semantics (method-level overrides
+class-level). Regression-covered with a new fixture matching the real pattern (3 new
+tests: class-level inclusion, class-level exclusion, method-level override).
+
+**Finding #2 (Low) - fixed.** `PermissionsController`'s two `:roleName` path params had
+no runtime validation, only a TypeScript type - a bogus `roleName` reached the service
+layer instead of failing fast with a 400. Fixed with `ParseEnumPipe`.
+
+**Finding #3 (Medium) - documented, not fixed.** `RoleAccessService.grant()`'s
+duplicate-active-grant check is read-then-write with no DB-level uniqueness constraint
+or transaction/lock backing it (the entity's own index on `[userId, grantedRoleName]`
+is a plain, non-unique index). Two concurrent `grant()` calls for the same user+role can
+both pass the check before either saves, producing two simultaneous active grants
+instead of the intended conflict error for the second one. Low real-world likelihood
+(an admin clicking a button, not a high-concurrency path) but a real gap: revoking ONE
+of the two duplicates would silently leave the other active. A Postgres partial unique
+index was considered and rejected - its predicate can't safely express the time-based
+"active" definition (`expiresAt > NOW()`) without risking blocking a legitimate re-grant
+after natural expiry. Added a test that demonstrates the race so it stays visible.
+Recommended follow-up: wrap the check+insert in a SERIALIZABLE transaction or a
+per-`(userId, grantedRoleName)` advisory lock.
+
+Also added 3 frontend tests for previously-untested `RoleAccessSection` behavior: the
+Grant button's disabled-until-all-fields-filled state, grant-error surfacing via
+`ErrorNotice`, and the capability-preview zero-state message.
+
+**Verified:** backend 601/601 (was 597), frontend 324/324 (was 321), `tsc -b` clean both
+sides - all in the isolated cloud sandbox. Targeted re-run on your machine: 28/28
+(`role-capabilities.service.spec.ts`, `role-access.service.spec.ts`,
+`permissions.module.wiring.spec.ts`), `tsc -b` clean both sides. Committed as `9633d61`.
+
 ---
 
 ## Open items / blockers (from planning docs, still unresolved)
