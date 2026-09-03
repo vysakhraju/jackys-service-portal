@@ -1,15 +1,18 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-03 (Frontend polish: GL Postings UI, Appointment
-dashboard-stats widget, POD signature-pad — all three shipped, 36 new tests,
-302/302 passing app-wide, `tsc -b`/`vite build` clean)
+**Last updated:** 2026-09-03 (User Management shipped - admin can create staff
+accounts and assign/change roles from the frontend; see the write-up below. 13 new
+backend tests, 11 new frontend tests, 566/566 + 313/313 passing app-wide, `tsc -b`
+clean on both sides)
 **Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `5f02768`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `5f02768`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
-**Next session:** the three small polish items are done (see the write-up below).
-Nothing is blocking. What's left: your own `git push`, and the mobile app /
-offline-mode decision (Flutter vs React Native), which was deliberately left open
-rather than picked - see "Open items / blockers" below.
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `121a671`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `121a671`, your machine has already pushed through `5f52aaa` (confirmed via `git fetch`) - check `git log origin/main..main` for the current count once you've pushed again (this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Next session:** User Management is done. Two decisions were made this session (see
+"Open items / blockers" below for the full picture): **mobile app framework -
+React Native**, chosen but not yet started; **customer portal - polish the existing
+link-based `/track/:token` page** (branding/visual pass), not a full customer-login
+system, also not yet started. WhatsApp Business API stays paused until the company
+creates its WhatsApp Business account - not a technical blocker on this end.
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -2933,12 +2936,85 @@ succeeded against the real repo on your machine, though `npx vitest run` there h
 native-binding install quirk noted below (unrelated to this code - the same 17 files
 already passed 302/302 in an isolated sandbox before being pushed).
 
+## User Management (this session): admin can create staff accounts and assign roles
+
+Previously there was no way to get a new staff account into this app except SSH-ing into
+the server and running a CLI script (`scripts/seed-admin.ts` / `scripts/seed-technician.ts`
+talk to Postgres directly) - onboarding a CCE, a Technical Team Leader, or any other role
+required someone on a terminal. This closes that gap: a new admin-only "Users" screen lets
+SUPER_ADMIN/SERVICE_HEAD create staff accounts, change roles, and deactivate/reactivate
+accounts, entirely from the frontend.
+
+Backend: 5 new endpoints under `POST/GET /users`, `GET /users/roles`, `PATCH /users/:id`,
+`PATCH /users/:id/reactivate` (`src/users/`), all backed by `AuthService` rather than a
+separate service - it already owned the `User`/`Role` repositories, the audit-logging
+helper, and (unused until now) a fully-built, already-unit-tested `createUser()` method
+just waiting for a route. Frontend: a new `/users` page (roster table + create form),
+added to the nav.
+
+`the-fool` pre-mortem (mode: Find failure modes) ran before writing code - this module
+creates real accounts with real system access, a materially different risk profile than
+the read-only/polish items shipped earlier this session, so it got real scrutiny rather
+than a light pass. All 5 findings are in the shipped design:
+
+1. **Self-lockout**: an admin can never deactivate or edit their own account through this
+   screen - a 403 server-side (both the existing `deactivateUser` and the new
+   `updateUser`), and the role select / Deactivate button are disabled in the UI rather
+   than left to fail. Doesn't fully prevent "the last remaining admin gets demoted by
+   someone else," but removes the single most likely accidental trigger.
+2. **Plaintext temp passwords never reach the audit log** - `createUser()`'s existing
+   `@Audit`-equivalent call only ever logged `{ createdBy }`, never the password itself;
+   nothing changed there, just confirmed and left alone rather than "fixed" into something
+   worse.
+3. **CUSTOMER is excluded from every creatable-role list**, server and client both - the
+   actual customer-facing flow is the no-login `/track/:token` portal
+   (`CustomerPortalPage.tsx`), not a staff account, and `ProtectedRoute` doesn't restrict
+   the internal staff console by role at the top level - a CUSTOMER-role login here would
+   land inside the internal AppLayout sidebar with nothing to do, a dead end rather than a
+   feature.
+4. **Role changes re-run the exact same open-assignment blocker check `deactivateUser`
+   already enforces** (factored out into a shared `findOpenAssignmentBlockers()`) - so
+   reassigning someone off `TECHNICIAN_FIELD` (or any role) while they still hold an open
+   appointment, workshop job card, or spare-part custody is blocked with the same
+   `blockers[]` 409 shape, not silently applied.
+5. **Duplicate email/employee ID gets a clean 409**, not a raw Postgres unique-violation
+   500 - `createUser()` already checked this; the new `updateUser()`'s employee-ID edit
+   path got the same upfront check.
+
+**Automated tests:** 13 new backend unit tests (`auth.service.spec.ts` -
+`reactivateUser`, `listUsers`, `listCreatableRoles`, `updateUser`'s self-block/blocker
+-reuse/role-change-audit/profile-only-audit/no-op paths) and 11 new frontend tests
+(`UsersPage.test.tsx` - admin gating, roster rendering, self-row lock, role change,
+deactivate/reactivate, blocked-change error surfacing, create-form submission and reset,
+CUSTOMER exclusion, duplicate-conflict surfacing), plus a new `makeUser`/`makeRole`
+fixture pair. **566/566 backend tests and 313/313 frontend tests passing app-wide**,
+`tsc -b` clean on both sides.
+
+Committed as `121a671` ("Add User Management: admin can create staff accounts and
+assign/change roles"). Not live-verified against the real running server with a
+`verify-*.ps1` script - same reasoning as the prior polish items (a straightforward
+CRUD screen over existing, already-tested service logic, not new backend calculation
+behavior); `tsc -b` succeeded against the real repo on your machine both for the backend
+and the frontend, though device-side `npx jest` (backend) needed a longer timeout to
+finish over the mounted-drive connection (passed, 54s for one spec file vs ~1s in the
+isolated sandbox) and device-side `npx vitest run`/`npx vite build` (frontend) both hit
+the already-documented rolldown native-binding install quirk (unrelated to this code).
+
 ---
 
 ## Open items / blockers (from planning docs, still unresolved)
 
-- Mobile framework decision: Flutter vs React Native
-- WhatsApp Business API account approval (2–4 weeks lead time) — now also blocking real Estimate notification delivery (Phase 4)
+- ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
+  started (shares TypeScript and much of the existing frontend's API/auth/type layer
+  with the current React app, unlike Flutter's separate Dart ecosystem).
+- WhatsApp Business API account approval — paused, not actively pursued right now:
+  waiting on the company itself to create a WhatsApp Business account first (your
+  instruction, 2026-09-03). Still blocking real Estimate notification delivery
+  (Phase 4) until that happens - the notification code path itself is built and
+  ready, it just has no real account to send through yet.
+- Customer portal — decided 2026-09-03: polish the existing no-login
+  `/track/:token` page (branding/visual design pass), not a full customer-login
+  system with appointment booking. Not yet started.
 - ~~External Warranty API access/documentation~~ — resolved: the S/N warranty check already uses the CSV-upload-fallback design Discovery itself proposed (`WarrantyMaster` table + `bulkImportWarrantyMaster()`), not a live external API integration, and Backend Phase 12 (Warranty Claims) builds on that same table for `JobCard.warrantySupplier`/vendor grouping. No live external API was ever wired up or is required for either module to work.
 - Acceptance criteria not yet validated with stakeholders
 - ~~`backend/`/`frontend/` folder layout vs. actual `src/` layout~~ — resolved: backend stays in `src/` as-is, the React frontend now lives in `frontend/` (Frontend Phase 1).

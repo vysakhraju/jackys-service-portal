@@ -382,8 +382,8 @@
     <div class="stat-row">
       <div class="stat"><span class="n mono">13</span><span class="l">Backend phases done (all live-verified)</span></div>
       <div class="stat"><span class="n mono">12 / 12</span><span class="l">Frontend phases built (all queued phases)</span></div>
-      <div class="stat"><span class="n mono">553 + 302</span><span class="l">Backend + frontend tests passing</span></div>
-      <div class="stat"><span class="n mono">5f02768</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">566 + 313</span><span class="l">Backend + frontend tests passing</span></div>
+      <div class="stat"><span class="n mono">121a671</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -1115,14 +1115,50 @@
       </p>
       <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
     </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">User Management (2026-09-03): admin can create staff accounts and assign/change roles</h3>
+      <p>
+        Previously the only way to get a new staff account into this app was a CLI script
+        run directly on the server. A new admin-only <b>Users</b> screen (Super Admin /
+        Service Head) now handles account creation, role changes, and deactivate/
+        reactivate entirely from the frontend. <span class="mono">the-fool</span>
+        pre-mortem (mode: Find failure modes) ran first, with real scrutiny this time —
+        creating accounts with real system access is a different risk profile than a
+        read-only report screen. All 5 findings are in the shipped design: an admin can
+        never deactivate or re-role their own account (403 server-side, disabled in the
+        UI); temporary passwords never reach the audit log; <b>CUSTOMER</b> is excluded
+        from every creatable-role list (customers use their tracking link, not a staff
+        login); a role change re-runs the exact same open-appointment/job-card/inventory-
+        custody blocker check deactivation already had, so reassigning someone never
+        silently orphans work they're still mid-way through; and a duplicate email or
+        employee ID gets a clean 409, not a raw database error.
+      </p>
+      <p>
+        <span class="mono">test-master</span> coverage: 13 new backend tests, 11 new
+        frontend tests, <b>566/566 + 313/313 passing app-wide</b>,
+        <span class="mono">tsc -b</span> clean on both sides. Committed as
+        <span class="mono">121a671</span>.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+    </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>What's left — your own push, and the mobile app decision</h3>
-        <h2>All 13 backend phases, all 12 frontend phases, and this session's 3 polish items are built and live-verified</h2>
-        <p>Nothing is blocking. What's left: your own <span class="mono">git push</span> (<span class="mono">main</span>/<span class="mono">master</span> are 1 commit ahead of <span class="mono">origin/main</span> as last checked this session — run <span class="mono">git log origin/main..main</span> yourself for the current count), and the mobile app / offline-mode decision (Flutter vs React Native), which stays open and deferred, not chosen against. The Reports/Dashboards WebSocket manual spot-check from Frontend Phase 12 is also still outstanding.</p>
+        <h3>Two decisions made, both not yet started — plus your own push</h3>
+        <h2>User Management shipped. Mobile app: React Native. Customer portal: polish what exists.</h2>
+        <p>Nothing is blocking. Two direction calls were made this session: the <b>mobile
+        app</b> will be built in <b>React Native</b> (shares TypeScript and much of the
+        existing frontend's API/auth/type layer with the current React app — not started
+        yet), and the <b>customer portal</b> will get a branding/visual polish pass on the
+        existing no-login <span class="mono">/track/:token</span> page rather than a full
+        customer-login system — also not started. <b>WhatsApp Business API</b> stays
+        paused until the company creates its own WhatsApp Business account — not a
+        technical blocker here. Still open: your own <span class="mono">git push</span>
+        (run <span class="mono">git log origin/main..main</span> yourself for the current
+        count) and the Reports/Dashboards WebSocket manual spot-check from Frontend Phase
+        12.</p>
       </div>
       <div class="go">Next →</div>
     </div>
@@ -1130,7 +1166,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 5f02768 — awaiting push from your machine</span>
+    <span>master + main synced locally at 121a671 — awaiting push from your machine</span>
   </footer>
 
 </div>

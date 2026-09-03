@@ -798,6 +798,15 @@ that's the signal to update this guide.
 | `PATCH /auth/users/:id/deactivate` | 10f |
 | `POST /auth/seed-roles` | 2 |
 
+### users (5)
+| Endpoint | Section |
+|---|---|
+| `GET /users` | 32c |
+| `GET /users/roles` | 32b |
+| `POST /users` | 32b |
+| `PATCH /users/:id` | 32c |
+| `PATCH /users/:id/reactivate` | 32d |
+
 ### master-data (29)
 | Endpoint | Section |
 |---|---|
@@ -2664,6 +2673,50 @@ a cost basis, never the customer-facing `unitPriceB2B/B2C`) plus `byModel`/
   clean on the first run - see `docs/planning/STATUS_TRACKER.md`'s Phase 13 write-up for
   exactly what it built and checked.
 
+## 32. Frontend — User Management (this session, admin capability)
+
+Adds the **Users** sidebar destination - the first way to create a staff account from the
+frontend at all. Before this, a new hire's account only existed if someone ran
+`npm run seed:admin` / `npm run seed:technician` directly on the server.
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a) or any
+`SERVICE_HEAD`. Click **Users** in the sidebar (right under Dashboard). Sign in as anyone
+else (a CCE, a technician, an Accountant) and you'll see a plain restricted-access message
+instead - every endpoint on this screen is admin-only server-side too, same discipline as
+Permissions admin (Section 24b).
+
+**b. Create a user**: fill in first/last name, email, an optional employee ID and phone, a
+temporary password (at least 8 characters), and pick a role from the dropdown - notice
+**Customer never appears as an option**: customers reach this app through their tracking
+link (Section 26f), not a staff login, so offering it here would be a dead end (the-fool
+finding #3). Submit, and the new account appears in the roster immediately. Tell the new
+hire their email and temporary password yourself (WhatsApp, verbally, a sticky note) - this
+app doesn't send onboarding emails, so nothing is sent automatically.
+
+**c. Change a role**: in the roster, each row's Role column is a live dropdown - pick a
+different role and it saves immediately, no separate "Save" button. Try it on someone with
+an open appointment or workshop job card assigned (create one first via Section 3/6 if you
+don't have one handy) and confirm you get a `409` naming exactly which appointment/job
+card/spare-part custody is blocking the change - the same open-assignment guard
+`deactivateUser` already had (the-fool finding #4), not a silent role swap out from under
+work still in progress.
+
+**d. Deactivate / reactivate**: an **ACTIVE** user's row shows a **Deactivate** button
+(same guardrail as above - blocked with a `409` if they hold open work); once
+**INACTIVE**, the same spot shows **Reactivate** instead, which flips them straight back to
+active.
+
+**e. Prove the guardrails work**
+- Your own logged-in row: the Role select is disabled and the action column reads "You
+  can't modify your own account here" instead of a button - you cannot deactivate or
+  re-role yourself from this screen (the-fool finding #1). Confirm the roster still shows
+  your row normally otherwise.
+- Create a second user with an email or employee ID that already exists → expect a clean
+  `409` with a message naming the conflict, not a raw server error (the-fool finding #5).
+- Sign in as anyone outside `SUPER_ADMIN`/`SERVICE_HEAD` and confirm `/users` shows only
+  the restricted message - no roster, no create form, and the network tab shows no
+  `/users` request was ever made.
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2690,8 +2743,9 @@ Everything through **Phase 13** (Auth, Master Data, Appointments, Technician Mob
 Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
 + POD + OOW invoicing block, Finance extension + Customer Portal, AMC Management,
 Dismantling, Reports/Dashboards (18.1-18.4), Warranty Claims) is real, working code you can
-exercise exactly as above — all 158 endpoints (147 through Phase 12, plus Phase 13's 11 new
-ones in Section 31) are live, plus the `/reports` WebSocket channel (Section 17e). Your full
+exercise exactly as above — all 163 endpoints (147 through Phase 12, Phase 13's 11 new ones
+in Section 31, plus Section 32's 5 new `/users` endpoints) are live, plus the
+`/reports` WebSocket channel (Section 17e). Your full
 post-MVP sequencing (AMC → Dismantling → Reports/Dashboards 18.1 → Warranty Claims →
 Reports/Dashboards 18.2/18.3/18.4) is complete. **Phase 12 (Warranty Claims, Section 30) is
 unit-tested and live-verified against your machine — 70/70 checks passed** via
@@ -2705,9 +2759,12 @@ technician's Field View (Section 20), Job Cards + Warranty Override (Section 21)
 Estimates + the public customer approval link (Section 22), Workshop + Inventory
 (Section 23), QC + Permissions admin (Section 24), Delivery + Invoicing (Section 25),
 Finance + Customer Portal (Section 26), AMC Management (Section 27), Dismantling
-(Section 28), and Reports/Dashboards (Section 29) - all 12 frontend phases are now built,
-and all are test-covered (266/266 automated frontend tests as of Section 29, run isolated
-ahead of each device merge, 38 test files). Sections 18-29 are all live-verified against
+(Section 28), Reports/Dashboards (Section 29), and the small additions since (GL
+Postings within Section 26, the Schedule tab's dashboard-stats widget, the POD
+signature pad, and the new User Management screen, Section 32) - all 12 frontend
+phases are built, plus this session's admin-capability addition, and all are
+test-covered (313/313 automated frontend tests as of Section 32, run isolated ahead of
+each device merge, 43 test files). Sections 18-29 are all live-verified against
 the real backend (Section 26's `verify-phase9.ps1` run: 143/143 checks passed, 0 failed;
 Section 27's `verify-phase10.ps1` run: 66/66 checks passed, 0 failed; Section 28's
 `verify-phase11.ps1` run: 51/51 checks passed, 0 failed; Section 29's `verify-phase12.ps1`
