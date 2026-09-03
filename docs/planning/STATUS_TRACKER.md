@@ -1,27 +1,34 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-03 (User Management shipped - admin can create staff
-accounts and assign/change roles from the frontend; see the write-up below. 13 new
-backend tests, 11 new frontend tests, 566/566 + 313/313 passing app-wide, `tsc -b`
+**Last updated:** 2026-09-03 (Extra Role Access shipped - admin can delegate a
+role's access to a user without changing their real role; see the write-up below. 31
+new backend tests, 8 new frontend tests, 597/597 + 321/321 passing app-wide, `tsc -b`
 clean on both sides. Mobile app (React Native) v1 scoping is also done - see
 `docs/planning/MOBILE_APP_SCOPE_v1.md` - no mobile code written yet, scoping only)
 **Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `121a671`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `121a671`, your machine has already pushed through `5f52aaa` (confirmed via `git fetch`) - check `git log origin/main..main` for the current count once you've pushed again (this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
-**Next session:** User Management is done. Mobile app v1 is now scoped (see
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `451ca7c`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `451ca7c`, your machine has already pushed through `5f52aaa` (confirmed via `git fetch`) - check `git log origin/main..main` for the current count once you've pushed again (this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Next session:** Extra Role Access is done (see the write-up below) - an admin can
+now delegate a role's full access to a user without changing their real role (e.g.
+cover a Technical Team Leader's access on a capable CCE while the TL is on leave),
+time-boxed (max 90 days, no standing grants), with a live preview of what a role can
+do before granting it. User Management is done. Mobile app v1 is scoped (see
 `docs/planning/MOBILE_APP_SCOPE_v1.md`): **Field Technicians only** for v1 (Drivers
 already have a working web path; Workshop Technicians are flagged as an assumption
 to confirm, not built for), **iOS + Android together**, **offline mode built into
 v1** (not deferred - this is the plan's biggest technical unknown, a short
 offline-queue spike is recommended before the full build), **push notifications
-deferred** to v1.1 (pull-to-refresh in v1). The scoping doc also surfaces a real gap:
-the BRD's "Need Spare" and "Complete/QC handoff" buttons need two new backend
-endpoints that don't exist yet (today's `technician` module only covers Start +
-diagnostic capture) - see the doc's open questions before that work starts.
-**Customer portal - polish the existing link-based `/track/:token` page**
-(branding/visual pass), not a full customer-login system, also not yet started.
-WhatsApp Business API stays paused until the company creates its WhatsApp Business
-account - not a technical blocker on this end.
+deferred** to v1.1 (pull-to-refresh in v1). **Need Spare is confirmed offline-first**
+(queues on-device, pushes as a real spare request on reconnect) and, per your call
+this session, **routes through Team Leader review first once it lands server-side**
+(the same idle/stale-reservation review pattern `InventoryController` already has),
+rather than an immediate auto-reservation - not yet built, this is the design
+decision for when it is. What's left open on the mobile plan: Complete/QC-handoff's
+own server-side shape, and whether it should queue offline the same way. **Customer
+portal - polish the existing link-based `/track/:token` page** (branding/visual
+pass), not a full customer-login system, also not yet started. WhatsApp Business API
+stays paused until the company creates its WhatsApp Business account - not a
+technical blocker on this end.
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -3011,6 +3018,95 @@ the already-documented rolldown native-binding install quirk (unrelated to this 
 
 ---
 
+## Extra Role Access (this session): admin can delegate a role's access to a user
+
+Your own words framing this: "if TL goes for vacation admin can assign that role to
+customer care executive if he is capable" - an admin can now give a user everything a
+DIFFERENT role can do, on top of their own real role, without changing who they
+actually are. The covering CCE keeps their own login, their own audit trail, their
+own identity throughout - the delegation just widens what they can additionally
+reach, for a bounded window, then it's gone.
+
+Backend: a new `RoleAccessGrant` table/`RoleAccessService` (grant/revoke/list,
+mirroring the existing `UserPermissionGrant`/`PermissionsService` conventions -
+never delete, revoke sets fields instead). The key mechanism: `RolesGuard` - the
+guard behind `@Roles()` on nearly every controller in the app - now checks a direct
+role match first exactly as before, and only if that fails, falls back to an active
+delegated grant. Because this lives in the guard itself, every existing `@Roles()`
+endpoint picked this up automatically; nothing needed touching module-by-module, and
+every current role holder's access is byte-for-byte unchanged (the fallback branch
+never even runs for them). A new live "capabilities preview" endpoint
+(`GET /permissions/roles/:roleName/capabilities`) walks the app's real route metadata
+via Nest's `DiscoveryService` - not a hand-maintained list, so it can't drift out of
+date as new endpoints get added later - and is what the frontend shows an admin
+before they confirm a grant. 5 new endpoints total on `PermissionsController`
+(grantable-roles list, capabilities preview, grant, revoke, per-user/per-role
+history).
+
+`the-fool` pre-mortem (mode: Find failure modes) ran first - explicitly called out as
+the highest-blast-radius change so far, since it touches the authorization check
+behind every gated endpoint in the app, not just one screen. All 5 findings are in
+the shipped design:
+
+1. **SUPER_ADMIN, SERVICE_HEAD, and CUSTOMER can never be delegated** - delegating
+   either admin role wouldn't just cover someone's day-to-day duties, it would
+   recursively delegate the entire admin surface (user management, this very
+   grant/revoke system, everything), since both roles are gated by the same
+   `PERMISSION_ADMIN_ROLES` set. This one exclusion closes both the "shadow
+   SUPER_ADMIN nobody notices" scenario and the recursive-delegation loop outright.
+2. **Every grant requires an expiry, capped at 90 days - there is no standing or
+   permanent delegation.** The vacation-coverage story this exists for has a natural
+   end date; coverage that needs to run longer gets re-granted, not left open forever
+   waiting for someone to remember to revoke it.
+3. **The capabilities preview flags QC-gated endpoints as needing a SEPARATE grant**,
+   instead of silently listing `qc/approve`/`qc/reject` as plainly included just
+   because the delegated role passes `@Roles()`. Those two endpoints' real gate has
+   always been the existing `QC_APPROVAL` permission grant (Phase 6) - delegating
+   "QC_OFFICER access" through this new mechanism does NOT by itself grant QC-approve
+   power, and the preview says so rather than letting an admin believe otherwise.
+4. **The new guard branch fails CLOSED** - any error in the grant lookup denies
+   access, it never silently allows it, given this code path now runs on every
+   gated request app-wide. Backed by a dedicated `roles.guard.spec.ts`, which didn't
+   exist before this session (this guard went from a five-line, zero-risk array
+   check to the single highest-leverage file in the backend).
+5. **An admin can never grant themselves extra role access** - mirrors the
+   self-lockout check User Management already added for direct role changes,
+   defense-in-depth alongside finding #1.
+
+Frontend: the Users page gets a new "Extra role access" section - pick a user and a
+role, see the live capability preview (grouped by module, with the QC caveat) before
+confirming, set the required expiry, grant. The roster table gets a new "Extra
+access" column showing each user's active grants as pills (role + expiry date), each
+with its own revoke button. Clicking "Grant access" on a roster row focuses the form
+on that user instead of re-finding them in a dropdown.
+
+**Automated tests:** 31 new backend tests (`role-access.service.spec.ts` -
+grant/revoke/self-grant-block/non-grantable-role-block/expiry-validation/duplicate-
+grant conflict; `roles.guard.spec.ts` - role match, delegated-grant match, expired/
+revoked/wrong-role denial, fail-closed-on-error; `role-capabilities.service.spec.ts` -
+real-decorator-driven route introspection, QC-grant flagging; plus a module-wiring
+test that boots the real `PermissionsModule`/`AuthModule` DI graph with mocked
+repositories rather than just constructing services with `new`, specifically to catch
+the class of DI-wiring mistake unit tests alone would miss) and 8 new frontend tests
+(`UsersPage.test.tsx` - non-grantable roles never offered, self excluded as
+recipient, live preview with QC caveat, grant submission, roster-row focus, active
+grant pill + revoke, empty/expired-grant states). **597/597 backend tests and 321/321
+frontend tests passing app-wide**, `tsc -b` clean on both sides.
+
+Committed as `451ca7c` ("Add Extra Role Access: admin can delegate a role's access to
+a user"). Not live-verified against the real running server with a `verify-*.ps1`
+script - same reasoning as User Management (a CRUD-shaped admin screen over new but
+straightforward service logic, not calculation behavior); `tsc -b` succeeded against
+the real repo on your machine for both backend and frontend. Device-side `npx jest`
+was run targeted (the 6 new/changed spec files plus the full suite hit the tool's own
+runtime cap, not a failure - each file individually passed, 101/101 tests, over the
+same mounted-drive I/O slowness documented since Phase 2) rather than the full 597,
+which the isolated cloud sandbox already ran clean; device-side `npx vitest run`
+(frontend) hit the already-documented rolldown native-binding install quirk
+(unrelated to this code, `tsc -b` stayed clean on the same device run).
+
+---
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
@@ -3019,9 +3115,13 @@ the already-documented rolldown native-binding install quirk (unrelated to this 
 - ~~Mobile app v1 scope~~ — scoped 2026-09-03, not yet built: see
   `docs/planning/MOBILE_APP_SCOPE_v1.md`. Field Technicians only for v1; iOS +
   Android together; offline mode (NFR-03) built into v1 rather than deferred; push
-  notifications deferred to v1.1. Two open questions remain before backend work
-  starts (Workshop Technician in/out, and exactly what "Need Spare"/"Complete"
-  should do server-side) - both are in the doc's own "Open questions" section.
+  notifications deferred to v1.1. ~~Need Spare's offline behavior~~ — decided: queues
+  client-side like every other capture action, pushed to the server on reconnect;
+  ~~Need Spare's server-side approval rule~~ — decided 2026-09-03: routes through
+  Team Leader review first (same pattern as idle/stale reservation review), not an
+  immediate auto-reservation. Still open: confirm Workshop Technician is genuinely
+  out of v1, and Complete/QC-handoff's own server-side shape (and whether it queues
+  offline the same way) - see the doc's "Open questions" section.
 - WhatsApp Business API account approval — paused, not actively pursued right now:
   waiting on the company itself to create a WhatsApp Business account first (your
   instruction, 2026-09-03). Still blocking real Estimate notification delivery

@@ -781,7 +781,7 @@ the first thing Phase 6 builds.
 
 ---
 
-## 11. Full endpoint index (147 endpoints, all documented above)
+## 11. Full endpoint index (158 endpoints, all documented above)
 
 Every route the app exposes, and exactly where in this guide it's covered. Use this to
 confirm nothing was missed — if you ever add a new endpoint and it doesn't show up here,
@@ -912,13 +912,19 @@ that's the signal to update this guide.
 | `POST /workshop/:jobCardId/complete` | 10e |
 | `GET /workshop/:jobCardId` | 10h |
 
-### permissions (4)
+### permissions (10)
 | Endpoint | Section |
 |---|---|
 | `POST /permissions/grant` | 12a |
 | `POST /permissions/revoke` | 12f |
 | `GET /permissions/users/:userId` | 12a |
 | `GET /permissions` (`?type=`) | 12a |
+| `GET /permissions/roles/grantable` | 33b |
+| `GET /permissions/roles/:roleName/capabilities` | 33b |
+| `POST /permissions/role-access/grant` | 33c |
+| `POST /permissions/role-access/revoke` | 33d |
+| `GET /permissions/role-access/users/:userId` | 33d |
+| `GET /permissions/role-access/roles/:roleName` | 33d |
 
 ### delivery (8)
 | Endpoint | Section |
@@ -982,7 +988,7 @@ that's the signal to update this guide.
 | `GET /amc/billing-invoices/:id` | 15e |
 | `POST /amc/billing-invoices/:id/record-payment` | 15e |
 
-### dismantling (7)
+### dismantling (8)
 | Endpoint | Section |
 |---|---|
 | `POST /dismantling` | 16a |
@@ -1015,7 +1021,7 @@ that's the signal to update this guide.
 | `POST /warranty-claims/:id/cancel` | 30e |
 | `POST /warranty-claims/:id/credit-note` | 30f |
 
-**Total: 147 endpoints, all documented above.** (7 auth + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 4 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc + 7 dismantling + 6 reports + 7 warranty-claims.)
+**Total: 158 endpoints, all documented above.** (7 auth + 5 users + 29 master-data + 14 appointments + 5 technician + 10 job-cards + 8 estimates + 6 inventory + 5 workshop + 10 permissions + 8 delivery + 5 invoicing + 5 debit-notes + 1 gl-postings + 3 customer-portal + 16 amc + 8 dismantling + 6 reports + 7 warranty-claims.)
 
 
 ## 12. QC gate + admin-assignable permissions + inventory consumption (Phase 6)
@@ -2717,6 +2723,68 @@ active.
   the restricted message - no roster, no create form, and the network tab shows no
   `/users` request was ever made.
 
+## 33. Backend/Frontend — Extra Role Access (this session, admin capability)
+
+A second, complementary admin capability on top of User Management (Section 32): instead
+of only setting a user's one real role, an admin can now temporarily *layer* another
+role's entire access on top of it - the vacation-cover scenario ("the Team Leader is out,
+let a capable CCE cover TL-level approvals for two weeks") - without ever touching the
+user's actual `role` field, their login, or their identity. Built as a single fallback
+check inside `RolesGuard`, the same guard nearly every controller already uses, so it
+"patches all areas" through one reviewable change rather than dozens of per-controller
+edits - see `docs/planning/STATUS_TRACKER.md`'s Extra Role Access write-up for the full
+mechanism and the-fool findings behind it.
+
+**a. Get there**: sign in as `admin@jackys.com` / `Admin123!` (Section 1a) or any
+`SERVICE_HEAD`. Open **Users** (Section 32a) and scroll past the roster and create-user
+form to the **Extra role access** panel.
+
+**b. See what a role can do, before granting it**: pick a role from **Role to delegate**
+first - the panel immediately shows a live, auto-generated preview of every endpoint that
+role's access covers, grouped by module (`GET /permissions/roles/:roleName/capabilities`),
+under the heading "What \<ROLE\> access includes". **Notice Super Admin, Service Head, and
+Customer never appear in this dropdown at all** (`GET /permissions/roles/grantable`) -
+delegating either admin role would hand out the entire admin surface, including this very
+grant screen, and Customer isn't a staff role to begin with. Any endpoint that also needs
+its own separate sign-off - the QC approve/reject pair from Section 12a - is called out
+in the preview with an amber "also needs QC APPROVAL grant" badge, so an admin doesn't
+assume delegating TL access alone unlocks QC approvals too.
+
+**c. Grant access**: pick the recipient from **User** (only active users other than
+yourself are offered - Section 32's self-lockout precedent applies here too), leave or
+adjust the pre-filled **Access ends** date (**required - there is no permanent grant**,
+capped at 90 days out), optionally add a **Notes** line ("Covering TL leave 09/15-09/29"),
+and click **Grant** (`POST /permissions/role-access/grant`). The recipient's access
+changes on their very next request - no re-login needed, because every request re-checks
+role and grants fresh against the database (their `/auth/profile`, Section 1a, still shows
+their real role unchanged; only what they're *allowed to do* changed).
+
+**d. See and revoke active grants**: the roster's new **Extra access** column shows a pill
+per user for each role they currently hold delegated access to
+(`GET /permissions/role-access/users/:userId`), each with an inline **×** to end it early
+(`POST /permissions/role-access/revoke`) - hover it for "Revoke this delegated access now".
+An expired grant just stops counting on its own; nothing needs to be clicked to let it
+lapse. `GET /permissions/role-access/roles/:roleName` is the same data sliced by role
+instead of by user (used internally, not surfaced as its own screen).
+
+**e. Prove the guardrails work**
+- Try to grant a role to yourself - blocked with a `403`, the same self-grant block as
+  Section 32e's own-account guard, so an admin can never quietly widen their own access
+  through this door either.
+- Confirm Super Admin, Service Head, and Customer are absent from **Role to delegate** no
+  matter who's signed in - this list is server-driven, not just hidden in the UI.
+- Try an **Access ends** date more than 90 days out, or in the past - rejected before the
+  grant is created, not silently clamped.
+- Grant the same role to the same user twice while the first grant is still active -
+  expect a clean `409`, not a silent duplicate.
+- Grant a role, then sign in as the recipient and confirm they can now reach that role's
+  endpoints immediately (no logout/login needed) - then revoke it and confirm access drops
+  on their very next request too.
+- Grant Technical Team Leader to a CCE and confirm they still get blocked on
+  `qcApprove`/`qcReject` (Section 12) until someone separately runs Section 12a's
+  `POST /permissions/grant` for `QC_APPROVAL` - delegated role access and a QC permission
+  grant are deliberately two different things, not one shortcut for the other.
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2743,9 +2811,9 @@ Everything through **Phase 13** (Auth, Master Data, Appointments, Technician Mob
 Job Cards, Estimates + Notifications, Workshop + Inventory, QC gate + Permissions, Delivery
 + POD + OOW invoicing block, Finance extension + Customer Portal, AMC Management,
 Dismantling, Reports/Dashboards (18.1-18.4), Warranty Claims) is real, working code you can
-exercise exactly as above — all 163 endpoints (147 through Phase 12, Phase 13's 11 new ones
-in Section 31, plus Section 32's 5 new `/users` endpoints) are live, plus the
-`/reports` WebSocket channel (Section 17e). Your full
+exercise exactly as above — all 158 endpoints (152 through Phase 13 and Section 32's User
+Management addition, plus this session's 6 new Extra Role Access endpoints in Section 33)
+are live, plus the `/reports` WebSocket channel (Section 17e). Your full
 post-MVP sequencing (AMC → Dismantling → Reports/Dashboards 18.1 → Warranty Claims →
 Reports/Dashboards 18.2/18.3/18.4) is complete. **Phase 12 (Warranty Claims, Section 30) is
 unit-tested and live-verified against your machine — 70/70 checks passed** via
@@ -2761,10 +2829,10 @@ Estimates + the public customer approval link (Section 22), Workshop + Inventory
 Finance + Customer Portal (Section 26), AMC Management (Section 27), Dismantling
 (Section 28), Reports/Dashboards (Section 29), and the small additions since (GL
 Postings within Section 26, the Schedule tab's dashboard-stats widget, the POD
-signature pad, and the new User Management screen, Section 32) - all 12 frontend
-phases are built, plus this session's admin-capability addition, and all are
-test-covered (313/313 automated frontend tests as of Section 32, run isolated ahead of
-each device merge, 43 test files). Sections 18-29 are all live-verified against
+signature pad, and the new User Management and Extra Role Access screens, Sections
+32-33) - all 12 frontend phases are built, plus this session's admin-capability
+additions, and all are test-covered (321/321 automated frontend tests as of Section 33,
+run isolated ahead of each device merge, 43 test files). Sections 18-29 are all live-verified against
 the real backend (Section 26's `verify-phase9.ps1` run: 143/143 checks passed, 0 failed;
 Section 27's `verify-phase10.ps1` run: 66/66 checks passed, 0 failed; Section 28's
 `verify-phase11.ps1` run: 51/51 checks passed, 0 failed; Section 29's `verify-phase12.ps1`

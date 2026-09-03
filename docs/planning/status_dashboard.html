@@ -1161,23 +1161,70 @@
         already built and tested and directly reusable (the web app's
         <span class="mono">FieldVisitsPage.tsx</span> is an explicit prototype of the same
         flow, calling the same endpoints a native client would use). See
-        <span class="mono">docs/planning/MOBILE_APP_SCOPE_v1.md</span> for the full plan,
-        phased build order, and two open questions before backend work starts.
+        <span class="mono">docs/planning/MOBILE_APP_SCOPE_v1.md</span> for the full plan and
+        phased build order. One of its two open questions is now settled — a queued Need
+        Spare request will route through Team Leader review first, the same pattern the
+        existing idle/stale-reservation review already uses, rather than an immediate
+        auto-reservation — leaving one open question (confirming Workshop Technician is
+        genuinely out of v1 scope) before backend work starts.
       </p>
       <span class="resolved-tag" style="background:var(--success);">Scoped this session — not yet built</span>
+    </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Extra Role Access (2026-09-03): admin can delegate a role's access to any user</h3>
+      <p>
+        A second, complementary admin capability on top of User Management: an admin can
+        now temporarily hand a user everything a <i>different</i> role can do, on top of
+        their own real role — the vacation-cover case ("the Team Leader is out, let a
+        capable CCE cover TL-level approvals for two weeks") — without ever changing that
+        user's actual role, login, or identity. Built as one additive fallback check inside
+        <span class="mono">RolesGuard</span>, the single guard nearly every controller
+        already uses, so it reaches every module through one reviewed change rather than a
+        per-controller retrofit. <span class="mono">the-fool</span> pre-mortem ran first
+        (mode: Find failure modes) given this is now the highest-leverage file in the
+        backend; all 5 findings are in the shipped design: <b>Super Admin, Service Head,
+        and Customer can never be delegated</b> (would recursively hand out the entire
+        admin surface, including this grant screen itself); an admin can never grant
+        access to their own account (403, same self-lockout precedent as User Management);
+        every grant is <b>time-boxed with a mandatory expiry, capped at 90 days</b> — there
+        is no standing/permanent grant; the guard <b>fails closed</b> — any lookup error
+        denies access rather than silently allowing it; and the QC approve/reject gate
+        (Section 12a) stays a <b>separate</b> sign-off — the live capability preview flags
+        those two endpoints explicitly so an admin never assumes delegating TL access alone
+        unlocks QC approval too.
+      </p>
+      <p>
+        The admin-facing preview itself is auto-generated, not hand-maintained: it walks
+        every registered controller's real route metadata at request time (NestJS's own
+        <span class="mono">DiscoveryService</span> / <span class="mono">MetadataScanner</span>)
+        so "what will this user be able to do" is always the actual live routes, never a
+        list that can drift out of date.
+      </p>
+      <p>
+        <span class="mono">test-master</span> coverage: 4 new backend spec files (including
+        a real-DI-graph module-wiring smoke test, on top of the usual mocked-repo unit
+        tests) plus updates to existing frontend tests, <b>597/597 + 321/321 passing
+        app-wide</b>, <span class="mono">tsc -b</span> clean on both sides. Also verified
+        live on your machine. Committed as <span class="mono">451ca7c</span>.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
     </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Mobile app is scoped, not built. Two other calls made too — plus your own push</h3>
-        <h2>User Management shipped. Mobile app v1: scoped (Field Techs, offline-in). Customer portal: polish what exists.</h2>
-        <p>Nothing is blocking. The <b>mobile app</b> (React Native) now has a v1 scope —
-        Field Technicians only, iOS + Android together, offline mode built in from the
-        start — see the card above and <span class="mono">MOBILE_APP_SCOPE_v1.md</span> for
-        the two open questions before backend work on it starts. The <b>customer portal</b>
-        will get a branding/visual polish pass on the existing no-login
+        <h3>Extra Role Access shipped. Mobile app still scoped, not built — plus your own push</h3>
+        <h2>Admin can now delegate role access per user. Mobile app v1: scoped (Field Techs, offline-in). Customer portal: polish what exists.</h2>
+        <p>Nothing is blocking. <b>Extra Role Access</b> is live — an admin can grant any
+        user another role's access, time-boxed and previewed before confirming, on top of
+        User Management's account creation and role changes (see the card above). The
+        <b>mobile app</b> (React Native) still has just a v1 scope, not code — Field
+        Technicians only, iOS + Android together, offline mode built in from the start, and
+        Need Spare's server-side review flow now decided too — see
+        <span class="mono">MOBILE_APP_SCOPE_v1.md</span> for the one open question left
+        before backend work on it starts. The <b>customer portal</b> will get a
+        branding/visual polish pass on the existing no-login
         <span class="mono">/track/:token</span> page rather than a full customer-login
         system — not started yet. <b>WhatsApp Business API</b> stays paused until the
         company creates its own WhatsApp Business account — not a technical blocker here.
@@ -1191,7 +1238,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 121a671 — awaiting push from your machine</span>
+    <span>master + main synced locally at 451ca7c — awaiting push from your machine</span>
   </footer>
 
 </div>
