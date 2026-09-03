@@ -360,7 +360,9 @@ Status moves from `SCHEDULED` to `TECHNICIAN_ASSIGNED`.
 ### 5c. Look around
 - **`GET /appointments/{id}`** — the full record.
 - **`GET /appointments?serviceCentreId=&technicianId=&status=&type=&dateFrom=&dateTo=&page=1&limit=20`** — the full list, every filter optional; leave them all off to see everything.
-- **`GET /appointments/dashboard/stats`** — today's/this-week's counts by status.
+- **`GET /appointments/dashboard/stats`** — today's/last-7-days' counts by status
+  (also shown as a widget at the top of the Schedule tab - Section 3's frontend
+  walkthrough - for `SUPER_ADMIN`/`SERVICE_HEAD`/`TECHNICAL_TEAM_LEADER`/`CCE`).
 - **`GET /appointments/service-centre/{serviceCentreId}/schedule?date=2026-08-27`** — one centre's day. `date` is required.
 - **`GET /appointments/technician/{technicianId}/schedule?date=2026-08-27`** — one technician's day. `date` is required here too.
 - **`GET /appointments/number/{appointmentNumber}`** — look one up by its human-readable number (e.g. `APT-0001`) instead of its id.
@@ -2122,9 +2124,10 @@ link from Ready above), and the actions available for its current status:
    - **PENDING**: **Dispatch** (driver id is optional - same "paste an id, no picker"
      convention as everywhere else in this app) or **Cancel** (requires a reason -
      releases every member job card straight back into the Ready pool).
-   - **DISPATCHED**: **Capture Proof of Delivery** - a recipient name plus a signature
-     OR a photo (file upload only; there's no signature-pad widget yet, see Section
-     25f). Submitting flips the delivery AND every member job card to `DELIVERED`. If
+   - **DISPATCHED**: **Capture Proof of Delivery** - a recipient name plus a drawn
+     signature (a real canvas signature pad, added as a small polish item post-MVP -
+     see Section 25f) OR a photo (still plain file upload). Submitting flips the
+     delivery AND every member job card to `DELIVERED`. If
      payment somehow lapsed on an OOW member since the delivery was created, this is
      blocked with the same structured red panel as batch-creation (the backend
      re-checks defensively right before the irreversible hand-back).
@@ -2138,10 +2141,16 @@ already been dispatched, and confirm you get a clear rejection rather than a sil
 no-op. Try submitting the POD form with only a recipient name (no file) and confirm
 **Mark Delivered** stays disabled until you attach one.
 
-**f. Known limitation**: POD capture is plain file upload (read into a base64 data URI
-client-side) - there's no camera-capture or signature-pad component in this app yet.
-Works fine from a desktop browser with a saved image; a real driver-facing mobile app
-would want a proper signature pad.
+**f. Signature pad**: a real canvas you draw on with mouse, touch, or pen (Pointer
+Events, no external library) - drag to sign, **Clear** to redo. An accidental tap
+doesn't count as a signature (there's a minimum drawn-distance check before it's
+treated as signed - try a single click/tap and confirm **Mark Delivered** stays
+disabled). Exports the exact same base64 PNG data URI string the backend has always
+stored - nothing downstream changed. The photo field is still plain file upload
+(camera-capture wasn't part of this round); works fine from a desktop browser with a
+saved image either way, but the signature pad in particular is built for a real
+driver's phone/tablet (canvas sized for the screen's actual pixel density, and the
+page can't be scrolled out from under your finger mid-signature).
 
 **g. What to report back**: same as Phases 1–7 — anything confusing, broken, or where a
 missing action looks like a bug rather than a status the backend genuinely hasn't reached
@@ -2179,12 +2188,23 @@ days past due), always all 4 shown even when a bucket is empty, each listing its
 B2B invoices with the total outstanding per bucket and overall. Click any invoice in a
 bucket to jump straight to its full detail on the Invoices tab.
 
-**d. Customer tracking link**: open any Job Card (Section 21) - if it has a
+**d. GL Postings tab** (added as a small polish item, post-MVP): a read-only view of
+the internal journal log - every system-generated posting (invoice payments, POSTED
+debit notes, priced-and-posted dismantling records, warranty claim credit notes),
+newest first, filterable by source type. A posting count + total amount box sits above
+the list; below it, "Showing X-Y of Z (all fetched at once...)" makes clear the list is
+paginated client-side 25 rows at a time over everything the filter matched - not that
+there are only as many postings as fit on one page (`GET /gl-postings` itself has no
+pagination at all). No manual-entry UI exists here, deliberately - see
+`GlLedgerController`'s own doc comment for why this is a system-generated-only stopgap,
+not a real GL/ERP integration.
+
+**e. Customer tracking link**: open any Job Card (Section 21) - if it has a
 `publicToken` (all job cards do, minted at creation), you'll see a new **Customer
 tracking link** box with a copy-to-clipboard field, same UI as the existing Estimate
 public-link box. That's the link a customer would actually receive.
 
-**e. The public page itself**: paste the copied link into a browser - no sign-in, works
+**f. The public page itself**: paste the copied link into a browser - no sign-in, works
 in an incognito window. Three sections in one page, since all three share one token:
    - **Status** (loads immediately): a friendly, plain-English status line (e.g. "Being
      repaired" rather than `IN_PROGRESS`) and the job card number.
@@ -2201,18 +2221,17 @@ in an incognito window. Three sections in one page, since all three share one to
    find that tracking link" message, and it looks identical whether the token is simply
    wrong or a real-but-expired one (tokens don't reveal which, on purpose).
 
-**f. Things worth trying**: view the "What You Owe" tab on a fresh out-of-warranty job
+**g. Things worth trying**: view the "What You Owe" tab on a fresh out-of-warranty job
 *before* any invoice has been created for it, and confirm it says "no invoice yet"
 rather than erroring - just viewing the portal never creates an invoice as a side
 effect. Record a second partial payment on an already-`PARTIALLY_PAID` invoice through
 the Finance Invoices tab (or the Delivery tabs) and confirm the payment form now
 defaults to the *remaining* balance, not the full original amount (a real bug from
 Phase 8 fixed this phase - it used to always default to the full amount, which the
-server would reject once anything had already been paid).
-
-**g. Known limitation**: Finance has no UI yet for `GET /gl-postings` - the underlying
-ledger endpoint is fully built and role-gated, but wasn't in this phase's scope; it's on
-the deferred-follow-ups list in `docs/planning/STATUS_TRACKER.md`.
+server would reject once anything had already been paid). On the GL Postings tab,
+filter by source type and confirm the count/total box updates to match; with more than
+25 postings, page through with Next/Prev and confirm the count stays the full filtered
+total, not just the page.
 
 **h. What to report back**: same as Phases 1-8 - anything confusing, broken, or where a
 missing action looks like a bug rather than a status the backend genuinely hasn't reached

@@ -1,20 +1,15 @@
 # Jacky's Service Portal — Status Tracker
 
-**Last updated:** 2026-09-01 (Backend Phase 13 — Finance/Quality/Operational Dashboards — built, unit-tested (553/553), live-verified end-to-end against the real running server, 110/110 checks passed on the first run)
+**Last updated:** 2026-09-03 (Frontend polish: GL Postings UI, Appointment
+dashboard-stats widget, POD signature-pad — all three shipped, 36 new tests,
+302/302 passing app-wide, `tsc -b`/`vite build` clean)
 **Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
-**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `c7c3d2c`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `c7c3d2c`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
-**Next session:** all 13 backend phases + all 12 frontend phases are built and
-live-verified — nothing is blocking. You chose the small polish items over the
-mobile app / offline-mode decision, then asked to pick this back up tomorrow rather
-than start tonight. Pick one to start with when you resume: **GL Postings UI**
-(`GET /gl-postings?sourceType=...` already built + role-gated, just needs a small
-read-only Finance screen), **Appointment dashboard-stats widget** (`GET
-/appointments/.../dashboard-stats` already typed on the frontend, no screen or
-widget spec exists yet), or **POD signature-pad** (replace POD's plain file upload
-with a real signature-pad/camera-capture component). See "Known issues to fix
-later" below for the full description of each. The mobile app / offline-mode
-decision (Flutter vs React Native) stays open and deferred, not chosen against.
+**Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `5f02768`)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `5f02768`, awaiting `git push` from your machine (check `git log origin/main..main` for the exact count - this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**Next session:** the three small polish items are done (see the write-up below).
+Nothing is blocking. What's left: your own `git push`, and the mobile app /
+offline-mode decision (Flutter vs React Native), which was deliberately left open
+rather than picked - see "Open items / blockers" below.
 
 This tracks where the build actually stands, phase by phase, against the 8-week plan in `docs/planning/IMPLEMENTATION_PLAN_v1.md`. Source docs: `docs/brd/`, `docs/discovery/DISCOVERY_v1.md`.
 
@@ -2860,27 +2855,83 @@ want them at some point.
 Known, explicitly-deferred follow-ups, unrelated to the frontend build, if you want them
 at some point instead:
 
-- BRD 18.2 Finance Dashboard, 18.3 Quality/Product Dashboard, 18.4 Operational Reports
-  (see backend Phase 11) — read-only reports over data that already exists, low risk.
+- BRD 18.2 Finance Dashboard, 18.3 Quality/Product Dashboard, 18.4 Operational Reports —
+  backend built and live-verified in backend Phase 13 (110/110 checks passed). The GL
+  Postings piece of Finance got its own frontend screen this session (see the write-up
+  below); the other report screens (product failure ratio, repeat complaints, RWR
+  analysis, technician productivity, SLA breach, spare-parts consumption) still have no
+  frontend built - would need their own future frontend phase.
 - Warranty Claims — the backend module is now built and live-verified (see backend
   Phase 12 above); no frontend screen exists for it yet, would need its own future
   frontend phase.
 - The genuine push-on-mutation WebSocket architecture (vs. the current poll-and-diff
   simplification) if true sub-second update detection ever becomes a real requirement.
-- The Appointment dashboard-stats endpoint (`GET /appointments/.../dashboard-stats` —
-  today's counts by status, this week's totals) — typed on the frontend already, no
-  screen built yet; no widget spec exists for it.
-- POD capture has no signature-pad or camera-capture component — plain file upload only
-  (Frontend Phase 8's the-fool pre-mortem finding #4). Works, but a real signature pad
-  would be a better driver-side experience if this becomes a mobile app.
-- GL Postings (`GET /gl-postings?sourceType=...`) — a fully-built, already role-gated,
-  read-only ledger endpoint discovered during Phase 9's research. No UI built for it yet;
-  would make a reasonable small addition to a future Finance screen.
-- The device-side `npm install` for `frontend/` hit very slow rename syscalls on the
-  mounted drive this session (unrelated to any Phase 10 code) — if `npm test`/`tsc -b`
-  fail locally with "Cannot find module 'vitest'" or similar, run `npm install` in
-  `frontend/` once from a normal terminal (not through the cloud session's device bridge)
-  and it should resolve at native disk speed.
+- The device-side `npm install`/test runner for `frontend/` has hit native-binding
+  problems on the mounted drive more than once now - first "Cannot find module
+  'vitest'", and separately (this session) `npx vitest run` failing with "Cannot find
+  native binding" for rolldown's optional `wasm32-wasi` package even though `npx tsc -b`
+  ran clean immediately before it. `tsc -b` staying clean throughout both times is why
+  this is filed as an environment/install quirk, not a code problem - if `npm test` fails
+  locally, run `npm install` in `frontend/` once from a normal terminal (not through the
+  cloud session's device bridge) and it should resolve at native disk speed.
+
+## Frontend polish items (this session): GL Postings UI, dashboard-stats widget, POD signature-pad
+
+Three small items pulled from the "known, explicitly-deferred follow-ups" list above -
+not a numbered phase, just close-out polish on things that were already fully built
+server-side. `the-fool` pre-mortem (mode: Find failure modes) ran before writing code,
+proportionate to the low stakes here (no financial calculation logic, unlike Phase 13) -
+found three real risks and all three fixes are in the shipped code:
+
+1. **GL Postings UI** (new "GL Postings" tab under Finance, `GET
+   /gl-postings?sourceType=...`, `frontend/src/pages/finance/GlPostingsPage.tsx`) - the
+   backend has no pagination at all (`GlLedgerService.findAll()` is a plain
+   `repository.find()`), so an ever-growing ledger could eventually freeze the tab
+   rendering thousands of rows in one `DataTable`. Fixed with client-side pagination (25
+   rows/page) over the `sourceType` filter, with an explicit "Showing X-Y of Z (all
+   fetched at once - this page just controls what renders)" note so nobody mistakes
+   "page 1 of N" for "there are only N postings".
+2. **Appointment dashboard-stats widget**
+   (`frontend/src/pages/appointments/DashboardStatsWidget.tsx`, mounted at the top of
+   `SchedulePage`, `GET /appointments/dashboard/stats` - already typed on the frontend
+   since an earlier phase, never wired to a screen until now) - the backend's "week"
+   field is actually a rolling 7-day window ending today
+   (`AppointmentsService.getDashboardStats()`'s own `Between(weekStart, tomorrow)` call),
+   not a calendar week. Labelled "Last 7 days" here, deliberately not "This week", so it
+   can't be misread against a manual count of the table below it. Polls every 60s
+   (overriding this app's usual no-polling `QueryClient` default, deliberately, just for
+   this one dashboard-feeling tile) so a long-open tab can't show a stale "Today" count
+   well into the next day. Gated client-side to the same `SUPER_ADMIN`/`SERVICE_HEAD`/
+   `TECHNICAL_TEAM_LEADER`/`CCE` roles as the backend endpoint, same discipline as every
+   other role-gated query in this app.
+3. **POD signature-pad** (`frontend/src/components/SignaturePad.tsx`, replacing
+   `DeliveriesPage.tsx`'s plain `<input type="file">` signature field) - a canvas has no
+   built-in "was anything drawn" signal the way a file input's null-vs-file check gives
+   for free. Added a minimum-drawn-distance dirty check (12px of total stroke length)
+   before treating the canvas as signed, so an accidental tap can't produce a technically
+   non-empty but visually blank `toDataURL()` output that still passes the existing
+   `!signatureBase64 && !photoBase64` submit guard. Canvas drawing-buffer sized by
+   `devicePixelRatio` (not left at the low-DPI default) and `touchAction: 'none'` on the
+   drawing surface (so the page can't scroll out from under a finger mid-signature) -
+   real usage is a driver's phone/tablet, not this dev machine. Exports the exact same
+   base64 PNG data URI string the backend has always stored as-is (capped ~2.8M chars,
+   format-agnostic) - zero backend or type changes; the photo field stays a plain file
+   upload (camera-capture wasn't part of this round).
+
+**Automated tests:** 4 new test files (`SignaturePad.test.tsx`, `GlPostingsPage.test.tsx`,
+`DashboardStatsWidget.test.tsx`, `appointmentsTypes.test.ts`) plus a new
+`makeAppointmentDashboardStats`/`makeGlPosting` fixture pair - 36 new tests, **302/302
+passing app-wide**, `tsc -b` and `vite build` both clean. `SchedulePage.test.tsx` was
+updated (new `useAuth`/`getAppointmentDashboardStats` mocks) so its existing 2 tests keep
+passing now that the page renders the gated widget; its own test count didn't change.
+
+Committed as `5f02768` ("Frontend polish: GL Postings UI, Appointment dashboard-stats
+widget, POD signature-pad"). Not live-verified against the real running server with a
+`verify-*.ps1` script - all three are either a read-only list, a read-only stat display,
+or an identical-data-contract capture-input swap, not new backend behavior; `tsc -b`
+succeeded against the real repo on your machine, though `npx vitest run` there hit the
+native-binding install quirk noted below (unrelated to this code - the same 17 files
+already passed 302/302 in an isolated sandbox before being pushed).
 
 ---
 

@@ -382,8 +382,8 @@
     <div class="stat-row">
       <div class="stat"><span class="n mono">13</span><span class="l">Backend phases done (all live-verified)</span></div>
       <div class="stat"><span class="n mono">12 / 12</span><span class="l">Frontend phases built (all queued phases)</span></div>
-      <div class="stat"><span class="n mono">553 + 266</span><span class="l">Backend + frontend tests passing</span></div>
-      <div class="stat"><span class="n mono">c7c3d2c</span><span class="l">Latest commit</span></div>
+      <div class="stat"><span class="n mono">553 + 302</span><span class="l">Backend + frontend tests passing</span></div>
+      <div class="stat"><span class="n mono">5f02768</span><span class="l">Latest commit</span></div>
     </div>
   </header>
 
@@ -567,7 +567,7 @@
         <li>
           <span class="tag">04</span>
           <div><b>POD capture (signature/photo, AC-12) has no camera or signature-pad component anywhere in this app.</b>
-          <p>Shipped as plain file uploads read client-side into a base64 data URI — works, flagged as a known UX gap for later rather than pulling in a new dependency for one field.</p></div>
+          <p>Shipped as plain file uploads read client-side into a base64 data URI — works, flagged as a known UX gap for later rather than pulling in a new dependency for one field. <i>Resolved 2026-09-03: the signature field now uses a real canvas signature pad — see &quot;Worth knowing&quot; below.</i></p></div>
         </li>
       </ul>
 
@@ -1087,14 +1087,42 @@
       </p>
       <span class="resolved-tag" style="background:var(--success);">Live-verified this phase</span>
     </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Frontend polish (2026-09-03): GL Postings UI, dashboard-stats widget, POD signature-pad — all three shipped</h3>
+      <p>
+        Three small items pulled off the "known, explicitly-deferred follow-ups" list — not
+        a numbered phase, just close-out polish on things already fully built server-side.
+        <span class="mono">the-fool</span> pre-mortem ran first (mode: Find failure modes),
+        proportionate to the low stakes (no financial calculation logic, unlike Phase 13):
+        the <b>GL Postings</b> tab (Finance) got client-side pagination (25 rows/page) over
+        an unpaginated backend list, with an explicit "all fetched at once" note so page 1
+        of N is never mistaken for "there are only N postings"; the <b>Appointment
+        dashboard-stats widget</b> (top of the Schedule tab) labels its 7-day figure
+        "Last 7 days", never "This week", since the backend actually computes a rolling
+        window ending today — plus a 60s refetch so a long-open tab can't go stale; the
+        <b>POD signature-pad</b> replaces the plain file upload with a real
+        <span class="mono">&lt;canvas&gt;</span> (Pointer Events, no library), gated by a
+        minimum-drawn-distance dirty check so an accidental tap can't produce a blank but
+        technically non-empty signature.
+      </p>
+      <p>
+        <span class="mono">test-master</span> coverage: 4 new test files, 36 new tests,
+        <b>302/302 passing app-wide</b>, <span class="mono">tsc -b</span> and
+        <span class="mono">vite build</span> both clean. No <span class="mono">verify-*.ps1</span>
+        script — all three are either a read-only list, a read-only stat display, or an
+        identical-data-contract capture-input swap, not new backend behaviour. Committed as
+        <span class="mono">5f02768</span>.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+    </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Picking back up tomorrow — small polish items chosen over mobile app</h3>
-        <h2>All 13 backend phases and all 12 frontend phases are built and live-verified</h2>
-        <p>You picked the small polish items over the mobile app / offline-mode decision, then asked to resume tomorrow rather than start tonight. Pick one to start with: GL Postings UI (endpoint already built + role-gated, just needs a screen), the Appointment dashboard-stats widget (endpoint already typed on the frontend, no screen or spec yet), or POD signature-pad (replace POD's plain file upload with a real signature/camera component). The mobile app / offline-mode decision stays open, deferred not declined. Also still open: your own <span class="mono">git push</span> (10 commits ahead of <span class="mono">origin/main</span> as last checked this session — run <span class="mono">git log origin/main..main</span> yourself for the current count), and the Reports/Dashboards WebSocket manual spot-check still outstanding from Frontend Phase 12.</p>
+        <h3>What's left — your own push, and the mobile app decision</h3>
+        <h2>All 13 backend phases, all 12 frontend phases, and this session's 3 polish items are built and live-verified</h2>
+        <p>Nothing is blocking. What's left: your own <span class="mono">git push</span> (<span class="mono">main</span>/<span class="mono">master</span> are 1 commit ahead of <span class="mono">origin/main</span> as last checked this session — run <span class="mono">git log origin/main..main</span> yourself for the current count), and the mobile app / offline-mode decision (Flutter vs React Native), which stays open and deferred, not chosen against. The Reports/Dashboards WebSocket manual spot-check from Frontend Phase 12 is also still outstanding.</p>
       </div>
       <div class="go">Next →</div>
     </div>
@@ -1102,7 +1130,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at c7c3d2c — awaiting push from your machine</span>
+    <span>master + main synced locally at 5f02768 — awaiting push from your machine</span>
   </footer>
 
 </div>
