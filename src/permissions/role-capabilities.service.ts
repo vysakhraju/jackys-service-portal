@@ -69,10 +69,22 @@ export class RoleCapabilitiesService {
       const tags: string[] = Reflect.getMetadata(SWAGGER_DECORATORS.API_TAGS, metatype) || [];
       const moduleName = tags[0] || metatype.name.replace(/Controller$/, '');
 
+      // Class-level @Roles() (e.g. ReportsController, FinanceReportsController,
+      // QualityReportsController, OperationalReportsController, UsersController - all
+      // apply @Roles() once above the class rather than repeating it on every method) is
+      // read as a fallback, mirroring RolesGuard's own
+      // reflector.getAllAndOverride(ROLES_KEY, [handler, class]) semantics (method-level
+      // overrides class-level; class-level applies when the method has none). Reading
+      // ONLY the method here would silently omit every endpoint in those controllers from
+      // every role's preview - found 2026-09-03 during an independent test-master pass:
+      // it happened to hit the flagship "delegate TECHNICAL_TEAM_LEADER to a CCE" scenario
+      // directly, since ReportsController's whole Kanban board is class-level @Roles().
+      const classRoles: string[] | undefined = Reflect.getMetadata(ROLES_KEY, metatype);
+
       const methodNames = this.metadataScanner.getAllMethodNames(prototype);
       for (const methodName of methodNames) {
         const handler = prototype[methodName];
-        const requiredRoles: string[] | undefined = Reflect.getMetadata(ROLES_KEY, handler);
+        const requiredRoles: string[] | undefined = Reflect.getMetadata(ROLES_KEY, handler) ?? classRoles;
         if (!requiredRoles || !requiredRoles.includes(roleName)) {
           continue;
         }

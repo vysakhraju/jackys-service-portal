@@ -8,6 +8,7 @@ import {
   UseGuards,
   UseInterceptors,
   ParseUUIDPipe,
+  ParseEnumPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { PermissionsService } from './permissions.service';
@@ -118,7 +119,8 @@ export class PermissionsController {
   @ApiParam({ name: 'roleName', enum: RoleName })
   @ApiOperation({ summary: 'Live preview of every endpoint a role can currently reach, grouped by module - built from the real @Roles()/route metadata, not a hand-maintained list. Shown before an admin confirms a role-access grant.' })
   @ApiResponse({ status: 200, description: 'Capabilities grouped by module' })
-  async getRoleCapabilities(@Param('roleName') roleName: RoleName) {
+  @ApiResponse({ status: 400, description: 'roleName is not a real role' })
+  async getRoleCapabilities(@Param('roleName', new ParseEnumPipe(RoleName)) roleName: RoleName) {
     return this.roleCapabilitiesService.getCapabilitiesForRole(roleName);
   }
 
@@ -168,7 +170,8 @@ export class PermissionsController {
   @ApiParam({ name: 'roleName', enum: RoleName })
   @ApiOperation({ summary: 'List everyone currently holding delegated access to a given role' })
   @ApiResponse({ status: 200, description: 'Active role-access grants for this role' })
-  async listRoleAccessByRole(@Param('roleName') roleName: RoleName) {
+  @ApiResponse({ status: 400, description: 'roleName is not a real role' })
+  async listRoleAccessByRole(@Param('roleName', new ParseEnumPipe(RoleName)) roleName: RoleName) {
     return this.roleAccessService.listByRole(roleName);
   }
 }

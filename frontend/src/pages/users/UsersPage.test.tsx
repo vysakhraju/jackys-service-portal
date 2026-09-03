@@ -349,4 +349,66 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
     expect(screen.queryByText(/TECHNICAL TEAM LEADER · until/)).not.toBeInTheDocument();
     expect(await screen.findByText('—')).toBeInTheDocument();
   });
+
+  // Gaps found 2026-09-03 during an independent test-master pass: the 8 tests above cover
+  // the-fool's guardrail findings and the happy path, but none of them exercised the
+  // grant button's disabled state, the error path, or the capability-preview zero-state
+  // message - all three are real, user-visible behavior on this form.
+
+  it('disables the Grant button until a user, role, and expiry are all chosen, and via a granted mutation in flight', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', status: 'ACTIVE' })]);
+    vi.mocked(getRoleCapabilities).mockResolvedValue([]);
+    vi.mocked(grantRoleAccess).mockImplementation(() => new Promise(() => {})); // never resolves - simulates in-flight
+    const user = userEvent.setup();
+    renderPage();
+
+    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const grantButton = within(section).getByRole('button', { name: 'Grant' });
+    // Expiry defaults to a valid date, so with no user/role picked the button starts disabled.
+    expect(grantButton).toBeDisabled();
+
+    await within(section).findByRole('option', { name: /Priya Nair/ });
+    await user.selectOptions(within(section).getByLabelText('User'), 'user-2');
+    expect(grantButton).toBeDisabled(); // role still unset
+
+    await user.selectOptions(within(section).getByLabelText(/^Role to delegate/), 'TECHNICAL_TEAM_LEADER');
+    expect(grantButton).not.toBeDisabled();
+
+    await user.click(grantButton);
+    await waitFor(() => expect(grantButton).toBeDisabled()); // mutation now pending
+  });
+
+  it('surfaces the server error message when a grant submission fails (e.g. a duplicate active grant)', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', status: 'ACTIVE' })]);
+    vi.mocked(getRoleCapabilities).mockResolvedValue([]);
+    vi.mocked(grantRoleAccess).mockRejectedValue({
+      response: { data: { message: 'User already holds active delegated access to this role' } },
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    await within(section).findByRole('option', { name: /Priya Nair/ });
+    await user.selectOptions(within(section).getByLabelText('User'), 'user-2');
+    await user.selectOptions(within(section).getByLabelText(/^Role to delegate/), 'TECHNICAL_TEAM_LEADER');
+    await user.click(within(section).getByRole('button', { name: 'Grant' }));
+
+    expect(await within(section).findByText('User already holds active delegated access to this role')).toBeInTheDocument();
+  });
+
+  it('shows a zero-state message in the capability preview when the selected role has no distinct gated endpoints', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([makeUser({ id: 'user-2', status: 'ACTIVE' })]);
+    vi.mocked(getRoleCapabilities).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderPage();
+
+    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    await within(section).findByRole('option', { name: 'Technical Team Leader' });
+    await user.selectOptions(within(section).getByLabelText(/^Role to delegate/), 'TECHNICAL_TEAM_LEADER');
+
+    expect(await screen.findByText('This role has no distinct gated capabilities in the app today.')).toBeInTheDocument();
+  });
 });

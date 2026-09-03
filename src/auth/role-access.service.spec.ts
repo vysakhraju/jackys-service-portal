@@ -104,6 +104,36 @@ describe('RoleAccessService', () => {
       grantsRepo.findOne.mockResolvedValue(grant());
       await expect(service.grant('user-1', RoleName.TECHNICAL_TEAM_LEADER, inDays(14), 'admin-1')).rejects.toThrow(ConflictException);
     });
+
+    // KNOWN GAP, documented rather than silently left implicit (found 2026-09-03 during
+    // an independent test-master pass): the duplicate-active-grant check above is
+    // read-then-write with no DB-level uniqueness constraint or transaction/lock backing
+    // it (RoleAccessGrant's own @Index(['userId', 'grantedRoleName']) is a plain,
+    // non-unique index - see that entity's file). Two concurrent grant() calls for the
+    // same user+role can both pass the findOne check before either save()s, producing two
+    // simultaneous active grants instead of the intended ConflictException for the second
+    // one. Low real-world likelihood (this is an admin clicking a button, not a
+    // high-concurrency path) but a real gap: revoking ONE of the two duplicates would
+    // silently leave the other active, so "I revoked their access" would not actually be
+    // true. Not fixed in this pass - a correct fix needs to reconcile the DB-level
+    // constraint with the time-based "active" definition (expiresAt > NOW()), which a
+    // plain partial unique index can't express safely without risking blocking a
+    // legitimate re-grant after a prior grant's natural expiry. Recommended follow-up:
+    // wrap the check+insert in a SERIALIZABLE transaction (or a per-(userId,
+    // grantedRoleName) advisory lock) rather than a schema change.
+    it('demonstrates the race: two "simultaneous" grants for the same user+role both succeed when both read before either writes', async () => {
+      usersRepo.findOne.mockResolvedValue({ id: 'user-1' });
+      grantsRepo.findOne.mockResolvedValue(null); // both concurrent calls see "no existing grant"
+
+      const [first, second] = await Promise.all([
+        service.grant('user-1', RoleName.TECHNICAL_TEAM_LEADER, inDays(14), 'admin-1'),
+        service.grant('user-1', RoleName.TECHNICAL_TEAM_LEADER, inDays(14), 'admin-2'),
+      ]);
+
+      expect(first.userId).toBe('user-1');
+      expect(second.userId).toBe('user-1');
+      expect(grantsRepo.save).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('revoke', () => {
