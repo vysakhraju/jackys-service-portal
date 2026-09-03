@@ -3105,6 +3105,54 @@ which the isolated cloud sandbox already ran clean; device-side `npx vitest run`
 (frontend) hit the already-documented rolldown native-binding install quirk
 (unrelated to this code, `tsc -b` stayed clean on the same device run).
 
+### Post-ship fix (2026-09-03): GL Ledger module crashed the whole app at boot
+
+The gap the "not live-verified against the real running server" note above turned out
+to matter: the first time you actually restarted `npm run start:dev` on your machine
+after this feature shipped, the backend failed to boot at all (`UnknownDependenciesException`
+on `RolesGuard`, naming `GlLedgerModule`) - which is why both Swagger and the frontend
+login showed "could not reach the server, is it running on localhost:3000" even though
+the frontend itself was fine.
+
+**Root cause:** before this feature, `RolesGuard` only depended on `Reflector` (a
+built-in, globally-available Nest provider), so any controller could
+`@UseGuards(RolesGuard)` without its module needing to import anything - it "just
+worked". Extra Role Access gave `RolesGuard` a second constructor dependency,
+`RoleAccessService`, which lives in `AuthModule` - so every module using `RolesGuard`
+now needs to import `AuthModule` (Nest imports are not transitive: importing a module
+that itself imports `AuthModule` does not hand you `AuthModule`'s exports). 18 of the
+19 modules using `RolesGuard` already imported `AuthModule` for other reasons (mostly
+`JwtAuthGuard`) and kept working; `GlLedgerModule` was the one exception - it only
+needed `TypeOrmModule.forFeature([GlPosting])` before, so it had no reason to import
+`AuthModule`, and nothing caught the gap before it reached your machine.
+
+**Why the tests didn't catch it:** the module-wiring smoke test added alongside this
+feature (`permissions.module.wiring.spec.ts`) boots `PermissionsModule` for real through
+Nest's `TestingModule` specifically to catch this class of mistake - but it only proves
+*that one module's* wiring, not every module that also uses `RolesGuard`. It was a real
+safety net, just not a wide enough one.
+
+**Fix:** `src/gl-ledger/gl-ledger.module.ts` now imports `AuthModule`, matching every
+other module's existing pattern - no other module was missing it (confirmed by checking
+all 19 controllers that use `RolesGuard`). Also added
+`src/common/roles-guard-wiring.spec.ts`, a static (no DB, no NestJS `TestingModule`
+mocking - just reads the source files) regression test: for every controller that
+actually applies `RolesGuard` via `@UseGuards(...)` (comment mentions like
+`customer-portal.controller.ts`'s don't count), its sibling `*.module.ts` must import
+`AuthModule`. This is the general form of the check the incident exposed a gap in -
+it would have caught `GlLedgerModule` on its own, and will catch any future module that
+adds `@UseGuards(RolesGuard)` without importing `AuthModule`, without needing a
+dedicated per-module wiring test for each one.
+
+**Verified:** `tsc -b` clean; `npx jest src/common/roles-guard-wiring.spec.ts` - 22/22
+passing (one per controller using `RolesGuard`); `npx jest src/gl-ledger
+src/permissions/permissions.module.wiring.spec.ts src/auth/auth.module` - 8/8 passing,
+confirming no circular-import regression from the new `AuthModule` import. Not yet
+confirmed against a live `npm run start:dev` boot from this session (the device bridge
+used for git/file operations here is a separate sandbox that can't hold open a long-running
+dev server or port 3000) - **restart `npm run start:dev` on your machine to confirm the
+server now boots and login works.**
+
 ---
 
 ## Open items / blockers (from planning docs, still unresolved)
