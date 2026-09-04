@@ -14,3 +14,10 @@ jest.mock('expo-secure-store', () => {
     }),
   };
 });
+
+// Phase 4's offline queue persists to AsyncStorage - use the package's own official
+// in-memory Jest mock rather than hand-rolling one, so its behavior (including edge
+// cases like getAllKeys/multiGet) stays correct as the package updates.
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);

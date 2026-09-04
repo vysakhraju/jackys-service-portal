@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import AppointmentDetailScreen from '../../app/appointment/[id]';
+import { useOfflineQueue } from '../../context/OfflineQueueContext';
 import { listFaultSymptoms } from '../../lib/masterDataApi';
 import { captureFaultSymptom, captureSerialNumber, getVisit, startVisit } from '../../lib/technicianApi';
 import type { FaultSymptom, ScheduledAppointment } from '../../lib/types';
@@ -21,6 +22,12 @@ jest.mock('../../lib/technicianApi', () => ({
 }));
 jest.mock('../../lib/masterDataApi', () => ({ listFaultSymptoms: jest.fn() }));
 
+// Phase 4: this screen reads useOfflineQueue() directly (to branch Start Visit/S-N/
+// Fault-Symptom between "send now" and "enqueue"), so - unlike index.test.tsx, which
+// only renders the OfflineBanner - this file needs a controllable mock rather than a
+// fixed stub.
+jest.mock('../../context/OfflineQueueContext', () => ({ useOfflineQueue: jest.fn() }));
+
 const mockRequestForegroundPermissionsAsync = jest.fn();
 const mockGetCurrentPositionAsync = jest.fn();
 jest.mock('expo-location', () => ({
@@ -34,6 +41,8 @@ const mockedStartVisit = startVisit as jest.Mock;
 const mockedCaptureSerialNumber = captureSerialNumber as jest.Mock;
 const mockedCaptureFaultSymptom = captureFaultSymptom as jest.Mock;
 const mockedListFaultSymptoms = listFaultSymptoms as jest.Mock;
+const mockedUseOfflineQueue = useOfflineQueue as jest.Mock;
+const mockEnqueue = jest.fn();
 
 function appt(overrides: Partial<ScheduledAppointment> = {}): ScheduledAppointment {
   return {
@@ -113,8 +122,32 @@ function faultSymptomFixture(overrides: Partial<FaultSymptom> = {}): FaultSympto
   };
 }
 
+function queuedAction(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'queue-1',
+    type: 'START_VISIT',
+    appointmentId: 'appt-1',
+    label: 'Fatima Al Sayed (APT-0001)',
+    payload: {},
+    clientTimestamp: '2026-09-07T10:00:00.000Z',
+    status: 'pending',
+    errorMessage: null,
+    attempts: 0,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
+  mockEnqueue.mockResolvedValue(undefined);
+  mockedUseOfflineQueue.mockReturnValue({
+    isOnline: true,
+    pendingItems: [],
+    failedItems: [],
+    enqueue: mockEnqueue,
+    retry: jest.fn(),
+    dismiss: jest.fn(),
+  });
 });
 
 afterEach(() => {
@@ -353,5 +386,189 @@ describe('AppointmentDetailScreen', () => {
 
     await waitFor(() => expect(screen.getByTestId('fault-symptom-list-error')).toBeOnTheScreen());
     expect(screen.queryByTestId('fault-symptom-option-fs-1')).toBeNull();
+  });
+});
+
+// Phase 4: offline branches for the three write actions this screen owns. Online
+// behavior is exercised above and is untouched by Phase 4 - these tests only cover the
+// `!isOnline` branch (enqueue instead of mutate) and the queued-item display states.
+describe('AppointmentDetailScreen - offline queue', () => {
+  function offlineQueueValue(overrides: Record<string, unknown> = {}) {
+    return {
+      isOnline: false,
+      pendingItems: [],
+      failedItems: [],
+      enqueue: mockEnqueue,
+      retry: jest.fn(),
+      dismiss: jest.fn(),
+      ...overrides,
+    };
+  }
+
+  it('enqueues Start Visit instead of calling the mutation when offline', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+    mockGetCurrentPositionAsync.mockResolvedValue({ coords: { latitude: 25.2048, longitude: 55.2708 } });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('start-visit-button')).toBeOnTheScreen());
+    expect(screen.getByText(/offline - this will be queued/)).toBeOnTheScreen();
+
+    await fireEvent.press(screen.getByTestId('start-visit-button'));
+
+    await waitFor(() =>
+      expect(mockEnqueue).toHaveBeenCalledWith({
+        type: 'START_VISIT',
+        appointmentId: 'appt-1',
+        label: 'Fatima Al Sayed (APT-0001)',
+        payload: { gpsLat: 25.2048, gpsLng: 55.2708 },
+      }),
+    );
+    expect(mockedStartVisit).not.toHaveBeenCalled();
+  });
+
+  it('shows a queued message instead of the Start Visit button when a start-visit item is pending', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({ pendingItems: [queuedAction({ type: 'START_VISIT', appointmentId: 'appt-1' })] }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('start-visit-queued')).toHaveTextContent(
+        'Queued - will start this visit as soon as you’re back online.',
+      ),
+    );
+    expect(screen.queryByTestId('start-visit-button')).toBeNull();
+  });
+
+  it('shows a sync-failed message instead of the Start Visit button when a start-visit item failed', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({
+        isOnline: true,
+        failedItems: [
+          queuedAction({ type: 'START_VISIT', appointmentId: 'appt-1', status: 'failed', errorMessage: 'Appointment was cancelled' }),
+        ],
+      }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('start-visit-queued')).toHaveTextContent(
+        'Could not sync starting this visit - see the sync status above to retry or discard.',
+      ),
+    );
+    expect(screen.queryByTestId('start-visit-button')).toBeNull();
+  });
+
+  it('enqueues serial number capture instead of calling the mutation when offline', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('serial-number-input')).toBeOnTheScreen());
+    await fireEvent.changeText(screen.getByTestId('serial-number-input'), 'SN123');
+    await fireEvent.press(screen.getByTestId('capture-serial-number-button'));
+
+    await waitFor(() =>
+      expect(mockEnqueue).toHaveBeenCalledWith({
+        type: 'CAPTURE_SERIAL_NUMBER',
+        appointmentId: 'appt-1',
+        label: 'Fatima Al Sayed (APT-0001)',
+        payload: { serialNumber: 'SN123', brand: 'Samsung' },
+      }),
+    );
+    expect(mockedCaptureSerialNumber).not.toHaveBeenCalled();
+  });
+
+  it('shows a queued message instead of the serial number form when an item is pending', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({ pendingItems: [queuedAction({ type: 'CAPTURE_SERIAL_NUMBER', appointmentId: 'appt-1' })] }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('serial-number-queued')).toHaveTextContent('Queued - will sync as soon as you’re back online.'),
+    );
+    expect(screen.queryByTestId('serial-number-input')).toBeNull();
+  });
+
+  it('shows a sync-failed message instead of the serial number form when an item failed', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({
+        isOnline: true,
+        failedItems: [
+          queuedAction({ type: 'CAPTURE_SERIAL_NUMBER', appointmentId: 'appt-1', status: 'failed', errorMessage: 'nope' }),
+        ],
+      }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('serial-number-queued')).toHaveTextContent(
+        'Could not sync this serial number - see the sync status above to retry or discard.',
+      ),
+    );
+  });
+
+  it('enqueues fault/symptom capture instead of calling the mutation when offline', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW' }));
+    mockedListFaultSymptoms.mockResolvedValue([faultSymptomFixture()]);
+    mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-fault-symptom-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-fault-symptom-picker'));
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-option-fs-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('fault-symptom-option-fs-1'));
+
+    await waitFor(() => expect(screen.getByTestId('capture-fault-symptom-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('capture-fault-symptom-button'));
+
+    await waitFor(() =>
+      expect(mockEnqueue).toHaveBeenCalledWith({
+        type: 'CAPTURE_FAULT_SYMPTOM',
+        appointmentId: 'appt-1',
+        label: 'Fatima Al Sayed (APT-0001)',
+        payload: { faultCode: 'F001', symptomCode: 'S001' },
+      }),
+    );
+    expect(mockedCaptureFaultSymptom).not.toHaveBeenCalled();
+  });
+
+  it('shows a queued message instead of the picker/capture button when a fault-symptom item is pending', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW' }));
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({ pendingItems: [queuedAction({ type: 'CAPTURE_FAULT_SYMPTOM', appointmentId: 'appt-1' })] }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('fault-symptom-queued')).toHaveTextContent('Queued - will sync as soon as you’re back online.'),
+    );
+    expect(screen.queryByTestId('open-fault-symptom-picker')).toBeNull();
+  });
+
+  it('shows a sync-failed message instead of the picker/capture button when a fault-symptom item failed', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW' }));
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({
+        isOnline: true,
+        failedItems: [
+          queuedAction({ type: 'CAPTURE_FAULT_SYMPTOM', appointmentId: 'appt-1', status: 'failed', errorMessage: 'nope' }),
+        ],
+      }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('fault-symptom-queued')).toHaveTextContent(
+        'Could not sync this fault/symptom - see the sync status above to retry or discard.',
+      ),
+    );
   });
 });

@@ -10,6 +10,13 @@ jest.mock('../../lib/technicianApi', () => ({ getMySchedule: jest.fn() }));
 // Phase 2: tapping an appointment card now navigates via expo-router's useRouter() -
 // stub it out since these tests render ScheduleScreen without a real router present.
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
+// Phase 4: ScheduleScreen renders <OfflineBanner /> which reads useOfflineQueue() - this
+// screen's own tests aren't about offline-queue behavior (that's covered in
+// offline-queue.test.ts and appointment-detail.test.tsx), so stub a quiet "online, empty
+// queue" default here rather than wrapping every render in a real OfflineQueueProvider.
+jest.mock('../../context/OfflineQueueContext', () => ({
+  useOfflineQueue: () => ({ isOnline: true, pendingItems: [], failedItems: [], enqueue: jest.fn(), retry: jest.fn(), dismiss: jest.fn() }),
+}));
 
 const mockedUseAuth = useAuth as jest.Mock;
 const mockedGetMySchedule = getMySchedule as jest.Mock;

@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
+import { OfflineBanner } from '../components/OfflineBanner';
 import { StatusPill } from '../components/StatusPill';
 import { getMySchedule } from '../lib/technicianApi';
 import type { ScheduledAppointment } from '../lib/types';
@@ -83,6 +84,8 @@ export default function ScheduleScreen() {
           <Text style={styles.logoutText}>Sign out</Text>
         </Pressable>
       </View>
+
+      <OfflineBanner />
 
       <View style={styles.dateNav}>
         <Pressable onPress={() => setDate((d) => addDays(d, -1))} style={styles.dateNavButton} testID="date-prev">

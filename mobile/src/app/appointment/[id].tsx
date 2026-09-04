@@ -5,9 +5,12 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FaultSymptomPicker } from '../../components/FaultSymptomPicker';
+import { OfflineBanner } from '../../components/OfflineBanner';
 import { StatusPill } from '../../components/StatusPill';
+import { useOfflineQueue } from '../../context/OfflineQueueContext';
 import { getCurrentLocationOrBlock } from '../../lib/location';
 import { listFaultSymptoms } from '../../lib/masterDataApi';
+import type { QueuedAction, QueuedActionType } from '../../lib/offlineQueue';
 import { captureFaultSymptom, captureSerialNumber, getVisit, startVisit } from '../../lib/technicianApi';
 import type { FaultSymptom, ScheduledAppointment } from '../../lib/types';
 
@@ -33,9 +36,14 @@ function extractErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+function findQueued(items: QueuedAction[], type: QueuedActionType, appointmentId: string): QueuedAction | undefined {
+  return items.find((item) => item.type === type && item.appointmentId === appointmentId);
+}
+
 export default function AppointmentDetailScreen() {
   const params = useLocalSearchParams<{ id: string; appt?: string }>();
   const queryClient = useQueryClient();
+  const { isOnline, pendingItems, failedItems, enqueue } = useOfflineQueue();
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [locationBlockedPermanently, setLocationBlockedPermanently] = useState(false);
@@ -48,6 +56,16 @@ export default function AppointmentDetailScreen() {
       return null;
     }
   }, [params.appt]);
+
+  // Display label for anything this screen enqueues (Phase 4) - the queue itself only
+  // stores an appointmentId, so this is captured here where the full appointment is
+  // already in scope.
+  const queueLabel = appointment ? `${appointment.customerName} (${appointment.appointmentNumber})` : params.id;
+
+  const queuedItems = useMemo(() => [...pendingItems, ...failedItems], [pendingItems, failedItems]);
+  const queuedStartVisit = findQueued(queuedItems, 'START_VISIT', params.id);
+  const queuedSerialNumber = findQueued(queuedItems, 'CAPTURE_SERIAL_NUMBER', params.id);
+  const queuedFaultSymptom = findQueued(queuedItems, 'CAPTURE_FAULT_SYMPTOM', params.id);
 
   const {
     data: visit,
@@ -82,8 +100,15 @@ export default function AppointmentDetailScreen() {
         setLocationBlockedPermanently(result.reason === 'permission-denied-permanently');
         return;
       }
+      const payload = { gpsLat: result.coords.latitude, gpsLng: result.coords.longitude };
+      // GPS itself needs no signal - only the submit does, so the location fix above
+      // is attempted regardless of connectivity, and only the submit branches on it.
+      if (!isOnline) {
+        await enqueue({ type: 'START_VISIT', appointmentId: params.id, label: queueLabel, payload });
+        return;
+      }
       try {
-        await startMutation.mutateAsync({ gpsLat: result.coords.latitude, gpsLng: result.coords.longitude });
+        await startMutation.mutateAsync(payload);
       } catch {
         // Already captured in startMutation.isError/.error for the UI below - nothing
         // else to do with the rejection here.
@@ -104,6 +129,16 @@ export default function AppointmentDetailScreen() {
       setSerialNumberInput('');
     },
   });
+
+  async function handleCaptureSerialNumber() {
+    const payload = { serialNumber: serialNumberInput.trim(), brand: brandInput.trim() || undefined };
+    if (!isOnline) {
+      await enqueue({ type: 'CAPTURE_SERIAL_NUMBER', appointmentId: params.id, label: queueLabel, payload });
+      setSerialNumberInput('');
+      return;
+    }
+    serialMutation.mutate();
+  }
 
   // --- Fault + symptom (Phase 3) ---
   const [pickerVisible, setPickerVisible] = useState(false);
@@ -132,6 +167,17 @@ export default function AppointmentDetailScreen() {
     },
   });
 
+  async function handleCaptureFaultSymptom() {
+    if (!selectedFaultSymptom) return;
+    const payload = { faultCode: selectedFaultSymptom.faultCode, symptomCode: selectedFaultSymptom.symptomCode };
+    if (!isOnline) {
+      await enqueue({ type: 'CAPTURE_FAULT_SYMPTOM', appointmentId: params.id, label: queueLabel, payload });
+      setSelectedFaultSymptom(null);
+      return;
+    }
+    faultSymptomMutation.mutate();
+  }
+
   if (!appointment) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -144,7 +190,7 @@ export default function AppointmentDetailScreen() {
     );
   }
 
-  const canStart = STARTABLE_STATUSES.has(appointment.status) && visitNotFound;
+  const canStart = STARTABLE_STATUSES.has(appointment.status) && visitNotFound && !queuedStartVisit;
   const busy = locating || startMutation.isPending;
   const canCaptureFaultSymptom = Boolean(visit?.serialNumber);
 
@@ -155,6 +201,8 @@ export default function AppointmentDetailScreen() {
           <Text style={styles.backText}>‹ Schedule</Text>
         </Pressable>
       </View>
+
+      <OfflineBanner />
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.card}>
@@ -188,7 +236,15 @@ export default function AppointmentDetailScreen() {
             </View>
           )}
 
-          {!visitLoading && !visit && !canStart && (
+          {!visitLoading && !visit && queuedStartVisit && (
+            <Text style={styles.meta} testID="start-visit-queued">
+              {queuedStartVisit.status === 'failed'
+                ? 'Could not sync starting this visit - see the sync status above to retry or discard.'
+                : 'Queued - will start this visit as soon as you’re back online.'}
+            </Text>
+          )}
+
+          {!visitLoading && !visit && !queuedStartVisit && !canStart && (
             <Text style={styles.meta}>
               This appointment isn&apos;t ready to start yet - it needs to be confirmed and assigned first.
             </Text>
@@ -221,7 +277,11 @@ export default function AppointmentDetailScreen() {
               >
                 {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Start Visit</Text>}
               </Pressable>
-              <Text style={styles.hint}>Captures your GPS location and the time you arrived.</Text>
+              <Text style={styles.hint}>
+                {isOnline
+                  ? 'Captures your GPS location and the time you arrived.'
+                  : 'You’re offline - this will be queued and sent once you’re back online.'}
+              </Text>
             </View>
           )}
         </View>
@@ -252,39 +312,49 @@ export default function AppointmentDetailScreen() {
               </View>
             )}
 
-            {serialMutation.isError && (
-              <Text style={styles.errorBoxText} testID="serial-number-error">
-                {extractErrorMessage(serialMutation.error, 'Could not capture the serial number. Try again.')}
+            {queuedSerialNumber ? (
+              <Text style={styles.meta} testID="serial-number-queued">
+                {queuedSerialNumber.status === 'failed'
+                  ? 'Could not sync this serial number - see the sync status above to retry or discard.'
+                  : 'Queued - will sync as soon as you’re back online.'}
               </Text>
-            )}
+            ) : (
+              <>
+                {serialMutation.isError && (
+                  <Text style={styles.errorBoxText} testID="serial-number-error">
+                    {extractErrorMessage(serialMutation.error, 'Could not capture the serial number. Try again.')}
+                  </Text>
+                )}
 
-            <TextInput
-              style={styles.input}
-              placeholder="Serial number"
-              value={serialNumberInput}
-              onChangeText={setSerialNumberInput}
-              autoCapitalize="characters"
-              testID="serial-number-input"
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Brand (optional)"
-              value={brandInput}
-              onChangeText={setBrandInput}
-              testID="brand-input"
-            />
-            <Pressable
-              style={[styles.button, (!serialNumberInput.trim() || serialMutation.isPending) && styles.buttonDisabled]}
-              onPress={() => serialMutation.mutate()}
-              disabled={!serialNumberInput.trim() || serialMutation.isPending}
-              testID="capture-serial-number-button"
-            >
-              {serialMutation.isPending ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.buttonText}>{visit.serialNumber ? 'Re-capture' : 'Capture'}</Text>
-              )}
-            </Pressable>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Serial number"
+                  value={serialNumberInput}
+                  onChangeText={setSerialNumberInput}
+                  autoCapitalize="characters"
+                  testID="serial-number-input"
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Brand (optional)"
+                  value={brandInput}
+                  onChangeText={setBrandInput}
+                  testID="brand-input"
+                />
+                <Pressable
+                  style={[styles.button, (!serialNumberInput.trim() || serialMutation.isPending) && styles.buttonDisabled]}
+                  onPress={handleCaptureSerialNumber}
+                  disabled={!serialNumberInput.trim() || serialMutation.isPending}
+                  testID="capture-serial-number-button"
+                >
+                  {serialMutation.isPending ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.buttonText}>{visit.serialNumber ? 'Re-capture' : 'Capture'}</Text>
+                  )}
+                </Pressable>
+              </>
+            )}
           </View>
         )}
 
@@ -308,42 +378,52 @@ export default function AppointmentDetailScreen() {
                   </View>
                 )}
 
-                {faultSymptomMutation.isError && (
-                  <Text style={styles.errorBoxText} testID="fault-symptom-error">
-                    {extractErrorMessage(faultSymptomMutation.error, 'Could not record fault/symptom. Try again.')}
+                {queuedFaultSymptom ? (
+                  <Text style={styles.meta} testID="fault-symptom-queued">
+                    {queuedFaultSymptom.status === 'failed'
+                      ? 'Could not sync this fault/symptom - see the sync status above to retry or discard.'
+                      : 'Queued - will sync as soon as you’re back online.'}
                   </Text>
-                )}
-
-                {selectedFaultSymptom && (
-                  <View style={styles.capturedBox} testID="fault-symptom-selection">
-                    <Text style={styles.capturedValue}>{selectedFaultSymptom.faultDescription}</Text>
-                    <Text style={styles.meta}>{selectedFaultSymptom.symptomDescription}</Text>
-                  </View>
-                )}
-
-                <Pressable
-                  style={styles.secondaryButton}
-                  onPress={() => setPickerVisible(true)}
-                  testID="open-fault-symptom-picker"
-                >
-                  <Text style={styles.secondaryButtonText}>
-                    {selectedFaultSymptom ? 'Change selection' : 'Choose fault / symptom'}
-                  </Text>
-                </Pressable>
-
-                {selectedFaultSymptom && (
-                  <Pressable
-                    style={[styles.button, faultSymptomMutation.isPending && styles.buttonDisabled]}
-                    onPress={() => faultSymptomMutation.mutate()}
-                    disabled={faultSymptomMutation.isPending}
-                    testID="capture-fault-symptom-button"
-                  >
-                    {faultSymptomMutation.isPending ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <Text style={styles.buttonText}>{visit.faultCode ? 'Re-capture' : 'Capture'}</Text>
+                ) : (
+                  <>
+                    {faultSymptomMutation.isError && (
+                      <Text style={styles.errorBoxText} testID="fault-symptom-error">
+                        {extractErrorMessage(faultSymptomMutation.error, 'Could not record fault/symptom. Try again.')}
+                      </Text>
                     )}
-                  </Pressable>
+
+                    {selectedFaultSymptom && (
+                      <View style={styles.capturedBox} testID="fault-symptom-selection">
+                        <Text style={styles.capturedValue}>{selectedFaultSymptom.faultDescription}</Text>
+                        <Text style={styles.meta}>{selectedFaultSymptom.symptomDescription}</Text>
+                      </View>
+                    )}
+
+                    <Pressable
+                      style={styles.secondaryButton}
+                      onPress={() => setPickerVisible(true)}
+                      testID="open-fault-symptom-picker"
+                    >
+                      <Text style={styles.secondaryButtonText}>
+                        {selectedFaultSymptom ? 'Change selection' : 'Choose fault / symptom'}
+                      </Text>
+                    </Pressable>
+
+                    {selectedFaultSymptom && (
+                      <Pressable
+                        style={[styles.button, faultSymptomMutation.isPending && styles.buttonDisabled]}
+                        onPress={handleCaptureFaultSymptom}
+                        disabled={faultSymptomMutation.isPending}
+                        testID="capture-fault-symptom-button"
+                      >
+                        {faultSymptomMutation.isPending ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : (
+                          <Text style={styles.buttonText}>{visit.faultCode ? 'Re-capture' : 'Capture'}</Text>
+                        )}
+                      </Pressable>
+                    )}
+                  </>
                 )}
               </View>
             )}

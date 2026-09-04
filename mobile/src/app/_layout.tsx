@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider, useAuth } from '../context/AuthContext';
+import { OfflineQueueProvider } from '../context/OfflineQueueContext';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -16,7 +17,9 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <RootNavigator />
+        <OfflineQueueProvider>
+          <RootNavigator />
+        </OfflineQueueProvider>
       </AuthProvider>
     </QueryClientProvider>
   );
