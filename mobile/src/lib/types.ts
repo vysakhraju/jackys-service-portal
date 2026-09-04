@@ -77,7 +77,10 @@ export interface TechnicianVisit {
   startedAt: string;
   serialNumber: string | null;
   brand: string | null;
-  warrantyStatus: 'IN_WARRANTY' | 'OUT_OF_WARRANTY' | 'EXTENDED_WARRANTY' | null;
+  // The backend's WarrantyStatus enum only has these two values ('IW'/'OOW' - see
+  // src/technician/entities/technician-visit.entity.ts) - not the longer IN_WARRANTY/
+  // OUT_OF_WARRANTY/EXTENDED_WARRANTY names an earlier draft of this file guessed at.
+  warrantyStatus: 'IW' | 'OOW' | null;
   warrantySupplier: string | null;
   warrantyPeriodMonths: number | null;
   serialNumberCapturedAt: string | null;
@@ -91,4 +94,43 @@ export interface TechnicianVisit {
 export interface StartVisitInput {
   gpsLat: number;
   gpsLng: number;
+}
+
+export interface CaptureSerialNumberInput {
+  serialNumber: string;
+  brand?: string;
+}
+
+export interface CaptureFaultSymptomInput {
+  faultCode: string;
+  symptomCode: string;
+}
+
+// GET /master-data/fault-symptoms - each row is one fault+symptom PAIR, not two
+// independent lists (see src/master-data/entities/fault-symptom.entity.ts), so the
+// fault/symptom picker below selects one whole row rather than combining fault and
+// symptom fields separately.
+export const APPLIANCE_CATEGORIES = [
+  'REFRIGERATOR',
+  'WASHING_MACHINE',
+  'AC',
+  'MICROWAVE',
+  'OVEN',
+  'COOKING_RANGE',
+  'DISHWASHER',
+  'WATER_HEATER',
+  'DRYER',
+  'OTHER',
+] as const;
+export type ApplianceCategoryValue = (typeof APPLIANCE_CATEGORIES)[number];
+
+export interface FaultSymptom {
+  id: string;
+  faultCode: string;
+  faultDescription: string;
+  symptomCode: string;
+  symptomDescription: string;
+  category: ApplianceCategoryValue;
+  requiresWorkshop: boolean;
+  isActive: boolean;
 }

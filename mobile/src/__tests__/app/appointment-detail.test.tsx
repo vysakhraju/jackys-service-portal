@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import AppointmentDetailScreen from '../../app/appointment/[id]';
-import { getVisit, startVisit } from '../../lib/technicianApi';
-import type { ScheduledAppointment } from '../../lib/types';
+import { listFaultSymptoms } from '../../lib/masterDataApi';
+import { captureFaultSymptom, captureSerialNumber, getVisit, startVisit } from '../../lib/technicianApi';
+import type { FaultSymptom, ScheduledAppointment } from '../../lib/types';
 
 const mockBack = jest.fn();
 let mockParams: { id: string; appt?: string } = { id: 'appt-1' };
@@ -12,7 +13,13 @@ jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
 }));
 
-jest.mock('../../lib/technicianApi', () => ({ getVisit: jest.fn(), startVisit: jest.fn() }));
+jest.mock('../../lib/technicianApi', () => ({
+  getVisit: jest.fn(),
+  startVisit: jest.fn(),
+  captureSerialNumber: jest.fn(),
+  captureFaultSymptom: jest.fn(),
+}));
+jest.mock('../../lib/masterDataApi', () => ({ listFaultSymptoms: jest.fn() }));
 
 const mockRequestForegroundPermissionsAsync = jest.fn();
 const mockGetCurrentPositionAsync = jest.fn();
@@ -24,6 +31,9 @@ jest.mock('expo-location', () => ({
 
 const mockedGetVisit = getVisit as jest.Mock;
 const mockedStartVisit = startVisit as jest.Mock;
+const mockedCaptureSerialNumber = captureSerialNumber as jest.Mock;
+const mockedCaptureFaultSymptom = captureFaultSymptom as jest.Mock;
+const mockedListFaultSymptoms = listFaultSymptoms as jest.Mock;
 
 function appt(overrides: Partial<ScheduledAppointment> = {}): ScheduledAppointment {
   return {
@@ -64,6 +74,43 @@ async function renderScreen(appointment: ScheduledAppointment) {
 
 function notFoundError() {
   return { isAxiosError: true, response: { status: 404 } };
+}
+
+function visitFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'visit-1',
+    appointmentId: 'appt-1',
+    technicianId: 'tech-1',
+    startGpsLat: 25.2,
+    startGpsLng: 55.3,
+    startedAt: '2026-09-07T10:05:00.000Z',
+    serialNumber: null,
+    brand: null,
+    warrantyStatus: null,
+    warrantySupplier: null,
+    warrantyPeriodMonths: null,
+    serialNumberCapturedAt: null,
+    faultCode: null,
+    symptomCode: null,
+    faultSymptomCapturedAt: null,
+    createdAt: '2026-09-07T10:05:00.000Z',
+    updatedAt: '2026-09-07T10:05:00.000Z',
+    ...overrides,
+  };
+}
+
+function faultSymptomFixture(overrides: Partial<FaultSymptom> = {}): FaultSymptom {
+  return {
+    id: 'fs-1',
+    faultCode: 'F001',
+    faultDescription: 'Not cooling',
+    symptomCode: 'S001',
+    symptomDescription: 'No power to unit',
+    category: 'REFRIGERATOR',
+    requiresWorkshop: false,
+    isActive: true,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -186,5 +233,125 @@ describe('AppointmentDetailScreen', () => {
     await fireEvent.press(screen.getByTestId('back-button'));
 
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('captures a serial number and shows the warranty badge on success', async () => {
+    mockedGetVisit.mockResolvedValueOnce(visitFixture());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('serial-number-input')).toBeOnTheScreen());
+
+    mockedCaptureSerialNumber.mockResolvedValue(
+      visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW', warrantySupplier: 'Samsung Gulf', warrantyPeriodMonths: 12 }),
+    );
+    mockedGetVisit.mockResolvedValueOnce(
+      visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW', warrantySupplier: 'Samsung Gulf', warrantyPeriodMonths: 12 }),
+    );
+
+    await fireEvent.changeText(screen.getByTestId('serial-number-input'), 'SN123');
+    await fireEvent.press(screen.getByTestId('capture-serial-number-button'));
+
+    await waitFor(() => expect(mockedCaptureSerialNumber).toHaveBeenCalledWith('appt-1', { serialNumber: 'SN123', brand: 'Samsung' }));
+    await waitFor(() => expect(screen.getByTestId('serial-number-captured')).toBeOnTheScreen());
+    expect(screen.getByTestId('status-pill-IW')).toBeOnTheScreen();
+    expect(screen.getByText('In Warranty')).toBeOnTheScreen();
+  });
+
+  it('shows an error message when serial number capture fails', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('serial-number-input')).toBeOnTheScreen());
+    mockedCaptureSerialNumber.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 400, data: { message: 'Serial number can only be captured for an on-site visit' } },
+    });
+
+    await fireEvent.changeText(screen.getByTestId('serial-number-input'), 'SN123');
+    await fireEvent.press(screen.getByTestId('capture-serial-number-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('serial-number-error')).toHaveTextContent(
+        'Serial number can only be captured for an on-site visit',
+      ),
+    );
+  });
+
+  it('keeps fault/symptom capture locked until a serial number is captured', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-locked-hint')).toBeOnTheScreen());
+    expect(screen.queryByTestId('open-fault-symptom-picker')).toBeNull();
+    expect(mockedListFaultSymptoms).not.toHaveBeenCalled();
+  });
+
+  it('opens the fault/symptom picker, filters by search, selects an item, and captures it', async () => {
+    mockedGetVisit.mockResolvedValueOnce(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW' }));
+    mockedListFaultSymptoms.mockResolvedValue([
+      faultSymptomFixture(),
+      faultSymptomFixture({ id: 'fs-2', faultCode: 'F002', faultDescription: 'Not draining', symptomCode: 'S002', symptomDescription: 'Water pooling' }),
+    ]);
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-fault-symptom-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-fault-symptom-picker'));
+
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-option-fs-1')).toBeOnTheScreen());
+    expect(screen.getByTestId('fault-symptom-option-fs-2')).toBeOnTheScreen();
+
+    await fireEvent.changeText(screen.getByTestId('fault-symptom-search'), 'draining');
+    await waitFor(() => expect(screen.queryByTestId('fault-symptom-option-fs-1')).toBeNull());
+    expect(screen.getByTestId('fault-symptom-option-fs-2')).toBeOnTheScreen();
+
+    await fireEvent.press(screen.getByTestId('fault-symptom-option-fs-2'));
+
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-selection')).toBeOnTheScreen());
+    expect(screen.queryByTestId('fault-symptom-picker-close')).toBeNull();
+
+    mockedCaptureFaultSymptom.mockResolvedValue(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW', faultCode: 'F002', symptomCode: 'S002' }));
+    mockedGetVisit.mockResolvedValueOnce(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW', faultCode: 'F002', symptomCode: 'S002' }));
+
+    await fireEvent.press(screen.getByTestId('capture-fault-symptom-button'));
+
+    await waitFor(() => expect(mockedCaptureFaultSymptom).toHaveBeenCalledWith('appt-1', { faultCode: 'F002', symptomCode: 'S002' }));
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-captured')).toHaveTextContent('F002 · S002'));
+  });
+
+  it('shows an error message when fault/symptom capture fails', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW' }));
+    mockedListFaultSymptoms.mockResolvedValue([faultSymptomFixture()]);
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-fault-symptom-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-fault-symptom-picker'));
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-option-fs-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('fault-symptom-option-fs-1'));
+
+    mockedCaptureFaultSymptom.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 400, data: { message: 'Capture and validate the serial number before recording fault/symptom codes' } },
+    });
+
+    await waitFor(() => expect(screen.getByTestId('capture-fault-symptom-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('capture-fault-symptom-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('fault-symptom-error')).toHaveTextContent(
+        'Capture and validate the serial number before recording fault/symptom codes',
+      ),
+    );
+  });
+
+  it('shows an error in the picker when the fault/symptom list fails to load', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW' }));
+    mockedListFaultSymptoms.mockRejectedValue(new Error('network down'));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-fault-symptom-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-fault-symptom-picker'));
+
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-list-error')).toBeOnTheScreen());
+    expect(screen.queryByTestId('fault-symptom-option-fs-1')).toBeNull();
   });
 });

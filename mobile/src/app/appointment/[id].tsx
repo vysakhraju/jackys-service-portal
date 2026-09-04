@@ -2,12 +2,14 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { FaultSymptomPicker } from '../../components/FaultSymptomPicker';
 import { StatusPill } from '../../components/StatusPill';
 import { getCurrentLocationOrBlock } from '../../lib/location';
-import { getVisit, startVisit } from '../../lib/technicianApi';
-import type { ScheduledAppointment } from '../../lib/types';
+import { listFaultSymptoms } from '../../lib/masterDataApi';
+import { captureFaultSymptom, captureSerialNumber, getVisit, startVisit } from '../../lib/technicianApi';
+import type { FaultSymptom, ScheduledAppointment } from '../../lib/types';
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -19,6 +21,8 @@ function formatDateTime(iso: string): string {
 // it surfaces the backend's real "not confirmed/assigned yet" error instead of silently
 // looking like there's nothing to do on this appointment.
 const STARTABLE_STATUSES = new Set(['SCHEDULED', 'CONFIRMED', 'TECHNICIAN_ASSIGNED']);
+
+const WARRANTY_LABELS: Record<string, string> = { IW: 'In Warranty', OOW: 'Out of Warranty' };
 
 function extractErrorMessage(err: unknown, fallback: string): string {
   if (isAxiosError(err)) {
@@ -57,12 +61,14 @@ export default function AppointmentDetailScreen() {
   });
   const visitNotFound = isAxiosError(visitError) && visitError.response?.status === 404;
 
+  function invalidateVisit() {
+    queryClient.invalidateQueries({ queryKey: ['technician-visit', params.id] });
+    queryClient.invalidateQueries({ queryKey: ['technician-schedule'] });
+  }
+
   const startMutation = useMutation({
     mutationFn: (input: { gpsLat: number; gpsLng: number }) => startVisit(params.id, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['technician-visit', params.id] });
-      queryClient.invalidateQueries({ queryKey: ['technician-schedule'] });
-    },
+    onSuccess: invalidateVisit,
   });
 
   async function handleStartVisit() {
@@ -87,6 +93,45 @@ export default function AppointmentDetailScreen() {
     }
   }
 
+  // --- Serial number + warranty (Phase 3) ---
+  const [serialNumberInput, setSerialNumberInput] = useState('');
+  const [brandInput, setBrandInput] = useState(appointment?.brand ?? '');
+
+  const serialMutation = useMutation({
+    mutationFn: () => captureSerialNumber(params.id, { serialNumber: serialNumberInput.trim(), brand: brandInput.trim() || undefined }),
+    onSuccess: () => {
+      invalidateVisit();
+      setSerialNumberInput('');
+    },
+  });
+
+  // --- Fault + symptom (Phase 3) ---
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [selectedFaultSymptom, setSelectedFaultSymptom] = useState<FaultSymptom | null>(null);
+
+  const {
+    data: faultSymptoms,
+    error: faultSymptomsError,
+    isLoading: faultSymptomsLoading,
+  } = useQuery({
+    queryKey: ['fault-symptoms'],
+    queryFn: () => listFaultSymptoms(),
+    enabled: Boolean(visit?.serialNumber),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const faultSymptomMutation = useMutation({
+    mutationFn: () =>
+      captureFaultSymptom(params.id, {
+        faultCode: selectedFaultSymptom!.faultCode,
+        symptomCode: selectedFaultSymptom!.symptomCode,
+      }),
+    onSuccess: () => {
+      invalidateVisit();
+      setSelectedFaultSymptom(null);
+    },
+  });
+
   if (!appointment) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -101,6 +146,7 @@ export default function AppointmentDetailScreen() {
 
   const canStart = STARTABLE_STATUSES.has(appointment.status) && visitNotFound;
   const busy = locating || startMutation.isPending;
+  const canCaptureFaultSymptom = Boolean(visit?.serialNumber);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -179,7 +225,143 @@ export default function AppointmentDetailScreen() {
             </View>
           )}
         </View>
+
+        {visit && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Serial number &amp; warranty</Text>
+
+            {visit.serialNumber && (
+              <View style={styles.capturedBox} testID="serial-number-captured">
+                <View style={styles.capturedRow}>
+                  <Text style={styles.capturedValue}>{visit.serialNumber}</Text>
+                  {visit.warrantyStatus && (
+                    <StatusPill status={visit.warrantyStatus} label={WARRANTY_LABELS[visit.warrantyStatus]} />
+                  )}
+                </View>
+                {visit.warrantySupplier && (
+                  <Text style={styles.meta}>
+                    Supplier: {visit.warrantySupplier}
+                    {visit.warrantyPeriodMonths ? ` · ${visit.warrantyPeriodMonths} months` : ''}
+                  </Text>
+                )}
+                <Text style={styles.hint}>
+                  Re-capturing below clears the fault/symptom recorded for this visit - the
+                  backend requires the current, validated serial number before fault/symptom
+                  can be recorded.
+                </Text>
+              </View>
+            )}
+
+            {serialMutation.isError && (
+              <Text style={styles.errorBoxText} testID="serial-number-error">
+                {extractErrorMessage(serialMutation.error, 'Could not capture the serial number. Try again.')}
+              </Text>
+            )}
+
+            <TextInput
+              style={styles.input}
+              placeholder="Serial number"
+              value={serialNumberInput}
+              onChangeText={setSerialNumberInput}
+              autoCapitalize="characters"
+              testID="serial-number-input"
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Brand (optional)"
+              value={brandInput}
+              onChangeText={setBrandInput}
+              testID="brand-input"
+            />
+            <Pressable
+              style={[styles.button, (!serialNumberInput.trim() || serialMutation.isPending) && styles.buttonDisabled]}
+              onPress={() => serialMutation.mutate()}
+              disabled={!serialNumberInput.trim() || serialMutation.isPending}
+              testID="capture-serial-number-button"
+            >
+              {serialMutation.isPending ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>{visit.serialNumber ? 'Re-capture' : 'Capture'}</Text>
+              )}
+            </Pressable>
+          </View>
+        )}
+
+        {visit && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Fault &amp; symptom</Text>
+
+            {!canCaptureFaultSymptom && (
+              <Text style={styles.meta} testID="fault-symptom-locked-hint">
+                Capture the serial number first - the backend blocks this until then.
+              </Text>
+            )}
+
+            {canCaptureFaultSymptom && (
+              <View>
+                {visit.faultCode && (
+                  <View style={styles.capturedBox} testID="fault-symptom-captured">
+                    <Text style={styles.capturedValue}>
+                      {visit.faultCode} · {visit.symptomCode}
+                    </Text>
+                  </View>
+                )}
+
+                {faultSymptomMutation.isError && (
+                  <Text style={styles.errorBoxText} testID="fault-symptom-error">
+                    {extractErrorMessage(faultSymptomMutation.error, 'Could not record fault/symptom. Try again.')}
+                  </Text>
+                )}
+
+                {selectedFaultSymptom && (
+                  <View style={styles.capturedBox} testID="fault-symptom-selection">
+                    <Text style={styles.capturedValue}>{selectedFaultSymptom.faultDescription}</Text>
+                    <Text style={styles.meta}>{selectedFaultSymptom.symptomDescription}</Text>
+                  </View>
+                )}
+
+                <Pressable
+                  style={styles.secondaryButton}
+                  onPress={() => setPickerVisible(true)}
+                  testID="open-fault-symptom-picker"
+                >
+                  <Text style={styles.secondaryButtonText}>
+                    {selectedFaultSymptom ? 'Change selection' : 'Choose fault / symptom'}
+                  </Text>
+                </Pressable>
+
+                {selectedFaultSymptom && (
+                  <Pressable
+                    style={[styles.button, faultSymptomMutation.isPending && styles.buttonDisabled]}
+                    onPress={() => faultSymptomMutation.mutate()}
+                    disabled={faultSymptomMutation.isPending}
+                    testID="capture-fault-symptom-button"
+                  >
+                    {faultSymptomMutation.isPending ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.buttonText}>{visit.faultCode ? 'Re-capture' : 'Capture'}</Text>
+                    )}
+                  </Pressable>
+                )}
+              </View>
+            )}
+          </View>
+        )}
       </ScrollView>
+
+      <FaultSymptomPicker
+        visible={pickerVisible}
+        items={faultSymptoms}
+        loading={faultSymptomsLoading}
+        error={faultSymptomsError ? extractErrorMessage(faultSymptomsError, 'Could not load fault/symptom codes.') : null}
+        onSelect={(item) => {
+          setSelectedFaultSymptom(item);
+          setPickerVisible(false);
+        }}
+        onClose={() => setPickerVisible(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -208,10 +390,32 @@ const styles = StyleSheet.create({
   spinner: { marginVertical: 8 },
   visitStartedText: { fontSize: 15, fontWeight: '600', color: '#166534', marginBottom: 4 },
   errorBox: { backgroundColor: '#fef2f2', borderRadius: 8, padding: 10, marginBottom: 12 },
-  errorBoxText: { color: '#b91c1c', fontSize: 13 },
+  errorBoxText: { color: '#b91c1c', fontSize: 13, marginBottom: 8 },
   linkText: { color: '#2563eb', fontSize: 13, fontWeight: '600', marginTop: 6 },
   button: { backgroundColor: '#0f172a', borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginTop: 4 },
   buttonDisabled: { opacity: 0.5 },
   buttonText: { color: '#ffffff', fontWeight: '600', fontSize: 15 },
+  secondaryButton: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  secondaryButtonText: { color: '#334155', fontWeight: '600', fontSize: 15 },
   hint: { fontSize: 12, color: '#94a3b8', marginTop: 8, textAlign: 'center' },
+  input: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginBottom: 8,
+    backgroundColor: '#ffffff',
+  },
+  capturedBox: { backgroundColor: '#f8fafc', borderRadius: 8, padding: 10, marginBottom: 12 },
+  capturedRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  capturedValue: { fontSize: 15, fontWeight: '600', color: '#0f172a' },
 });
