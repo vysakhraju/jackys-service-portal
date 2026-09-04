@@ -63,3 +63,32 @@ export interface ScheduledAppointment {
   scheduledAt: string;
   estimatedDurationMinutes: number | null;
 }
+
+// Mirrors the backend's TechnicianVisit entity / the web app's
+// appointmentsTypes.ts#TechnicianVisit in full, even though Phase 2 only reads
+// startGpsLat/startGpsLng/startedAt - the serial-number and fault/symptom fields land in
+// Phase 3, which will build directly on this same GET /technician/visits/:id response.
+export interface TechnicianVisit {
+  id: string;
+  appointmentId: string;
+  technicianId: string;
+  startGpsLat: number;
+  startGpsLng: number;
+  startedAt: string;
+  serialNumber: string | null;
+  brand: string | null;
+  warrantyStatus: 'IN_WARRANTY' | 'OUT_OF_WARRANTY' | 'EXTENDED_WARRANTY' | null;
+  warrantySupplier: string | null;
+  warrantyPeriodMonths: number | null;
+  serialNumberCapturedAt: string | null;
+  faultCode: string | null;
+  symptomCode: string | null;
+  faultSymptomCapturedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StartVisitInput {
+  gpsLat: number;
+  gpsLng: number;
+}

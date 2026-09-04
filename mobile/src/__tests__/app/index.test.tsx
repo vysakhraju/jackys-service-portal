@@ -7,6 +7,9 @@ import type { ScheduledAppointment } from '../../lib/types';
 
 jest.mock('../../context/AuthContext', () => ({ useAuth: jest.fn() }));
 jest.mock('../../lib/technicianApi', () => ({ getMySchedule: jest.fn() }));
+// Phase 2: tapping an appointment card now navigates via expo-router's useRouter() -
+// stub it out since these tests render ScheduleScreen without a real router present.
+jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
 
 const mockedUseAuth = useAuth as jest.Mock;
 const mockedGetMySchedule = getMySchedule as jest.Mock;

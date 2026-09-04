@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
+import { StatusPill } from '../components/StatusPill';
 import { getMySchedule } from '../lib/technicianApi';
 import type { ScheduledAppointment } from '../lib/types';
 
@@ -28,29 +30,9 @@ function formatDateLabel(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
-  SCHEDULED: { bg: '#e2e8f0', fg: '#334155' },
-  CONFIRMED: { bg: '#dbeafe', fg: '#1d4ed8' },
-  TECHNICIAN_ASSIGNED: { bg: '#e0e7ff', fg: '#4338ca' },
-  ON_SITE: { bg: '#fef9c3', fg: '#854d0e' },
-  COMPLETED: { bg: '#dcfce7', fg: '#166534' },
-  CANCELLED: { bg: '#fee2e2', fg: '#991b1b' },
-  NO_SHOW: { bg: '#fee2e2', fg: '#991b1b' },
-  RESCHEDULED: { bg: '#f3e8ff', fg: '#6b21a8' },
-};
-
-function StatusPill({ status }: { status: string }) {
-  const colors = STATUS_COLORS[status] ?? STATUS_COLORS.SCHEDULED;
+function AppointmentCard({ appointment, onPress }: { appointment: ScheduledAppointment; onPress: () => void }) {
   return (
-    <View style={[styles.pill, { backgroundColor: colors.bg }]}>
-      <Text style={[styles.pillText, { color: colors.fg }]}>{status.replace(/_/g, ' ')}</Text>
-    </View>
-  );
-}
-
-function AppointmentCard({ appointment }: { appointment: ScheduledAppointment }) {
-  return (
-    <View style={styles.card} testID={`appointment-${appointment.id}`}>
+    <Pressable style={styles.card} onPress={onPress} testID={`appointment-${appointment.id}`}>
       <View style={styles.cardHeader}>
         <Text style={styles.time}>{formatTime(appointment.scheduledAt)}</Text>
         <StatusPill status={appointment.status} />
@@ -67,12 +49,13 @@ function AppointmentCard({ appointment }: { appointment: ScheduledAppointment })
           {appointment.problemDescription}
         </Text>
       )}
-    </View>
+    </Pressable>
   );
 }
 
 export default function ScheduleScreen() {
   const { user, logout } = useAuth();
+  const router = useRouter();
   const [date, setDate] = useState(() => toIsoDate(new Date()));
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
@@ -137,7 +120,14 @@ export default function ScheduleScreen() {
         <FlatList
           data={sorted}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <AppointmentCard appointment={item} />}
+          renderItem={({ item }) => (
+            <AppointmentCard
+              appointment={item}
+              onPress={() =>
+                router.push({ pathname: '/appointment/[id]', params: { id: item.id, appt: JSON.stringify(item) } })
+              }
+            />
+          )}
           contentContainerStyle={styles.listContent}
           refreshControl={<RefreshControl refreshing={isFetching && !isLoading} onRefresh={refetch} />}
         />

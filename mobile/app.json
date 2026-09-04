@@ -32,6 +32,12 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Jacky's Field Technician uses your location to record where each visit started."
+        }
       ]
     ],
     "experiments": {
