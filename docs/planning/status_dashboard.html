@@ -1208,7 +1208,21 @@
         inside <span class="mono">mobile/</span> on your machine, then <span class="mono">npm start</span>,
         to see it live.</b>
       </p>
-      <span class="resolved-tag" style="background:var(--success);">Shipped this session — Phase 1 of 5</span>
+      <p>
+        <b>2026-09-04 update:</b> the user did exactly that — ran it for the first time on
+        a real Android emulator — and it caught a real bug: <span class="mono">expo-router</span>'s
+        route scanner walks <span class="mono">src/app/</span> recursively and doesn't
+        exclude test files, so <span class="mono">login.test.tsx</span>/<span class="mono">index.test.tsx</span>
+        sitting next to their screens got bundled into the real app and broke Android
+        bundling (<span class="mono">@testing-library/react-native</span> needs Node's
+        <span class="mono">console</span> module, unavailable in the native RN runtime).
+        Fixed by moving both files to <span class="mono">src/__tests__/app/</span>, outside
+        the router's scan root — re-verified 15/15 tests passing and <span class="mono">tsc --noEmit</span>
+        clean after the move. Committed as <span class="mono">dc42f2c</span>, and the
+        gotcha is now written down in <span class="mono">mobile/README.md</span> so future
+        screens don't reintroduce it.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Live-tested this session — bug found and fixed</span>
     </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Extra Role Access (2026-09-03): admin can delegate a role's access to any user</h3>

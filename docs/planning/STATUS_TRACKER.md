@@ -3235,6 +3235,21 @@ these commits can do (the same constraint already documented for the backend's
 at your backend's LAN IP first (see `mobile/README.md`/`mobile/.env.example` -
 `localhost` only works from a simulator on the same machine as the backend).
 
+**2026-09-04 - live testing found and fixed a real bundling bug.** The user ran Phase 1
+for the first time (`npm install` + `npm start` + Expo Go / Android Studio emulator per
+the new testing guide in `mobile/README.md`) and hit `Android Bundling failed`:
+`login.test.tsx`/`index.test.tsx` were bundled into the real app and broke on-device,
+because `expo-router`'s route scanner walks `src/app/` recursively and only excludes
+`+api`/`+html`/`+native-intent` files - not `*.test.tsx` - so `@testing-library/react-native`
+(which needs Node's `console` module, unavailable in the native RN runtime) ended up in
+the production bundle. Fixed by moving both test files to `src/__tests__/app/`, outside
+the router's scan root, with imports updated accordingly - re-verified 15/15 tests
+passing and `tsc --noEmit` clean after the move. Committed as `dc42f2c`, documented in
+`mobile/README.md` (`a1ae625`) so future screens added under `src/app/` don't
+reintroduce this. (Two earlier 401/409 hiccups during the same testing session were
+user-side Swagger workflow issues, not code bugs - see `mobile/README.md`'s testing
+walkthrough, which already covers the Authorize step and service-centre capacity setup.)
+
 Next: Phase 2 (Start Visit + GPS capture, online-only) - see
 `docs/planning/MOBILE_APP_SCOPE_v1.md` §7 for the full phased build order.
 
