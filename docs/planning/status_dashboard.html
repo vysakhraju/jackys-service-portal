@@ -1292,6 +1292,40 @@
       <span class="resolved-tag" style="background:var(--success);">Live-verified end-to-end — Phase 2 of 5 complete</span>
     </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Mobile Phase 3 (2026-09-04): Serial number + warranty capture, Fault/Symptom capture</h3>
+      <p>
+        Built right after Phase 2's live verification, per the scope doc's phased order —
+        both steps online-first, same low-risk category as Phase 2, no new backend work
+        (both capture endpoints and the fault/symptom lookup already existed and were
+        already tested). Reading the backend and the web app's
+        <span class="mono">FieldVisitsPage.tsx</span> reference implementation first
+        caught two things worth fixing before any of this ran against a real backend:
+        the mobile <span class="mono">TechnicianVisit</span> type's warranty status had
+        been guessed ahead of time as three long values — the backend's real enum only
+        has <span class="mono">'IW' | 'OOW'</span> — and each fault/symptom row is one
+        fault+symptom <i>pair</i>, not two independent lists, so the mobile picker
+        selects a whole pair by description rather than asking a technician to type
+        exact codes on a phone.
+      </p>
+      <p>
+        Built: Serial number + warranty section (badge, supplier, period, re-capture
+        with a clears-fault-symptom warning matching the backend's real behavior) and
+        Fault/Symptom section (locked until S/N is captured; a new searchable
+        <span class="mono">FaultSymptomPicker</span> modal in place of free-text code
+        entry). <span class="mono">test-master</span> coverage: 29/29 tests (was 23),
+        <span class="mono">tsc --noEmit</span> clean — isolated cloud sandbox. Committed
+        as <span class="mono">88fdb73</span>.
+      </p>
+      <p>
+        No <span class="mono">the-fool</span> pre-mortem run for this phase — deliberate,
+        not skipped: it reuses already-tested backend endpoints and touches none of the
+        scope doc's still-open questions (offline sync, GPS handling), unlike the
+        offline-queue/financial-consequence surface the app's one earlier pre-mortem was
+        scoped around.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Built and tested — Phase 3 of 5 complete, not yet live-device-verified</span>
+    </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Extra Role Access (2026-09-03): admin can delegate a role's access to any user</h3>
       <p>
         A second, complementary admin capability on top of User Management: an admin can

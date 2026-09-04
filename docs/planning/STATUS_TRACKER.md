@@ -3332,6 +3332,56 @@ screen correctly flipped to `ON SITE` with "Visit started Fri, Sep 4, 10:50 AM" 
 
 ---
 
+## Mobile Phase 3 (2026-09-04): Serial number + warranty capture, Fault/Symptom capture
+
+Built right after Phase 2's live verification, per the scope doc's phased order (§7.3) -
+both capture steps online-first, same category as Phase 2, on the same appointment
+detail screen. No new backend work needed - both capture endpoints
+(`POST /technician/visits/:id/serial-number`, `.../fault-symptom`) and the fault/symptom
+lookup (`GET /master-data/fault-symptoms`) already existed and were already tested.
+
+Read the backend service/DTOs and the web app's `FieldVisitsPage.tsx` (the existing
+reference implementation of this same flow) before writing any mobile code, per usual
+practice. That read caught two things worth fixing: (1) the mobile `TechnicianVisit`
+type's `warrantyStatus` had been guessed ahead of Phase 3 as
+`'IN_WARRANTY' | 'OUT_OF_WARRANTY' | 'EXTENDED_WARRANTY'` - the backend's actual enum
+only has `'IW' | 'OOW'` (`src/technician/entities/technician-visit.entity.ts`), so this
+would have silently mismatched every real API response the moment this phase started
+reading the field. Fixed before it ever ran against a real backend. (2) each
+`GET /master-data/fault-symptoms` row is one fault+symptom **pair**, not two independent
+lists - the web app's version uses two free-text inputs anyway, but a technician on a
+phone can't reasonably type exact code strings, so the mobile version instead builds a
+searchable picker (new `FaultSymptomPicker` modal component) that selects one whole
+pair by its human-readable descriptions.
+
+Built this phase: Serial number + warranty section (input, capture, IW/OOW badge via
+`StatusPill` extended with a `label` override + new warranty colors matching the web
+app's `StatusBadge`, supplier, warranty period, re-capture with a clears-fault-symptom
+warning matching the backend's real behavior) and Fault/Symptom section (locked until
+S/N is captured, per the backend's own gate; opens `FaultSymptomPicker` with
+client-side search over fault/symptom descriptions; confirms via a separate Capture
+button rather than submitting on tap, for consistency with the rest of the app and to
+avoid an accidental submit).
+
+**No the-fool pre-mortem run for this phase** - deliberate call, not an oversight:
+Phase 3 reuses already-designed, already-tested backend endpoints (zero new backend
+surface), and none of the scope doc's still-open §8 questions (offline sync semantics,
+GPS/permission handling) touch it - it's in the same "online-first, low architectural
+risk" category the already-completed Phase 2 was, not the offline-queue/financial-
+consequence surface the mobile app's one earlier pre-mortem (§9) was scoped around.
+
+**Verified:** 29/29 tests (was 23), `tsc --noEmit` clean - both in the isolated cloud
+sandbox. `mobile/README.md`'s testing walkthrough extended with a "Testing Phase 2 & 3"
+section covering both capture flows end-to-end on a real device. Committed as
+`88fdb73`.
+
+Next: Phase 4 (offline queue layer, retrofitted onto Phases 2-3's actions) - the scope
+doc flags an unresolved question to settle first (§8): what should the sync engine do
+when a queued item fails to replay for a reason unrelated to reassignment (e.g. the
+appointment was cancelled while the technician was offline)?
+
+---
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet

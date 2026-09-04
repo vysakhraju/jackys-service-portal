@@ -11,10 +11,14 @@ against the existing, already-tested `src/technician` API (`TechnicianController
 the web app's `FieldVisitsPage.tsx` is a working reference implementation of the same
 flow. See the scope doc for the full phased build order.
 
-- **Phase 1 (this phase):** app skeleton, JWT login (same credentials/backend as web),
-  Today's Schedule (read-only).
-- **Phase 2-5:** Start Visit + GPS, Serial Number + Fault/Symptom capture, an offline
-  action queue, then Need Spare + Complete/QC-handoff. Not built yet.
+- **Phase 1:** app skeleton, JWT login (same credentials/backend as web), Today's
+  Schedule (read-only).
+- **Phase 2:** Start Visit + GPS capture (appointment detail screen, blocks until a
+  real GPS fix is obtained).
+- **Phase 3 (latest):** Serial number + warranty capture, Fault/Symptom capture - both
+  on the same appointment detail screen, both online-first like Phase 2.
+- **Phase 4-5:** an offline action queue, then Need Spare + Complete/QC-handoff. Not
+  built yet.
 
 ## Running it
 
@@ -157,6 +161,36 @@ see the appointment you created and assigned in step 3. Check:
 
 Ctrl+C in the Expo terminal stops Metro; Ctrl+C in the backend terminal stops the
 backend. Both are safe to stop and restart independently.
+
+## Testing Phase 2 & 3 on the appointment detail screen
+
+From Today's Schedule (step 7 above), tap any appointment card to open its detail
+screen - this is where Phase 2 (Start Visit) and Phase 3 (Serial number/warranty,
+Fault/Symptom) live. The backend and Expo dev server from steps 1-6 above stay running
+for this - no extra setup needed.
+
+- **Start Visit:** tap the button, allow the location permission prompt when it
+  appears. A denied prompt shows a retry message (or an "Open Settings" link if you'd
+  previously denied it permanently) rather than silently failing - this app has no
+  manual-entry fallback for GPS, by design (see
+  `docs/planning/MOBILE_APP_SCOPE_v1.md` §8). Success flips the card to show "Visit
+  started" with a timestamp.
+- **Serial number + warranty:** type a serial number (a real one from your seeded
+  `WarrantyMaster` data returns `In Warranty`; anything else returns `Out of
+  Warranty` - see `docs/testing/TESTING_GUIDE.md` §5a/§7 for how that data got seeded)
+  and tap Capture. The badge, supplier, and warranty period appear immediately from
+  the response. Re-capturing is allowed at any time but clears whatever fault/symptom
+  was already recorded below - the backend enforces this, the app just tells you
+  about it first.
+- **Fault + symptom:** only enabled once a serial number is captured (matches the
+  backend's own gate). Tap "Choose fault / symptom" to open a searchable list pulled
+  from `GET /master-data/fault-symptoms` - each row is one fault+symptom *pair* (e.g.
+  "Not cooling" / "No power to unit"), not two separate dropdowns, since that's how
+  the backend actually models it. Pick one, then tap Capture.
+
+If the list in the picker is empty, your seeded master data doesn't have any active
+fault/symptom entries yet - see `docs/testing/TESTING_GUIDE.md` for seeding master
+data via `POST /master-data/fault-symptoms` or the bulk import endpoint.
 
 ## Automated tests only (no backend/phone needed)
 
