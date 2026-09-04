@@ -3250,6 +3250,14 @@ reintroduce this. (Two earlier 401/409 hiccups during the same testing session w
 user-side Swagger workflow issues, not code bugs - see `mobile/README.md`'s testing
 walkthrough, which already covers the Authorize step and service-centre capacity setup.)
 
+**Phase 1 is now confirmed live end-to-end** on a real Android emulator after the fix
+above: login with a seeded `TECHNICIAN_FIELD` account succeeded, and Today's Schedule
+correctly showed a real assigned appointment (after also catching a stale placeholder
+year - `2024` instead of `2026` - in the test appointment's `scheduledAt`, fixed via
+`PUT /appointments/:id`, not a code issue). This is the first mobile-phase code to run
+outside the cloud sandbox/CI and it holds up - login, session, and the schedule read
+path are solid going into Phase 2.
+
 Next: Phase 2 (Start Visit + GPS capture, online-only) - see
 `docs/planning/MOBILE_APP_SCOPE_v1.md` §7 for the full phased build order.
 
