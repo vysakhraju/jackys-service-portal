@@ -3324,6 +3324,12 @@ Your locally running backend (`npm run start:dev`) auto-restarts on file changes
 should already be running the fix - retry `assign-technician` on your current test
 appointment and it should now succeed.
 
+**Confirmed - live-verified end-to-end on a real Android device.** The user retried
+`assign-technician` on a fresh test appointment after the fix and it succeeded; Start
+Visit then worked in the app itself - permission prompt, GPS fix captured, and the
+screen correctly flipped to `ON SITE` with "Visit started Fri, Sep 4, 10:50 AM" and
+"Location captured". **Phase 2 is now fully live-verified**, same bar as Phase 1.
+
 ---
 
 ## Open items / blockers (from planning docs, still unresolved)
