@@ -3439,6 +3439,18 @@ actual machine. `mobile/README.md`'s testing walkthrough extended with an offlin
 testing section (airplane-mode toggle, since this environment can't simulate real
 device connectivity loss directly). Committed as `c2fb5af`.
 
+**Confirmed - live-verified on a real device.** The user walked through the
+`mobile/README.md` offline-mode testing steps (airplane-mode toggle on Start Visit /
+serial number / fault-symptom capture, reconnect, resync) and reported it working.
+Along the way, hit an unrelated `409 Conflict "Service centre at capacity (0/0)"` while
+creating a fresh test appointment via Swagger - not a Phase 4 bug, a pre-existing gotcha
+in appointment setup: the service centre's `schedule` had `maxJobsPerDay: 0` for that
+weekday (likely from submitting the create-service-centre Swagger example as-is, which
+shows `maxJobsPerDay: 0` for Sunday). Fixed by setting a real `maxJobsPerDay` via `PUT
+/master-data/service-centres/{id}`; now documented in `mobile/README.md`'s setup steps
+so it doesn't trip up testing again. **Phase 4 is now live-verified**, same bar as
+Phases 1-2.
+
 Next: Phase 5 (Need Spare + Complete/QC-handoff) - needs new backend endpoints per §4,
 plus the still-open reassignment guardrail from §9 finding #3 (blocking technician
 reassignment while an active spare-parts reservation is held).

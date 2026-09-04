@@ -91,6 +91,14 @@ Open `http://localhost:3000/api/docs`, then:
   `docs/testing/TESTING_GUIDE.md` §5b.
 - Already created one with `technicianId` in the body by mistake? No need to start over
   - just run this step now; it fixes the status in place.
+- Getting `409 Conflict "Service centre at capacity (0/0)"` on `POST /appointments`?
+  That service centre's `schedule` has an entry for that weekday with
+  `maxJobsPerDay: 0` (easy to end up with if the create-service-centre example body was
+  submitted as-is - its Sunday example shows `maxJobsPerDay: 0`). Fix: `PUT
+  /master-data/service-centres/{id}` (as SUPER_ADMIN/SERVICE_HEAD) with a real
+  `maxJobsPerDay` (e.g. 20) for that weekday, or just pick a `scheduledAt` on a weekday
+  that has no key at all in that service centre's `schedule` - a missing weekday falls
+  back to a default of 10 slots/day, only an explicit `0` blocks you.
 
 **4. Find your machine's LAN IP address** (Windows, any terminal)
 
