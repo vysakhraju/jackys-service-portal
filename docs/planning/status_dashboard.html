@@ -1326,6 +1326,43 @@
       <span class="resolved-tag" style="background:var(--success);">Built and tested — Phase 3 of 5 complete, not yet live-device-verified</span>
     </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Mobile Phase 4 (2026-09-04): Offline queue layer</h3>
+      <p>
+        Built right after Phase 3's live verification, per the scope doc's phased order —
+        "offline queue layer, retrofitted onto the actions from Phases 2-3". Before
+        building, resolved the one still-open design question from the pre-mortem (§9
+        finding #3) via <span class="mono">AskUserQuestion</span>: what should happen
+        when a queued item fails to replay for a reason unrelated to reassignment (e.g.
+        the appointment was cancelled while offline)? <b>Decided: surface a
+        plain-language error and let the technician decide</b> (dismiss or retry) —
+        never retried forever in the background, never silently routed to a supervisor
+        queue that doesn't exist yet.
+      </p>
+      <p>
+        Built a generic <span class="mono">QueuedAction</span> abstraction covering all
+        three Phase 2/3 write actions (Start Visit, Serial Number, Fault/Symptom),
+        persisted to on-device storage. Enqueuing dedups on
+        <span class="mono">{type, appointmentId}</span> — last write wins, per NFR-03.
+        Replay goes oldest-first across the whole queue. The engine tells a genuine
+        network failure (item stays silently pending) apart from a real backend
+        rejection (item is marked failed with the server's own message) — only the
+        second case is the "surface error, let technician decide" path above. One
+        app-wide provider keeps a single <span class="mono">NetInfo</span> subscription
+        and syncs on mount, on reconnect, and opportunistically on every enqueue, since
+        real connectivity can lag <span class="mono">NetInfo</span>'s last-known state.
+        Online behavior for all three actions is byte-for-byte unchanged from Phases 2-3.
+      </p>
+      <p>
+        <span class="mono">test-master</span> coverage: 63/63 tests (was 29) — 17 new
+        engine tests, 8 new provider/NetInfo integration tests (including a real
+        simulated reconnect-triggers-retry scenario), 9 new offline-branch tests on the
+        appointment detail screen. <span class="mono">tsc --noEmit</span> clean, both in
+        the isolated cloud sandbox and cross-checked on your actual machine. Committed as
+        <span class="mono">c2fb5af</span>.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Built and tested — Phase 4 of 5 complete, not yet live-device-verified</span>
+    </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Extra Role Access (2026-09-03): admin can delegate a role's access to any user</h3>
       <p>
         A second, complementary admin capability on top of User Management: an admin can
@@ -1407,16 +1444,21 @@
   <div class="section">
     <div class="next">
       <div>
-        <h3>Mobile app Phase 1 shipped (of 5). Customer portal next up after that — plus your own push</h3>
-        <h2>Field Technician app: login + schedule live, Phase 2 (Start Visit + GPS) next. Customer portal: polish what exists.</h2>
-        <p>Nothing is blocking. The <b>mobile app</b> (React Native/Expo) has real code now
-        — login and Today's Schedule, Phase 1 of the 5-phase build order in
-        <span class="mono">MOBILE_APP_SCOPE_v1.md</span> §7. Next up is Phase 2 (Start Visit
-        + GPS capture, online-only) once you've run it locally to confirm it boots on your
-        machine. <b>Extra Role Access</b> is live — an admin can grant any user another
-        role's access, time-boxed and previewed before confirming, on top of User
-        Management's account creation and role changes. The <b>customer portal</b> will get
-        a branding/visual polish pass on the existing no-login
+        <h3>Mobile app Phase 4 of 5 shipped. Phase 5 (Need Spare + Complete/QC-handoff) next up</h3>
+        <h2>Field Technician app: login, schedule, Start Visit, Serial Number/Fault-Symptom capture, and the offline queue are all built and tested. Phase 5 next, then live-device verification and your own push.</h2>
+        <p>Nothing is blocking. The <b>mobile app</b> (React Native/Expo) has now shipped
+        4 of the 5 phases in <span class="mono">MOBILE_APP_SCOPE_v1.md</span> §7: login +
+        Today's Schedule, Start Visit + GPS, Serial Number/warranty + Fault/Symptom
+        capture, and — as of this session — an offline queue layer retrofitted onto all
+        three write actions, so a technician with no signal can keep working and the app
+        syncs automatically once they're back online. Phases 1-2 are live-device-verified
+        on a real Android phone; Phases 3-4 are built and fully tested but still awaiting
+        the same live-device pass. Next up is Phase 5 (Need Spare + Complete/QC-handoff),
+        which needs new backend endpoints per §4 plus the still-open reassignment
+        guardrail from §9 finding #3. <b>Extra Role Access</b> is live — an admin can grant
+        any user another role's access, time-boxed and previewed before confirming, on top
+        of User Management's account creation and role changes. The <b>customer portal</b>
+        will get a branding/visual polish pass on the existing no-login
         <span class="mono">/track/:token</span> page rather than a full customer-login
         system — not started yet, queued behind the mobile app. <b>WhatsApp Business API</b>
         stays paused until the company creates its own WhatsApp Business account — not a

@@ -192,6 +192,38 @@ If the list in the picker is empty, your seeded master data doesn't have any act
 fault/symptom entries yet - see `docs/testing/TESTING_GUIDE.md` for seeding master
 data via `POST /master-data/fault-symptoms` or the bulk import endpoint.
 
+## Testing Phase 4 (offline queue) on a real device
+
+This is the one thing that can't be verified from an automated test alone or from this
+environment - it needs a real phone actually losing connectivity. Steps:
+
+1. With the backend and Expo dev server running and the app open on the appointment
+   detail screen (same starting point as the Phase 2/3 walkthrough above), turn on
+   **Airplane Mode** on the phone. You should see the offline banner appear near the
+   top of the screen.
+2. Try any one of the three actions - Start Visit, capture a serial number, or capture
+   a fault/symptom. Instead of the normal spinner/error you'd see online, the screen
+   should immediately show a "Queued - will sync as soon as you're back online" message
+   in place of that action's button/form, and the offline banner's summary line should
+   update to reflect a queued item.
+3. Turn Airplane Mode back **off**. Within a few seconds the app should sync
+   automatically (no manual "retry" tap needed) - the queued message should clear and
+   the screen should update to show the action actually took effect (e.g. "Visit
+   started ...", the serial number's warranty badge, the fault/symptom you picked).
+4. To see the failure path: queue an action offline for an appointment you then cancel
+   or otherwise make invalid from another session/tab while still offline, then
+   reconnect. The item should surface as **failed** in the offline banner with the
+   backend's own error message and Retry/Discard buttons, rather than disappearing
+   silently or retrying forever - tap Discard to drop it, or fix the underlying issue
+   and tap Retry.
+5. You can queue more than one action before reconnecting (e.g. Start Visit on one
+   appointment, then a serial number capture on another) - they should all sync in the
+   order you queued them once you're back online.
+
+Killing and reopening the app while items are still queued is also worth trying once -
+the queue is persisted to on-device storage, so it should survive an app restart and
+pick up exactly where it left off.
+
 ## Automated tests only (no backend/phone needed)
 
 ```bash

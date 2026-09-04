@@ -3382,6 +3382,69 @@ appointment was cancelled while the technician was offline)?
 
 ---
 
+## Mobile Phase 4 (2026-09-04): Offline queue layer
+
+Built right after Phase 3's live verification, per the scope doc's phased order (§7.4) -
+"offline queue layer, retrofitted onto the actions from phases 2-3 (spike first, per
+§5)". Before building, resolved the one still-open design question from §8/§9 finding
+#3 via `AskUserQuestion`: what should happen when a queued item fails to replay for a
+reason unrelated to reassignment (e.g. the appointment was cancelled while the
+technician was offline)? **Decided: surface a plain-language error and let the
+technician decide (dismiss or retry)** - not retried forever in the background, and not
+silently routed to a supervisor queue (there is no supervisor-review surface for this
+today, and building one wasn't in scope). Recorded in
+`docs/planning/MOBILE_APP_SCOPE_v1.md` §8.
+
+Built a generic `QueuedAction` abstraction (`src/lib/offlineQueue.ts`) covering the
+three Phase 2/3 write actions (Start Visit, Serial Number capture, Fault/Symptom
+capture), persisted to `AsyncStorage`. Enqueuing dedups on `{type, appointmentId}` -
+"last write wins" applied client-side before the item ever reaches the server, per
+NFR-03. Replay sorts the whole queue oldest-first across all appointments/action types,
+not grouped by type, matching §5. The engine distinguishes a genuine network failure
+(the request never reached the backend - item stays silently `pending`, and the run
+stops there rather than hammering the rest of the queue for the same reason) from a
+real backend rejection (item is marked `failed` with the server's own error message and
+the run continues to the next item) - only the second case is the "surface error, let
+technician decide" path from the design decision above.
+
+`src/context/OfflineQueueContext.tsx` is the single app-wide provider - one `NetInfo`
+subscription, one in-memory mirror of the queue, so the schedule screen's banner and
+the appointment detail screen's enqueue calls both see the same state instantly. Syncs
+on mount, on every NetInfo reconnect event, and opportunistically on every `enqueue()`
+call itself - real connectivity can lag `NetInfo`'s last-known state by a beat, and a
+sync attempted while genuinely offline is harmless (the network-failure branch just
+leaves the item pending). The screen's own `isOnline` check before calling `enqueue()`
+is purely a UX shortcut (skip a pointless spinner), not a correctness gate.
+
+`src/components/OfflineBanner.tsx` shows queue status on both the schedule screen and
+the appointment detail screen - a collapsed summary line, expandable to show failed
+items (with the server's own error message plus Retry/Discard) and pending items.
+`src/app/appointment/[id].tsx`'s three write actions (Start Visit, capture serial
+number, capture fault/symptom) now branch on `isOnline`: online behaves exactly as
+Phases 2/3 shipped it (unchanged), offline enqueues instead of calling the mutation and
+shows a queued/failed state in place of the normal form or button.
+
+Packages added: `@react-native-async-storage/async-storage@2.2.0` (queue persistence)
+and `@react-native-community/netinfo@12.0.1` (connectivity detection) - both confirmed
+against the Expo SDK 57 versioned docs per `AGENTS.md` before installing.
+
+**Verified:** 63/63 tests (was 29) - 17 new tests on the queue engine itself
+(dedup, replay ordering, the network-vs-backend-failure split, retry/dismiss), 8 new
+integration tests on the real provider wired to a mocked `NetInfo` (including an actual
+simulated reconnect-triggers-retry scenario, not just the engine in isolation), and 9
+new tests on the appointment detail screen's offline branches (enqueue instead of
+mutate, and each of the three queued/failed display states) - `tsc --noEmit` clean, all
+confirmed in the isolated cloud sandbox and cross-checked with a clean `tsc` run on your
+actual machine. `mobile/README.md`'s testing walkthrough extended with an offline-mode
+testing section (airplane-mode toggle, since this environment can't simulate real
+device connectivity loss directly). Committed as `c2fb5af`.
+
+Next: Phase 5 (Need Spare + Complete/QC-handoff) - needs new backend endpoints per §4,
+plus the still-open reassignment guardrail from §9 finding #3 (blocking technician
+reassignment while an active spare-parts reservation is held).
+
+---
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
