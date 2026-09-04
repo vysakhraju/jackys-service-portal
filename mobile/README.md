@@ -169,8 +169,11 @@ src/
     _layout.tsx         root layout: QueryClientProvider + AuthProvider + auth gate
     login.tsx            unauthenticated screen
     index.tsx             Today's Schedule - the authenticated home screen
+  __tests__/
+    app/                 tests for src/app/* screens (see note below - NOT inside src/app/)
   context/
     AuthContext.tsx      session state (mirrors the web app's src/lib/auth.tsx)
+    AuthContext.test.tsx
   lib/
     api.ts                axios instance + 401-refresh interceptor (mirrors web's src/lib/api.ts)
     tokenStorage.ts       expo-secure-store wrapper (Keychain/Keystore, not AsyncStorage)
@@ -183,6 +186,15 @@ Auth and API client code deliberately mirror the web app's `src/lib/auth.tsx` /
 `src/lib/api.ts` file-for-file where the platform allows it (SecureStore is async where
 localStorage isn't - that's the one real difference) - anyone who has worked on the web
 app already knows how this half of the mobile app works.
+
+**Important: never put a `*.test.tsx` file directly inside `src/app/`.** expo-router
+scans that folder recursively to build the route table, and it only excludes
+`+api`/`+html`/`+native-intent` files - not test files. A test file left in `src/app/`
+gets bundled into the real app and breaks Android/iOS bundling (it imports
+`@testing-library/react-native`, which needs Node's `console` module - not available in
+the native runtime). This is why `src/app/`'s screen tests live in `src/__tests__/app/`
+instead, one directory outside the router's scan root - keep any new screen tests there
+too.
 
 See `AGENTS.md` before making SDK-version-sensitive changes (navigation, secure
 storage, etc.) - Expo's APIs move fast enough that training-data assumptions about
