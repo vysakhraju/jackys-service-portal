@@ -73,12 +73,20 @@ Open `http://localhost:3000/api/docs`, then:
 - `POST /appointments` - create one with a `scheduledAt` of today (or the next couple of
   days), and copy the returned `id`. Body needs `type`, `customerType`, `customerName`,
   `customerPhone`, `scheduledAt`, `serviceCentreId`, `brand`, `modelNumber` (see
-  `docs/testing/TESTING_GUIDE.md` §5a for a ready-to-paste example body).
+  `docs/testing/TESTING_GUIDE.md` §5a for a ready-to-paste example body). **Leave
+  `technicianId` out of this body**, even though Swagger's "Try it out" auto-fills it as
+  part of the full example schema - setting it here does NOT move the appointment out of
+  `SCHEDULED` status (only the next step does), and Start Visit will reject a
+  `SCHEDULED` appointment with "Can only mark on-site for confirmed/assigned
+  appointments." Delete that field from the body, or leave it blank, before executing.
 - `PUT /appointments/{id}/assign-technician` - body `{ "technicianId": "<user id from
-  step 2>" }`. This is the step that makes it show up in
-  `GET /technician/schedule`, which is what the mobile app's Today's Schedule screen
-  calls - skipping it means you'll sign in to an empty schedule. Full details:
+  step 2>" }`. This is the step that actually moves status to `TECHNICIAN_ASSIGNED` and
+  makes the appointment show up in `GET /technician/schedule`, which is what the mobile
+  app's Today's Schedule screen calls, AND what Start Visit requires - skipping it means
+  either an empty schedule or a rejected Start Visit. Full details:
   `docs/testing/TESTING_GUIDE.md` §5b.
+- Already created one with `technicianId` in the body by mistake? No need to start over
+  - just run this step now; it fixes the status in place.
 
 **4. Find your machine's LAN IP address** (Windows, any terminal)
 
