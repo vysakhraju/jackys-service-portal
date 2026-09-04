@@ -309,6 +309,7 @@ export class AppointmentsService {
       technicianId,
       appointment.scheduledAt,
       appointment.estimatedDurationMinutes || 60,
+      id,
     );
     if (!techAvailable) {
       throw new ConflictException('Technician not available at this time');
@@ -379,20 +380,31 @@ export class AppointmentsService {
     technicianId: string,
     scheduledAt: Date,
     durationMinutes: number = 60,
+    excludeAppointmentId?: string,
   ): Promise<boolean> {
     const start = new Date(scheduledAt);
     start.setMinutes(start.getMinutes() - 15);
     const end = new Date(scheduledAt);
     end.setMinutes(end.getMinutes() + durationMinutes + 15);
 
-    const conflicts = await this.appointmentRepository
+    const query = this.appointmentRepository
       .createQueryBuilder('apt')
       .where('apt.technicianId = :technicianId', { technicianId })
       .andWhere('apt.status IN (:...statuses)', {
         statuses: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED, AppointmentStatus.ON_SITE],
       })
-      .andWhere('apt.scheduledAt BETWEEN :start AND :end', { start, end })
-      .getCount();
+      .andWhere('apt.scheduledAt BETWEEN :start AND :end', { start, end });
+
+    // Assigning (or re-assigning) a technician on an appointment that already carries
+    // this same technicianId - e.g. one created with technicianId set directly, then
+    // later confirmed via assignTechnician() - would otherwise conflict with itself: its
+    // own row already matches technicianId/status/window above. Exclude it explicitly
+    // rather than relying on status/timing to happen not to overlap.
+    if (excludeAppointmentId) {
+      query.andWhere('apt.id != :excludeAppointmentId', { excludeAppointmentId });
+    }
+
+    const conflicts = await query.getCount();
 
     return conflicts === 0;
   }

@@ -346,6 +346,27 @@ describe('AppointmentsService', () => {
 
       await expect(service.assignTechnician('apt-1', 'tech-1', 'user-1')).rejects.toThrow(ConflictException);
     });
+
+    it('does not self-conflict when the appointment already carries the target technicianId (e.g. set at creation)', async () => {
+      // Regression test: an appointment created with technicianId set directly in the
+      // POST body already carries that id and a conflict-check-eligible status
+      // (SCHEDULED). Its own row would match checkTechnicianAvailability's query on
+      // technicianId + status + the scheduledAt window unless explicitly excluded -
+      // assignTechnician must pass the appointment's own id through to exclude it.
+      appointmentRepository.findOne.mockResolvedValue(appointment({ technicianId: 'tech-1' }));
+      userRepository.findOne.mockResolvedValue({ id: 'tech-1', role: { name: 'TECHNICIAN_FIELD' } });
+      const qb = buildQb({ getCount: 0 });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.assignTechnician('apt-1', 'tech-1', 'user-1');
+
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.id != :excludeAppointmentId', {
+        excludeAppointmentId: 'apt-1',
+      });
+      expect(appointmentRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ technicianId: 'tech-1', status: AppointmentStatus.TECHNICIAN_ASSIGNED }),
+      );
+    });
   });
 
   describe('checkCapacity', () => {
@@ -412,6 +433,26 @@ describe('AppointmentsService', () => {
       const result = await service.checkTechnicianAvailability('tech-1', new Date());
 
       expect(result).toBe(false);
+    });
+
+    it('adds an id-exclusion clause to the query when excludeAppointmentId is passed', async () => {
+      const qb = buildQb({ getCount: 0 });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.checkTechnicianAvailability('tech-1', new Date(), 60, 'apt-1');
+
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.id != :excludeAppointmentId', {
+        excludeAppointmentId: 'apt-1',
+      });
+    });
+
+    it('does not add the id-exclusion clause when excludeAppointmentId is omitted', async () => {
+      const qb = buildQb({ getCount: 0 });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.checkTechnicianAvailability('tech-1', new Date());
+
+      expect(qb.andWhere).not.toHaveBeenCalledWith('apt.id != :excludeAppointmentId', expect.anything());
     });
   });
 
