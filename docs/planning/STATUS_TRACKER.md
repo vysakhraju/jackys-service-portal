@@ -7,7 +7,7 @@ clean on both sides. Mobile app (React Native) v1 scoping is also done - see
 `docs/planning/MOBILE_APP_SCOPE_v1.md` - no mobile code written yet, scoping only)
 **Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `451ca7c`)
-**GitHub:** https://github.com/vysakhraju/jackys-service-portal — `main`/`master` synced locally at `451ca7c`, your machine has already pushed through `5f52aaa` (confirmed via `git fetch`) - check `git log origin/main..main` for the current count once you've pushed again (this header trails the true latest by one commit once the next docs edit lands, tolerated since Phase 2, see Standing Practices)
+**GitHub:** https://github.com/vysakhraju/jackys-service-portal — local `main`/`master` at `a0f99c0` (Mobile Phase 2 self-conflict fix). Not yet pushed - I have no git push credentials in the device bridge shell (`fatal: could not read Username for 'https://github.com'`), so **run `git push origin main` and `git push origin master` yourself** to bring GitHub up to date. Last confirmed push was through `5f52aaa`; everything since (Mobile Phase 1 fixes, Mobile Phase 2 build, this bug fix) is local-only.
 **Next session:** Extra Role Access is done (see the write-up below) - an admin can
 now delegate a role's full access to a user without changing their real role (e.g.
 cover a Technical Team Leader's access on a capable CCE while the TL is on leave),
@@ -3260,6 +3260,69 @@ path are solid going into Phase 2.
 
 Next: Phase 2 (Start Visit + GPS capture, online-only) - see
 `docs/planning/MOBILE_APP_SCOPE_v1.md` §7 for the full phased build order.
+
+---
+
+## Mobile Phase 2 (2026-09-04): Start Visit + GPS capture
+
+Built per `docs/planning/MOBILE_APP_SCOPE_v1.md` §7's phased order, right after Phase 1
+was confirmed live. Open design question resolved before building: GPS capture **blocks**
+Start Visit until a real fix is obtained (your choice) - unlike the web app's
+`FieldVisitsPage.tsx`, which falls back to manual lat/lng entry when the browser denies
+geolocation, this app has no such fallback, matching the backend's `StartVisitDto`
+(`gpsLat`/`gpsLng` both mandatory numbers, no null/best-effort path).
+
+Built this phase: appointment detail screen (`src/app/appointment/[id].tsx`, reached by
+tapping a card on Today's Schedule), `expo-location` wired for foreground permission +
+a single high-accuracy fix (15s timeout), a `getCurrentLocationOrBlock()` helper with a
+discriminated result type covering permission-denied / permission-denied-permanently
+(with an "Open Settings" escape hatch) / unavailable / timeout, and the Start Visit
+button itself calling `POST /technician/visits/:appointmentId/start`. A shared
+`StatusPill` component was extracted from the schedule screen for reuse here.
+
+**Verified:** 23/23 tests (`jest-expo`), `tsc --noEmit` clean, both in the isolated cloud
+sandbox. Two real bugs found and fixed during test-writing, not just papered over: (1) an
+unhandled promise rejection from the Start Visit mutation - fixed with a try/catch around
+`mutateAsync` in the actual component, a production bug, not just test hygiene; (2)
+react-query mutation cache entries run their own 5-minute GC timer under a separate
+`defaultOptions.mutations` namespace from `queries` (already handled since Phase 1) -
+root-caused by reading `@tanstack/query-core`'s source, fixed by adding
+`mutations: { gcTime: 0 }` alongside `queries: { gcTime: 0 }` in any test `QueryClient`
+that exercises a `useMutation` (needed by every mutation-based screen test from here on,
+not just this one). Committed as `c34f4d5`.
+
+**2026-09-04 - live testing hit the SCHEDULED-vs-TECHNICIAN_ASSIGNED gotcha again.**
+Setting `technicianId` directly in the `POST /appointments` create body (easy to do by
+accident - Swagger's "Try it out" auto-fills it from the DTO's example) does **not**
+advance status past `SCHEDULED`; only `PUT /appointments/:id/assign-technician` does, and
+Start Visit requires `CONFIRMED`/`TECHNICIAN_ASSIGNED`/`SCHEDULED`-with-a-real-assign.
+This had already tripped up Phase 1 testing once - documented properly this time in
+`mobile/README.md` (`2c95141`) with an explicit "already created one with `technicianId`
+in the body by mistake? No need to start over" fix-in-place note, since it's now happened
+twice.
+
+**2026-09-04 - real backend bug found via live testing: assign-technician self-conflict.**
+Retrying `assign-technician` per the note above then hit a **new**, genuine `409
+Conflict "Technician not available at this time"` - not a workflow issue this time.
+Root cause: `assignTechnician()` calls `checkTechnicianAvailability()` (±15min window
+around `scheduledAt`, checking existing appointments for the same technician in
+`SCHEDULED`/`CONFIRMED`/`TECHNICIAN_ASSIGNED`/`ON_SITE`) without excluding the
+appointment's own row. An appointment that already carries the target `technicianId`
+(set at creation - exactly the pattern the note above tells you how to fix) and a status
+already in that list matches its own row and self-conflicts. Confirmed via the user's own
+`GET /appointments?technicianId=...` listing (8 appointments) - manually checked none of
+the other 7 fell inside the target appointment's conflict window, ruling out a genuine
+double-booking. Fixed by threading an optional `excludeAppointmentId` through
+`checkTechnicianAvailability()`, added as an `apt.id != :excludeAppointmentId` clause;
+`assignTechnician()` now passes its own id. `update()`'s technician-reassignment path
+is unaffected - it already guards on `technicianId !== appointment.technicianId`, so it
+was never calling into this bug. Added regression tests for both the exclude-self
+scenario and the new parameter itself. **Verified:** 606/606 backend tests (was 604),
+`tsc -b` clean, both in the isolated cloud sandbox. Committed as `a0f99c0`.
+
+Your locally running backend (`npm run start:dev`) auto-restarts on file changes, so it
+should already be running the fix - retry `assign-technician` on your current test
+appointment and it should now succeed.
 
 ---
 

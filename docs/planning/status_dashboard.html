@@ -1231,6 +1231,59 @@
       <span class="resolved-tag" style="background:var(--success);">Live-verified end-to-end — Phase 1 of 5 complete</span>
     </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Mobile Phase 2 (2026-09-04): Start Visit + GPS capture</h3>
+      <p>
+        Built right after Phase 1 was confirmed live, per the phased order in
+        <span class="mono">docs/planning/MOBILE_APP_SCOPE_v1.md</span> §7. Open design
+        question resolved first: GPS capture <b>blocks</b> Start Visit until a real fix is
+        obtained (your call) — unlike the web app's manual lat/lng fallback, this app has
+        none, matching the backend's <span class="mono">StartVisitDto</span> (both
+        coordinates mandatory, no best-effort path). New appointment detail screen
+        (<span class="mono">src/app/appointment/[id].tsx</span>), <span class="mono">expo-location</span>
+        wired for foreground permission + a single high-accuracy fix (15s timeout, with a
+        permission-denied / permanently-denied / unavailable / timeout result type and an
+        "Open Settings" escape hatch), and the Start Visit button calling
+        <span class="mono">POST /technician/visits/:appointmentId/start</span>.
+      </p>
+      <p>
+        <span class="mono">test-master</span> coverage: 23/23 tests, <span class="mono">tsc --noEmit</span>
+        clean — both in the isolated cloud sandbox. Two real bugs caught while writing
+        tests rather than papered over: an unhandled rejection from the Start Visit
+        mutation (fixed with a try/catch in the component itself — a production bug, not
+        just test hygiene), and react-query mutation cache entries running their own
+        5-minute GC timer under a separate namespace from queries (root-caused by reading
+        library source; fixed with <span class="mono">mutations: { gcTime: 0 }</span> in
+        the test <span class="mono">QueryClient</span>, needed by every future
+        mutation-based screen test). Committed as <span class="mono">c34f4d5</span>.
+      </p>
+      <p>
+        <b>2026-09-04 — live testing hit two real issues.</b> First, the
+        SCHEDULED-vs-TECHNICIAN_ASSIGNED gotcha from Phase 1 recurred: setting
+        <span class="mono">technicianId</span> directly in the create body (easy to do by
+        accident via Swagger's auto-fill) doesn't advance status past
+        <span class="mono">SCHEDULED</span> — only <span class="mono">assign-technician</span>
+        does. Documented properly this time (<span class="mono">2c95141</span>) since it's
+        now happened twice. Second, retrying <span class="mono">assign-technician</span>
+        then hit a genuine backend bug: a <span class="mono">409 "Technician not available
+        at this time"</span> even with zero real double-bookings. Root cause —
+        <span class="mono">assignTechnician()</span> checked technician availability
+        without excluding the appointment's own row, so an appointment that already
+        carried the target technician's id (set at creation) and an in-range status
+        matched and conflicted with <i>itself</i>. Confirmed via the user's own appointment
+        listing before fixing. Fixed with an <span class="mono">excludeAppointmentId</span>
+        parameter threaded through the availability check, plus regression tests for both
+        the exclude-self scenario and the parameter itself.
+      </p>
+      <p>
+        <span class="mono">test-master</span> re-verification: 606/606 backend tests (was
+        604), <span class="mono">tsc -b</span> clean — isolated cloud sandbox. Committed as
+        <span class="mono">a0f99c0</span>. Your locally running backend auto-restarts on
+        file changes, so the fix should already be live — retry
+        <span class="mono">assign-technician</span> on your test appointment.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Built, live-tested, one real backend bug found and fixed — Phase 2 of 5 complete</span>
+    </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Extra Role Access (2026-09-03): admin can delegate a role's access to any user</h3>
       <p>
         A second, complementary admin capability on top of User Management: an admin can
