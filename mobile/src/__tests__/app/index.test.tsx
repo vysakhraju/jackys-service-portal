@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { useAuth } from '../context/AuthContext';
-import { getMySchedule } from '../lib/technicianApi';
-import ScheduleScreen from './index';
-import type { ScheduledAppointment } from '../lib/types';
+import { useAuth } from '../../context/AuthContext';
+import { getMySchedule } from '../../lib/technicianApi';
+import ScheduleScreen from '../../app/index';
+import type { ScheduledAppointment } from '../../lib/types';
 
-jest.mock('../context/AuthContext', () => ({ useAuth: jest.fn() }));
-jest.mock('../lib/technicianApi', () => ({ getMySchedule: jest.fn() }));
+jest.mock('../../context/AuthContext', () => ({ useAuth: jest.fn() }));
+jest.mock('../../lib/technicianApi', () => ({ getMySchedule: jest.fn() }));
 
 const mockedUseAuth = useAuth as jest.Mock;
 const mockedGetMySchedule = getMySchedule as jest.Mock;
