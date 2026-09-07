@@ -3774,6 +3774,7 @@ omission - fixed to check for the absence of an actual table column instead.
 **Verified:** `tsc -b` clean, **355/355 frontend tests passing** (324 + 31 new), confirmed
 in the isolated cloud sandbox and cross-checked on your actual machine (`tsc -b` clean
 there too). No backend changes, so the backend suite is untouched at 651/651.
+Committed as `41215e2`.
 
 ---
 
