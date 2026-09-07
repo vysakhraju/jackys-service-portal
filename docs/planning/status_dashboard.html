@@ -1730,26 +1730,69 @@
       </p>
       <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
     </div>
+
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Mobile Need Spare fix + Team Leader review screen + live pop-up (2026-09-07)</h3>
+      <p>
+        Live-verifying Mobile Phases 3-4 on your device surfaced a real bug: after
+        requesting a spare part on-site, navigating away from the appointment and back made
+        the request look like it had never been sent - <span class="mono">needSpareSentThisSession</span>
+        was local React state that a screen remount always reset, even though the real
+        <span class="mono">PENDING_REVIEW</span> reservation was still sitting on the server.
+        Separately, there was genuinely no web screen to review a Need Spare request at all -
+        not even a listing endpoint. Fixed all three in one pass.
+      </p>
+      <p>
+        <b>Mobile:</b> <span class="mono">getOwnJobCard()</span> now returns
+        <span class="mono">{jobCard, spareRequest}</span> from the server, and the screen
+        derives "waiting for review" / "approved" / "rejected" from
+        <span class="mono">spareRequest.status</span> on every poll instead of local state -
+        it now survives remounts, and keeps polling while a request is pending so a Team
+        Leader's decision shows up on its own. <b>Web:</b> a new "Need Spare Requests" tab
+        under Workshop &amp; Inventory lists every pending request with Approve/Reject, and a
+        new <span class="mono">InventoryGateway</span> WebSocket pops a live toast for any
+        Team Leader/Service Head/Super Admin anywhere in the app the instant a new request
+        arrives, with a button straight to the review tab.
+      </p>
+      <div class="verified">
+        <span>658/658 backend tests</span>
+        <span>418/418 frontend tests</span>
+        <span>125/125 mobile tests</span>
+        <span>tsc clean (all 3)</span>
+      </div>
+      <ul style="margin:14px 0 0; padding-left:20px; font-size:14.5px;">
+        <li style="text-decoration:line-through; color:var(--ink-faint);">Fix mobile "forgotten request" bug</li>
+        <li style="text-decoration:line-through; color:var(--ink-faint);">Build Team Leader review screen (web)</li>
+        <li style="text-decoration:line-through; color:var(--ink-faint);">Live pop-up notification for reviewers</li>
+      </ul>
+      <p style="margin-top:12px;"><b>Pending for tomorrow:</b></p>
+      <div class="verified">
+        <span style="background:var(--pending-wash); color:var(--pending);">Mobile Phases 3-4 live-device pass</span>
+        <span style="background:var(--pending-wash); color:var(--pending);">Video-review follow-up (competitor system)</span>
+        <span style="background:var(--pending-wash); color:var(--pending);">Customer portal branding polish</span>
+        <span style="background:var(--pending-wash); color:var(--pending);"><span class="mono">git push</span> to remote</span>
+      </div>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+    </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Warranty Claims frontend shipped. The P2 roadmap tier is now fully built</h3>
-        <h2>Finance/Quality/Operational dashboards and Warranty Claims are all live now. What remains is the mobile Phases 3-4 live pass and confirming the second half of the WebSocket check.</h2>
-        <p>Nothing is blocking. Today's session found and fixed a real WebSocket CORS bug
-        (live-verified, the pill goes <span class="mono">Live</span>), closed the orphaned
-        <span class="mono">PENDING_REVIEW</span> Need Spare reservation gap (auto-reject on
-        QC approval, race-safe, independently QA'd), and shipped
-        <b>Frontend Phase 14</b> (BRD 18.2/18.3/18.4 report screens) and
-        <b>Frontend Phase 15</b> (Warranty Claims) - the last two deferred pieces of the P2
-        roadmap tier. <b>651/651 backend and 382/382 frontend tests passing</b>,
-        <span class="mono">tsc -b</span> clean on both. The mobile app's Phases 1-2 and 5
-        are live-device-verified; <b>Phases 3-4</b> are built, tested, and QA'd but still
-        awaiting that same live pass. The <b>customer portal</b> branding/visual polish pass
-        on the existing no-login <span class="mono">/track/:token</span> page hasn't started
-        yet. <b>WhatsApp Business API</b> stays paused until the company creates its own
-        account — not a technical blocker here. Still open: your own
+        <h3>Mobile Need Spare fix + review screen + live pop-up shipped</h3>
+        <h2>The Need Spare loop is closed end-to-end now - request, review, live notify. What remains is the mobile Phases 3-4 live pass, a video-review follow-up on a competitor system, and the customer portal polish pass.</h2>
+        <p>Nothing is blocking. Live-verifying Mobile Phases 3-4 on your device surfaced
+        the "forgotten request" bug and the missing review screen - both fixed and shipped
+        today, along with a live pop-up notification for reviewers. You tested the fix live
+        yourself and confirmed it works. <b>658/658 backend, 418/418 frontend, and 125/125
+        mobile tests passing</b>, <span class="mono">tsc</span> clean across all three. The
+        mobile app's Phases 1-2 and 5 are live-device-verified; <b>Phases 3-4</b> are built,
+        tested, and QA'd but still awaiting that same live pass. You're also planning to
+        share a video of a competitor system you were reviewing for purchase, for a
+        logic/feature review against this build. The <b>customer portal</b> branding/visual
+        polish pass on the existing no-login <span class="mono">/track/:token</span> page
+        hasn't started yet. <b>WhatsApp Business API</b> stays paused until the company
+        creates its own account — not a technical blocker here. Still open: your own
         <span class="mono">git push</span> (run
         <span class="mono">git log origin/main..main</span> yourself for the current count)
         and confirming a Job Card advanced in a second tab makes the Kanban board update
@@ -1761,7 +1804,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at a2a2428 — awaiting push from your machine</span>
+    <span>master + main synced locally at 3ada889 — awaiting push from your machine</span>
   </footer>
 
 </div>
