@@ -3826,6 +3826,7 @@ phantom rendering bug.
 unrelated `DeliveriesPage.test.tsx` failure confirmed flaky/pre-existing - passes in
 isolation, no file in that test or page was touched this phase). No backend changes, so
 the backend suite is untouched at 651/651.
+Committed as `a2a2428`.
 
 ---
 
