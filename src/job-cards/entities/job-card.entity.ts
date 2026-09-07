@@ -187,6 +187,14 @@ export class JobCard {
   @Column({ type: 'text', nullable: true })
   cancellationReason: string | null;
 
+  // Mobile Phase 5: the free-text note a field technician optionally leaves when tapping
+  // Complete on an on-site repair (TechnicianService.completeOnSiteRepair). Deliberately
+  // its own column rather than reusing snValidationNotes above - that field is about
+  // confirming the captured S/N matches the physical invoice (Gate 2), an unrelated,
+  // earlier step; conflating the two would make snValidationNotes misleading to read later.
+  @Column({ type: 'text', nullable: true })
+  onSiteCompletionNotes: string | null;
+
   // Phase 7: many Job Cards -> one Delivery (batch or normal, N>=1 members under one
   // DLV#). Set by DeliveryService.create() once the OOW-paid gate clears for every job in
   // the batch; cleared again by DeliveryService.cancel() while still PENDING (before

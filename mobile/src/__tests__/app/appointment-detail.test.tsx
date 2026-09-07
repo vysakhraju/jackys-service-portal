@@ -2,9 +2,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import AppointmentDetailScreen from '../../app/appointment/[id]';
 import { useOfflineQueue } from '../../context/OfflineQueueContext';
-import { listFaultSymptoms } from '../../lib/masterDataApi';
-import { captureFaultSymptom, captureSerialNumber, getVisit, startVisit } from '../../lib/technicianApi';
-import type { FaultSymptom, ScheduledAppointment } from '../../lib/types';
+import { listFaultSymptoms, listSpareParts } from '../../lib/masterDataApi';
+import {
+  captureFaultSymptom,
+  captureSerialNumber,
+  completeVisit,
+  getOwnJobCard,
+  getVisit,
+  requestNeedSpare,
+  startVisit,
+} from '../../lib/technicianApi';
+import type { FaultSymptom, JobCardSummary, ScheduledAppointment, SparePart } from '../../lib/types';
 
 const mockBack = jest.fn();
 let mockParams: { id: string; appt?: string } = { id: 'appt-1' };
@@ -19,8 +27,11 @@ jest.mock('../../lib/technicianApi', () => ({
   startVisit: jest.fn(),
   captureSerialNumber: jest.fn(),
   captureFaultSymptom: jest.fn(),
+  getOwnJobCard: jest.fn(),
+  requestNeedSpare: jest.fn(),
+  completeVisit: jest.fn(),
 }));
-jest.mock('../../lib/masterDataApi', () => ({ listFaultSymptoms: jest.fn() }));
+jest.mock('../../lib/masterDataApi', () => ({ listFaultSymptoms: jest.fn(), listSpareParts: jest.fn() }));
 
 // Phase 4: this screen reads useOfflineQueue() directly (to branch Start Visit/S-N/
 // Fault-Symptom between "send now" and "enqueue"), so - unlike index.test.tsx, which
@@ -40,7 +51,11 @@ const mockedGetVisit = getVisit as jest.Mock;
 const mockedStartVisit = startVisit as jest.Mock;
 const mockedCaptureSerialNumber = captureSerialNumber as jest.Mock;
 const mockedCaptureFaultSymptom = captureFaultSymptom as jest.Mock;
+const mockedGetOwnJobCard = getOwnJobCard as jest.Mock;
+const mockedRequestNeedSpare = requestNeedSpare as jest.Mock;
+const mockedCompleteVisit = completeVisit as jest.Mock;
 const mockedListFaultSymptoms = listFaultSymptoms as jest.Mock;
+const mockedListSpareParts = listSpareParts as jest.Mock;
 const mockedUseOfflineQueue = useOfflineQueue as jest.Mock;
 const mockEnqueue = jest.fn();
 
@@ -122,6 +137,29 @@ function faultSymptomFixture(overrides: Partial<FaultSymptom> = {}): FaultSympto
   };
 }
 
+function jobCardFixture(overrides: Partial<JobCardSummary> = {}): JobCardSummary {
+  return {
+    id: 'job-card-1',
+    jobCardNumber: 'JC-0001',
+    status: 'SECTION_ASSIGNED',
+    section: 'ON_SITE_REPAIR',
+    onSiteCompletionNotes: null,
+    ...overrides,
+  };
+}
+
+function sparePartFixture(overrides: Partial<SparePart> = {}): SparePart {
+  return {
+    id: 'part-1',
+    code: 'SP-001',
+    name: 'Compressor relay',
+    category: 'REFRIGERATOR',
+    brand: 'Samsung',
+    isActive: true,
+    ...overrides,
+  };
+}
+
 function queuedAction(overrides: Record<string, unknown> = {}) {
   return {
     id: 'queue-1',
@@ -148,6 +186,11 @@ beforeEach(() => {
     retry: jest.fn(),
     dismiss: jest.fn(),
   });
+  // Sane default for the Job Card poll (Phase 5) so every pre-existing test - none of
+  // which know about Job Cards - renders the "waiting for the office" state rather than
+  // an unhandled rejection from an un-mocked getOwnJobCard() call.
+  mockedGetOwnJobCard.mockResolvedValue(null);
+  mockedListSpareParts.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -389,6 +432,191 @@ describe('AppointmentDetailScreen', () => {
   });
 });
 
+// Phase 5: Job Card polling + Need Spare + Complete/QC-handoff. Online behavior only -
+// the offline branches for these two new write actions are covered in the offline-queue
+// describe block below, alongside Phase 4's three.
+describe('AppointmentDetailScreen - Need Spare & Complete', () => {
+  it('shows a waiting message when no visit exists yet (Job Card query is not even enabled)', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('start-visit-button')).toBeOnTheScreen());
+    expect(screen.queryByTestId('job-card-waiting')).toBeNull();
+    expect(mockedGetOwnJobCard).not.toHaveBeenCalled();
+  });
+
+  it('shows a waiting message once a visit exists but staff have not created a Job Card yet', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(null);
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('job-card-waiting')).toBeOnTheScreen());
+    expect(screen.queryByTestId('open-spare-part-picker')).toBeNull();
+    expect(screen.queryByTestId('complete-visit-button')).toBeNull();
+  });
+
+  it('shows a workshop message and no Need Spare/Complete controls when the Job Card was assigned to the workshop instead', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture({ section: 'WORKSHOP' }));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('job-card-workshop')).toBeOnTheScreen());
+    expect(screen.queryByTestId('open-spare-part-picker')).toBeNull();
+    expect(screen.queryByTestId('complete-visit-button')).toBeNull();
+  });
+
+  it('shows the finished state when the Job Card has already moved past SECTION_ASSIGNED', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture({ status: 'READY_FOR_QC' }));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('job-card-finished')).toHaveTextContent('JC-0001 sent to QC ✓'));
+    expect(screen.queryByTestId('open-spare-part-picker')).toBeNull();
+  });
+
+  it('shows Need Spare and Complete controls once the Job Card is assigned to on-site repair', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
+    expect(screen.getByTestId('complete-visit-button')).toBeOnTheScreen();
+  });
+
+  it('opens the spare part picker, filters by search, selects a part, and requests it', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedListSpareParts.mockResolvedValue([
+      sparePartFixture(),
+      sparePartFixture({ id: 'part-2', code: 'SP-002', name: 'Door gasket', brand: 'LG' }),
+    ]);
+    mockedRequestNeedSpare.mockResolvedValue({ id: 'reservation-1', status: 'PENDING_REVIEW' });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-spare-part-picker'));
+
+    await waitFor(() => expect(screen.getByTestId('spare-part-option-part-1')).toBeOnTheScreen());
+    expect(screen.getByTestId('spare-part-option-part-2')).toBeOnTheScreen();
+
+    await fireEvent.changeText(screen.getByTestId('spare-part-search'), 'gasket');
+    await waitFor(() => expect(screen.queryByTestId('spare-part-option-part-1')).toBeNull());
+
+    await fireEvent.press(screen.getByTestId('spare-part-option-part-2'));
+
+    await waitFor(() => expect(screen.getByTestId('spare-part-selection')).toBeOnTheScreen());
+    expect(screen.getByText('Door gasket')).toBeOnTheScreen();
+
+    await fireEvent.changeText(screen.getByTestId('spare-part-quantity-input'), '3');
+    await fireEvent.press(screen.getByTestId('request-need-spare-button'));
+
+    await waitFor(() =>
+      expect(mockedRequestNeedSpare).toHaveBeenCalledWith(
+        'appt-1',
+        expect.objectContaining({ sparePartId: 'part-2', quantity: 3, idempotencyKey: expect.stringMatching(/^need-spare-/) }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByTestId('need-spare-requested')).toBeOnTheScreen());
+  });
+
+  it('defaults to quantity 1 and treats a non-numeric quantity as 1', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedListSpareParts.mockResolvedValue([sparePartFixture()]);
+    mockedRequestNeedSpare.mockResolvedValue({ id: 'reservation-1', status: 'PENDING_REVIEW' });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-spare-part-picker'));
+    await waitFor(() => expect(screen.getByTestId('spare-part-option-part-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('spare-part-option-part-1'));
+
+    await fireEvent.changeText(screen.getByTestId('spare-part-quantity-input'), 'abc');
+    await fireEvent.press(screen.getByTestId('request-need-spare-button'));
+
+    await waitFor(() => expect(mockedRequestNeedSpare).toHaveBeenCalledWith('appt-1', expect.objectContaining({ quantity: 1 })));
+  });
+
+  it('shows an error message when the Need Spare request fails', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedListSpareParts.mockResolvedValue([sparePartFixture()]);
+    mockedRequestNeedSpare.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 404, data: { message: 'Spare part not found' } },
+    });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-spare-part-picker'));
+    await waitFor(() => expect(screen.getByTestId('spare-part-option-part-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('spare-part-option-part-1'));
+    await fireEvent.press(screen.getByTestId('request-need-spare-button'));
+
+    await waitFor(() => expect(screen.getByTestId('need-spare-error')).toHaveTextContent('Spare part not found'));
+    // A failed request is not a "sent this session" success - the form should still be there to retry.
+    expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen();
+  });
+
+  it('shows an error in the spare part picker when the spare parts list fails to load', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedListSpareParts.mockRejectedValue(new Error('network down'));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-spare-part-picker'));
+
+    await waitFor(() => expect(screen.getByTestId('spare-part-list-error')).toBeOnTheScreen());
+  });
+
+  it('completes the visit with notes and shows the finished state on success', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedCompleteVisit.mockResolvedValue(jobCardFixture({ status: 'READY_FOR_QC' }));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('complete-visit-button')).toBeOnTheScreen());
+    await fireEvent.changeText(screen.getByTestId('completion-notes-input'), 'Replaced compressor relay on-site');
+    await fireEvent.press(screen.getByTestId('complete-visit-button'));
+
+    await waitFor(() =>
+      expect(mockedCompleteVisit).toHaveBeenCalledWith('appt-1', { notes: 'Replaced compressor relay on-site' }),
+    );
+    await waitFor(() => expect(screen.getByTestId('job-card-finished')).toBeOnTheScreen());
+  });
+
+  it('completes the visit with no notes when the field is left blank', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedCompleteVisit.mockResolvedValue(jobCardFixture({ status: 'READY_FOR_QC' }));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('complete-visit-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('complete-visit-button'));
+
+    await waitFor(() => expect(mockedCompleteVisit).toHaveBeenCalledWith('appt-1', { notes: undefined }));
+  });
+
+  it('shows an error message when completing the visit fails', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedCompleteVisit.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 400, data: { message: 'Job card is not ready for completion' } },
+    });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('complete-visit-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('complete-visit-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('complete-visit-error')).toHaveTextContent('Job card is not ready for completion'),
+    );
+    expect(screen.queryByTestId('job-card-finished')).toBeNull();
+  });
+});
+
 // Phase 4: offline branches for the three write actions this screen owns. Online
 // behavior is exercised above and is untouched by Phase 4 - these tests only cover the
 // `!isOnline` branch (enqueue instead of mutate) and the queued-item display states.
@@ -568,6 +796,124 @@ describe('AppointmentDetailScreen - offline queue', () => {
     await waitFor(() =>
       expect(screen.getByTestId('fault-symptom-queued')).toHaveTextContent(
         'Could not sync this fault/symptom - see the sync status above to retry or discard.',
+      ),
+    );
+  });
+
+  it('enqueues Need Spare instead of calling the mutation when offline', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedListSpareParts.mockResolvedValue([sparePartFixture()]);
+    mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-spare-part-picker'));
+    await waitFor(() => expect(screen.getByTestId('spare-part-option-part-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('spare-part-option-part-1'));
+    await fireEvent.press(screen.getByTestId('request-need-spare-button'));
+
+    await waitFor(() =>
+      expect(mockEnqueue).toHaveBeenCalledWith({
+        type: 'NEED_SPARE',
+        appointmentId: 'appt-1',
+        label: 'Fatima Al Sayed (APT-0001)',
+        payload: expect.objectContaining({ sparePartId: 'part-1', quantity: 1, idempotencyKey: expect.stringMatching(/^need-spare-/) }),
+      }),
+    );
+    expect(mockedRequestNeedSpare).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId('need-spare-requested')).toBeOnTheScreen());
+  });
+
+  it('shows a queued message instead of the picker/submit button when a need-spare item is pending', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({ pendingItems: [queuedAction({ type: 'NEED_SPARE', appointmentId: 'appt-1' })] }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('need-spare-queued')).toHaveTextContent(
+        'Queued - will send this request as soon as you’re back online.',
+      ),
+    );
+    expect(screen.queryByTestId('open-spare-part-picker')).toBeNull();
+  });
+
+  it('shows a sync-failed message instead of the picker/submit button when a need-spare item failed', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({
+        isOnline: true,
+        failedItems: [
+          queuedAction({ type: 'NEED_SPARE', appointmentId: 'appt-1', status: 'failed', errorMessage: 'nope' }),
+        ],
+      }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('need-spare-queued')).toHaveTextContent(
+        'Could not sync this spare part request - see the sync status above to retry or discard.',
+      ),
+    );
+  });
+
+  it('enqueues Complete instead of calling the mutation when offline', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('complete-visit-button')).toBeOnTheScreen());
+    await fireEvent.changeText(screen.getByTestId('completion-notes-input'), 'Fixed on-site');
+    await fireEvent.press(screen.getByTestId('complete-visit-button'));
+
+    await waitFor(() =>
+      expect(mockEnqueue).toHaveBeenCalledWith({
+        type: 'COMPLETE_VISIT',
+        appointmentId: 'appt-1',
+        label: 'Fatima Al Sayed (APT-0001)',
+        payload: { notes: 'Fixed on-site' },
+      }),
+    );
+    expect(mockedCompleteVisit).not.toHaveBeenCalled();
+  });
+
+  it('shows a queued message instead of the completion form when a complete-visit item is pending', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({ pendingItems: [queuedAction({ type: 'COMPLETE_VISIT', appointmentId: 'appt-1' })] }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('complete-visit-queued')).toHaveTextContent(
+        'Queued - will complete this visit as soon as you’re back online.',
+      ),
+    );
+    expect(screen.queryByTestId('complete-visit-button')).toBeNull();
+  });
+
+  it('shows a sync-failed message instead of the completion form when a complete-visit item failed', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({
+        isOnline: true,
+        failedItems: [
+          queuedAction({ type: 'COMPLETE_VISIT', appointmentId: 'appt-1', status: 'failed', errorMessage: 'nope' }),
+        ],
+      }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('complete-visit-queued')).toHaveTextContent(
+        'Could not sync completing this visit - see the sync status above to retry or discard.',
       ),
     );
   });

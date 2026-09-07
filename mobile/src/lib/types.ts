@@ -134,3 +134,51 @@ export interface FaultSymptom {
   requiresWorkshop: boolean;
   isActive: boolean;
 }
+
+// --- Mobile Phase 5: Need Spare + Complete/QC-handoff --------------------------------
+
+// GET /master-data/spare-parts - trimmed to what the Need Spare picker shows/searches;
+// widen if a later phase needs pricing/stock fields (src/master-data/entities/spare-part.entity.ts).
+export interface SparePart {
+  id: string;
+  code: string;
+  name: string;
+  category: string;
+  brand: string | null;
+  isActive: boolean;
+}
+
+// GET /technician/visits/:appointmentId/job-card - 200 with a null body when staff
+// haven't created a Job Card for this visit yet (an ordinary, expected state, not an
+// error - see technicianApi.ts#getOwnJobCard). Trimmed to what the detail screen needs
+// to decide which section to show; mirrors the relevant subset of the backend's JobCard
+// entity (src/job-cards/entities/job-card.entity.ts).
+export interface JobCardSummary {
+  id: string;
+  jobCardNumber: string;
+  status: string;
+  section: 'ON_SITE_REPAIR' | 'WORKSHOP' | null;
+  onSiteCompletionNotes: string | null;
+}
+
+export interface NeedSpareInput {
+  sparePartId: string;
+  quantity: number;
+  // Generated once per "Need Spare" tap (never derived from the part/job) - see
+  // offlineQueue.ts's doc comment on why a queued retry must reuse the SAME key while a
+  // fresh tap must generate a new one.
+  idempotencyKey: string;
+}
+
+// Mirrors the shape InventoryService.requestNeedSpare() returns (a PENDING_REVIEW
+// InventoryReservation) - only what the confirmation UI shows.
+export interface NeedSpareReservation {
+  id: string;
+  sparePartId: string;
+  quantityRequested: number;
+  status: string;
+}
+
+export interface CompleteVisitInput {
+  notes?: string;
+}

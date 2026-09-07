@@ -4,6 +4,8 @@ import { InventoryService } from './inventory.service';
 import { GrnDto } from './dto/grn.dto';
 import { ReviewReservationDto } from './dto/review-reservation.dto';
 import { ConfirmReturnDto } from './dto/confirm-return.dto';
+import { ReviewNeedSpareReservationDto } from './dto/review-need-spare-reservation.dto';
+import { ReleaseReservationDto } from './dto/release-reservation.dto';
 import { InventoryLocation } from './entities/inventory-stock.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -75,6 +77,38 @@ export class InventoryController {
   @ApiResponse({ status: 400, description: 'Reservation already resolved' })
   async review(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReviewReservationDto, @CurrentUser() user: User) {
     return this.inventoryService.review(id, dto.decision, user.id, dto.notes);
+  }
+
+  @Post('reservations/:id/review-need-spare')
+  @Roles(...REVIEW_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.INVENTORY_RESERVE,
+    entityType: 'InventoryReservation',
+    getEntityId: (args) => args.params.id,
+    getNewValues: (result) => ({ status: result?.status, needSpareDecision: result?.needSpareDecision }),
+  })
+  @ApiOperation({ summary: "Mobile Phase 5: TL+ review of a field technician's Need Spare request. APPROVE moves real stock (same as reserve()); REJECT touches nothing." })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'Reservation is not PENDING_REVIEW' })
+  async reviewNeedSpare(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReviewNeedSpareReservationDto, @CurrentUser() user: User) {
+    return this.inventoryService.reviewNeedSpareRequest(id, dto.decision, user.id, dto.notes);
+  }
+
+  @Post('reservations/:id/release')
+  @Roles(...REVIEW_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.INVENTORY_RESERVE,
+    entityType: 'InventoryReservation',
+    getEntityId: (args) => args.params.id,
+    getNewValues: (result) => ({ status: result?.status }),
+  })
+  @ApiOperation({ summary: 'TL+ releases an open reservation (PENDING_REVIEW/HELD/PARTIALLY_RESERVED) so its custodian is no longer blocked from being reassigned off the Job Card' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'Reservation is not in a releasable state' })
+  async release(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReleaseReservationDto, @CurrentUser() user: User) {
+    return this.inventoryService.releaseReservation(id, user.id, dto.notes);
   }
 
   @Post('reservations/:id/request-return')

@@ -14,6 +14,10 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { AuditLog } from '../auth/entities/audit-log.entity';
 import { AuditAction } from '../auth/entities/audit-log.entity';
+// Entity-only import, not JobCardsModule - see AppointmentsModule's doc comment on why
+// (JobCardsModule already imports this module, so the reverse would be a cycle).
+import { JobCard } from '../job-cards/entities/job-card.entity';
+import { InventoryService } from '../inventory/inventory.service';
 
 interface CapacityCheckResult {
   available: boolean;
@@ -33,6 +37,9 @@ export class AppointmentsService {
     private userRepository: Repository<User>,
     @InjectRepository(AuditLog)
     private auditLogRepository: Repository<AuditLog>,
+    @InjectRepository(JobCard)
+    private jobCardRepository: Repository<JobCard>,
+    private inventoryService: InventoryService,
   ) {}
 
   private async generateAppointmentNumber(): Promise<string> {
@@ -230,6 +237,23 @@ export class AppointmentsService {
 
     // If reassigning technician, check availability
     if (updateAppointmentDto.technicianId && updateAppointmentDto.technicianId !== appointment.technicianId) {
+      // Mobile Phase 5 guardrail (the-fool pre-mortem finding): don't silently strand a
+      // spare-parts reservation with the outgoing technician - refuse the reassignment
+      // until whoever's handling it explicitly releases the reservation first
+      // (POST /inventory/reservations/:id/release), same as any other Job Card mutation
+      // that needs InventoryService's involvement (see JobCardsController.cancel()).
+      if (appointment.technicianId) {
+        const jobCard = await this.jobCardRepository.findOne({ where: { appointmentId: id } });
+        if (jobCard) {
+          const hasOpenReservation = await this.inventoryService.hasActiveReservationInCustody(jobCard.id, appointment.technicianId);
+          if (hasOpenReservation) {
+            throw new ConflictException(
+              `Cannot reassign this appointment: the current technician still holds an open spare-parts reservation (PENDING_REVIEW/HELD/PARTIALLY_RESERVED) on Job Card ${jobCard.jobCardNumber}. Release it first via POST /inventory/reservations/:id/release, then reassign.`,
+            );
+          }
+        }
+      }
+
       const technician = await this.userRepository.findOne({
         where: { id: updateAppointmentDto.technicianId },
         relations: { role: true },

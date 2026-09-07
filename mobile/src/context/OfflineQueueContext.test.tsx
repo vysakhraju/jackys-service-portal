@@ -8,12 +8,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Pressable, Text } from 'react-native';
 import { OfflineQueueProvider, useOfflineQueue } from './OfflineQueueContext';
-import { captureSerialNumber, startVisit } from '../lib/technicianApi';
+import { captureSerialNumber, completeVisit, requestNeedSpare, startVisit } from '../lib/technicianApi';
 
 jest.mock('../lib/technicianApi', () => ({
   startVisit: jest.fn(),
   captureSerialNumber: jest.fn(),
   captureFaultSymptom: jest.fn(),
+  requestNeedSpare: jest.fn(),
+  completeVisit: jest.fn(),
+  getOwnJobCard: jest.fn(),
   getVisit: jest.fn(),
   getMySchedule: jest.fn(),
 }));
@@ -30,6 +33,8 @@ jest.mock('@react-native-community/netinfo', () => ({
 
 const mockedStartVisit = startVisit as jest.Mock;
 const mockedCaptureSerialNumber = captureSerialNumber as jest.Mock;
+const mockedRequestNeedSpare = requestNeedSpare as jest.Mock;
+const mockedCompleteVisit = completeVisit as jest.Mock;
 
 function networkError() {
   // Axios's shape for "request went out, nothing came back" - no `.response` at all.
@@ -49,6 +54,25 @@ function Probe() {
         onPress={() => enqueue({ type: 'START_VISIT', appointmentId: 'appt-1', label: 'Fatima', payload: { gpsLat: 1, gpsLng: 1 } })}
       >
         <Text>enqueue</Text>
+      </Pressable>
+      <Pressable
+        testID="enqueue-complete-visit"
+        onPress={() => enqueue({ type: 'COMPLETE_VISIT', appointmentId: 'appt-1', label: 'Fatima', payload: { notes: 'Done on-site' } })}
+      >
+        <Text>enqueue complete</Text>
+      </Pressable>
+      <Pressable
+        testID="enqueue-need-spare"
+        onPress={() =>
+          enqueue({
+            type: 'NEED_SPARE',
+            appointmentId: 'appt-1',
+            label: 'Fatima',
+            payload: { sparePartId: 'part-1', quantity: 1, idempotencyKey: 'need-spare-test-key' },
+          })
+        }
+      >
+        <Text>enqueue need spare</Text>
       </Pressable>
       {failedItems[0] && (
         <>
@@ -178,6 +202,36 @@ describe('OfflineQueueProvider', () => {
 
     await waitFor(() => expect(screen.getByTestId('failed-count')).toHaveTextContent('0'));
     expect(screen.getByTestId('pending-count')).toHaveTextContent('0');
+  });
+
+  it('a synced COMPLETE_VISIT action invalidates the technician-job-card query (Mobile Phase 5)', async () => {
+    mockedCompleteVisit.mockResolvedValue({ id: 'job-card-1', status: 'READY_FOR_QC' });
+    await renderProbe();
+    await waitFor(() => expect(screen.getByTestId('online')).toHaveTextContent('true'));
+    const invalidateSpy = jest.spyOn(activeQueryClient!, 'invalidateQueries');
+
+    await fireEvent.press(screen.getByTestId('enqueue-complete-visit'));
+
+    await waitFor(() => expect(mockedCompleteVisit).toHaveBeenCalledWith('appt-1', { notes: 'Done on-site' }));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['technician-job-card'] })),
+    );
+  });
+
+  it('a NEED_SPARE action that hits a backend rejection surfaces as failed, not silently retried', async () => {
+    mockedRequestNeedSpare.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 409, data: { message: 'A Need Spare request is already pending review for this job.' } },
+    });
+    await renderProbe();
+    await waitFor(() => expect(screen.getByTestId('online')).toHaveTextContent('true'));
+
+    await fireEvent.press(screen.getByTestId('enqueue-need-spare'));
+
+    await waitFor(() => expect(screen.getByTestId('failed-count')).toHaveTextContent('1'));
+    expect(screen.getByTestId('failed-0-error')).toHaveTextContent(
+      'A Need Spare request is already pending review for this job.',
+    );
   });
 
   it('useOfflineQueue throws outside an OfflineQueueProvider', async () => {

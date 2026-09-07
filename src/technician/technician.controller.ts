@@ -4,6 +4,8 @@ import { TechnicianService } from './technician.service';
 import { StartVisitDto } from './dto/start-visit.dto';
 import { CaptureSerialNumberDto } from './dto/capture-serial-number.dto';
 import { CaptureFaultSymptomDto } from './dto/capture-fault-symptom.dto';
+import { NeedSpareDto } from './dto/need-spare.dto';
+import { CompleteVisitDto } from './dto/complete-visit.dto';
 import { TechnicianVisit } from './entities/technician-visit.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -88,6 +90,63 @@ export class TechnicianController {
     @CurrentUser() user: User,
   ) {
     return this.technicianService.captureFaultSymptom(appointmentId, dto, user);
+  }
+
+  @Get('visits/:appointmentId/job-card')
+  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @ApiOperation({ summary: "Mobile Phase 5: has staff created (and assigned) a Job Card for this visit yet? 200 with null when not yet - not an error, the mobile app polls this to decide whether to show Need Spare/Complete." })
+  @ApiParam({ name: 'appointmentId', type: String })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 403, description: 'Not the assigned technician' })
+  async getOwnJobCard(@Param('appointmentId', ParseUUIDPipe) appointmentId: string, @CurrentUser() user: User) {
+    return this.technicianService.getOwnJobCard(appointmentId, user);
+  }
+
+  @Post('visits/:appointmentId/need-spare')
+  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.INVENTORY_RESERVE,
+    entityType: 'InventoryReservation',
+    getEntityId: (args) => args.params?.appointmentId,
+    getNewValues: (result) => ({ status: result?.status, sparePartId: result?.sparePartId }),
+  })
+  @ApiOperation({ summary: 'Mobile Phase 5: request a spare part while on-site - creates a PENDING_REVIEW request for a TL to approve, no stock moves yet' })
+  @ApiParam({ name: 'appointmentId', type: String })
+  @ApiResponse({ status: 201 })
+  @ApiResponse({ status: 400, description: 'Job Card not on-site-repair/section-assigned' })
+  @ApiResponse({ status: 403, description: 'Not the assigned technician' })
+  @ApiResponse({ status: 404, description: 'No Job Card exists yet for this appointment, or unknown spare part' })
+  async requestNeedSpare(
+    @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
+    @Body() dto: NeedSpareDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.technicianService.requestNeedSpare(appointmentId, dto, user);
+  }
+
+  @Post('visits/:appointmentId/complete')
+  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.STATUS_CHANGE,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params?.appointmentId,
+    getNewValues: (result) => ({ status: result?.status }),
+  })
+  @ApiOperation({ summary: 'Mobile Phase 5: complete an on-site repair - hands the Job Card to QC and completes the appointment' })
+  @ApiParam({ name: 'appointmentId', type: String })
+  @ApiResponse({ status: 201 })
+  @ApiResponse({ status: 400, description: 'Job Card not on-site-repair/section-assigned' })
+  @ApiResponse({ status: 403, description: 'Not the assigned technician' })
+  @ApiResponse({ status: 404, description: 'No Job Card exists yet for this appointment' })
+  async completeVisit(
+    @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
+    @Body() dto: CompleteVisitDto,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.technicianService.completeOnSiteRepair(appointmentId, dto, user, req);
   }
 
   @Get('visits/:appointmentId')

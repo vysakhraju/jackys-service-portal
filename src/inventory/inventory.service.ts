@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException,
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { InventoryStock, InventoryLocation } from './entities/inventory-stock.entity';
-import { InventoryReservation, ReservationStatus, ReviewDecision } from './entities/inventory-reservation.entity';
+import { InventoryReservation, ReservationStatus, ReviewDecision, NeedSpareReviewDecision } from './entities/inventory-reservation.entity';
 import { SparePart } from '../master-data/entities/spare-part.entity';
 import { UserStatus } from '../auth/entities/user.entity';
 // Cross-module entity-class import for typing/transaction use only (not a @Module import,
@@ -444,5 +444,174 @@ export class InventoryService {
         { custodianUserId, status: ReservationStatus.RETURN_PENDING },
       ],
     });
+  }
+
+  // --- Mobile Phase 5: Need Spare -----------------------------------------------------
+  // A field technician (via TechnicianController, on-site with no access to Main Store)
+  // asks for a part; a TL reviews and either moves real stock (APPROVE) or closes the
+  // request with nothing touched (REJECT). Deliberately a NEW status (PENDING_REVIEW)
+  // rather than creating the reservation via reserve() up front - the-fool pre-mortem
+  // finding: reserve() would move stock immediately, which is wrong for a request nobody
+  // has approved yet.
+
+  /**
+   * Creates a PENDING_REVIEW reservation - NO stock movement (the-fool pre-mortem:
+   * mirrors reserve()'s shape but deliberately skips the advisory lock/stock lookup
+   * entirely, since nothing is being reserved yet, just requested). Idempotent via the
+   * (jobCardId, idempotencyKey) unique index - a retried offline-queue sync for the SAME
+   * tap returns the original row instead of erroring or creating a duplicate.
+   */
+  async requestNeedSpare(
+    sparePartId: string,
+    quantity: number,
+    jobCardId: string,
+    custodianUserId: string,
+    requestedByUserId: string,
+    idempotencyKey: string,
+    now: Date = new Date(),
+  ): Promise<InventoryReservation> {
+    const sparePart = await this.sparePartRepository.findOne({ where: { id: sparePartId } });
+    if (!sparePart) {
+      throw new NotFoundException(`Spare part ${sparePartId} not found`);
+    }
+
+    try {
+      const reservation = this.reservationRepository.create({
+        sparePartId,
+        jobCardId,
+        custodianUserId,
+        quantityRequested: quantity,
+        quantityReserved: 0,
+        status: ReservationStatus.PENDING_REVIEW,
+        requestedByUserId,
+        requestedAt: now,
+        idempotencyKey,
+      });
+      return await this.reservationRepository.save(reservation);
+    } catch (err: any) {
+      if (err?.code === '23505') {
+        const existing = await this.reservationRepository.findOne({ where: { jobCardId, idempotencyKey } });
+        if (existing) {
+          return existing;
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * TL+ decision on a PENDING_REVIEW Need Spare request. APPROVE moves real stock - same
+   * advisory-lock/available-quantity logic as reserve() - and updates THIS reservation row
+   * in place (quantityReserved, status HELD/PARTIALLY_RESERVED) rather than creating a new
+   * one, since requestNeedSpare() already created the row. REJECT never touches stock; the
+   * technician is never blocked waiting on this decision either way (see method doc on
+   * requestNeedSpare above) - only the part itself is unavailable until approved.
+   */
+  async reviewNeedSpareRequest(
+    reservationId: string,
+    decision: NeedSpareReviewDecision,
+    reviewerId: string,
+    notes: string | undefined,
+    now: Date = new Date(),
+  ): Promise<InventoryReservation> {
+    const reservation = await this.findReservationById(reservationId);
+
+    if (reservation.status !== ReservationStatus.PENDING_REVIEW) {
+      throw new BadRequestException(`Cannot review a Need Spare request that is already ${reservation.status}.`);
+    }
+
+    if (decision === NeedSpareReviewDecision.REJECT) {
+      reservation.needSpareDecision = decision;
+      reservation.reviewedByUserId = reviewerId;
+      reservation.notes = notes ?? reservation.notes;
+      reservation.lastReviewedAt = now;
+      reservation.status = ReservationStatus.REJECTED;
+      return this.reservationRepository.save(reservation);
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [reservation.sparePartId]);
+
+      const stock = await manager.findOne(InventoryStock, { where: { sparePartId: reservation.sparePartId, location: InventoryLocation.MAIN_STORE } });
+      if (!stock) {
+        throw new NotFoundException(`No stock on hand for spare part ${reservation.sparePartId} yet - receive it via GRN first before approving.`);
+      }
+
+      const available = stock.quantityOnHand - stock.quantityReserved;
+      const quantityReserved = Math.max(0, Math.min(reservation.quantityRequested, available));
+
+      stock.quantityReserved += quantityReserved;
+      await manager.save(stock);
+
+      reservation.quantityReserved = quantityReserved;
+      reservation.status = quantityReserved >= reservation.quantityRequested ? ReservationStatus.HELD : ReservationStatus.PARTIALLY_RESERVED;
+      reservation.needSpareDecision = decision;
+      reservation.reviewedByUserId = reviewerId;
+      reservation.notes = notes ?? reservation.notes;
+      reservation.lastReviewedAt = now;
+
+      return manager.save(reservation);
+    });
+  }
+
+  /**
+   * TL-gated escape hatch (the-fool pre-mortem finding: without this, a technician who
+   * holds ANY open reservation becomes a permanent custodian - AppointmentsService.update()
+   * refuses to reassign their appointment with no way to clear the block). HELD/
+   * PARTIALLY_RESERVED reservations already moved stock, so releasing one only frees
+   * quantityReserved and moves to RETURN_PENDING - the physical part still needs a
+   * Warehouse Clerk's confirmReturn() before quantityOnHand is trusted again, same as every
+   * other return path in this file. A still-PENDING_REVIEW reservation never touched stock
+   * at all, so releasing it just closes it (REJECTED) - nothing to physically return.
+   */
+  async releaseReservation(reservationId: string, releasedByUserId: string, notes: string | undefined, now: Date = new Date()): Promise<InventoryReservation> {
+    const reservation = await this.findReservationById(reservationId);
+
+    if (reservation.status === ReservationStatus.PENDING_REVIEW) {
+      reservation.status = ReservationStatus.REJECTED;
+      reservation.reviewedByUserId = releasedByUserId;
+      reservation.notes = notes ?? reservation.notes;
+      reservation.lastReviewedAt = now;
+      return this.reservationRepository.save(reservation);
+    }
+
+    if (reservation.status !== ReservationStatus.HELD && reservation.status !== ReservationStatus.PARTIALLY_RESERVED) {
+      throw new BadRequestException(`Cannot release a reservation that is already ${reservation.status}.`);
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [reservation.sparePartId]);
+
+      const stock = await manager.findOne(InventoryStock, { where: { sparePartId: reservation.sparePartId, location: InventoryLocation.MAIN_STORE } });
+      if (stock) {
+        stock.quantityReserved = Math.max(0, stock.quantityReserved - reservation.quantityReserved);
+        await manager.save(stock);
+      }
+
+      reservation.status = ReservationStatus.RETURN_PENDING;
+      reservation.reviewedByUserId = releasedByUserId;
+      reservation.notes = notes ?? reservation.notes;
+      reservation.lastReviewedAt = now;
+      return manager.save(reservation);
+    });
+  }
+
+  /**
+   * The reassignment guardrail's read side (AppointmentsService.update()): does this
+   * technician currently hold any open reservation - PENDING_REVIEW, HELD, or
+   * PARTIALLY_RESERVED - against this Job Card? RETURN_PENDING is deliberately excluded:
+   * once a reservation is already on its way back (via review()'s APPROVE_REALLOCATION,
+   * cancelReservationsForJobCard, or releaseReservation above), it no longer blocks
+   * reassignment.
+   */
+  async hasActiveReservationInCustody(jobCardId: string, custodianUserId: string): Promise<boolean> {
+    const count = await this.reservationRepository.count({
+      where: [
+        { jobCardId, custodianUserId, status: ReservationStatus.PENDING_REVIEW },
+        { jobCardId, custodianUserId, status: ReservationStatus.HELD },
+        { jobCardId, custodianUserId, status: ReservationStatus.PARTIALLY_RESERVED },
+      ],
+    });
+    return count > 0;
   }
 }

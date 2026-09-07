@@ -3451,9 +3451,151 @@ shows `maxJobsPerDay: 0` for Sunday). Fixed by setting a real `maxJobsPerDay` vi
 so it doesn't trip up testing again. **Phase 4 is now live-verified**, same bar as
 Phases 1-2.
 
-Next: Phase 5 (Need Spare + Complete/QC-handoff) - needs new backend endpoints per §4,
-plus the still-open reassignment guardrail from §9 finding #3 (blocking technician
-reassignment while an active spare-parts reservation is held).
+**Phase 5 backend - built.** Ran a the-fool pre-mortem on the implementation design
+first (Pre-mortem/"Find failure modes" mode) - it surfaced that `completeOnSiteRepair()`
+as originally drafted had no precondition check at all, that the idempotency-key design
+could silently no-op a genuine second Need Spare request if the mobile client ever
+reused a key, and that the reassignment guardrail (§9 finding #3) had no escape hatch -
+a technician holding any open reservation would become a permanent custodian with no way
+to reassign their appointment. Resolved with the user before writing code: soft warning
+(not a hard block) on Complete without full data - moot in practice, since
+`JobCardsService.create()`'s own Gate 1 already guarantees serial number + fault/symptom
+exist before a Job Card can exist at all, so there's no diagnostic data this could
+actually be missing; a fresh `idempotencyKey` per mobile "Need Spare" tap (never derived
+from job+part) so a real second request never collides with a retry; and a new TL-gated
+`POST /inventory/reservations/:id/release` endpoint as the reassignment escape hatch.
+
+Implementation: `ReservationStatus` gained `PENDING_REVIEW` (a Need Spare request with
+NO stock movement yet) and `REJECTED` (closed with nothing to return - either a TL
+rejection or a released still-pending request); a new `NeedSpareReviewDecision` enum
+keeps that review decision distinct from the existing idle-reservation `ReviewDecision`.
+`InventoryService` gained `requestNeedSpare()` (idempotent via a `(jobCardId,
+idempotencyKey)` unique index + catch-23505, same pattern as
+`DebitNotesService.getOrCreateForJobCard()`), `reviewNeedSpareRequest()` (APPROVE moves
+real stock with the same advisory-lock logic as `reserve()`; REJECT touches nothing),
+`releaseReservation()` (the escape hatch), and `hasActiveReservationInCustody()` (the
+guardrail's read side) - two new `InventoryController` endpoints
+(`reservations/:id/review-need-spare`, `reservations/:id/release`).
+`TechnicianController` gained `POST /technician/visits/:appointmentId/need-spare` and
+`.../complete`, both implemented directly in `TechnicianService` against an entity-only
+`JobCard` repo rather than `JobCardsService` - `JobCardsModule` already imports
+`TechnicianModule`, so the reverse would be a circular module dependency; same pattern
+`AuthService` already uses for cross-cutting `JobCard`/`InventoryReservation` access, and
+the same one `AppointmentsService` now uses for the guardrail itself. Completing an
+on-site repair is the first status path `ON_SITE_REPAIR` Job Cards have ever had to
+`READY_FOR_QC` (`WORKSHOP`-section jobs get there via `completeWorkshop()`) - it also
+completes the underlying Appointment and, if given, saves a technician's free-text note
+to a new `JobCard.onSiteCompletionNotes` column. The reassignment guardrail itself lives
+in `AppointmentsService.update()`, gated on the *outgoing* technician still holding a
+`PENDING_REVIEW`/`HELD`/`PARTIALLY_RESERVED` reservation on the linked Job Card - skipped
+entirely on a first-time assignment (nothing to hold yet).
+
+**Verified:** 42 new tests (backend test count corrected below reflects the final run,
+including the later-added `getOwnJobCard` coverage) across the cross-module wiring -
+`AppointmentsModule` and `TechnicianModule` each now import `InventoryModule` plus
+register `JobCard` as an entity-only repo - and the new service methods themselves,
+639/639 backend tests passing app-wide (was 597), `tsc --noEmit` clean, confirmed both
+in the isolated cloud sandbox and cross-checked with a clean `tsc` run on your actual
+machine. `synchronize: true` in dev means the new columns/enum values/index apply
+automatically on your next `npm run start:dev` restart - no manual migration needed.
+
+**Mobile client - built.** `mobile/src/app/appointment/[id].tsx` gained a fourth card,
+"Need spare & complete", driven by a new polling query -
+`GET /technician/visits/:appointmentId/job-card` (`technicianApi.getOwnJobCard()`) -
+since Job Card creation/assignment is a staff-side action this app has no other signal
+for. Polls every 15s only while there's something to wait for (no Job Card yet, or one
+not yet assigned to this technician's on-site-repair section) and stops once Need
+Spare/Complete become available or the job's already past that point. Four card states:
+waiting for the office, assigned to the workshop instead (nothing to do here), the
+active Need Spare + Complete form, and sent-to-QC finished. Need Spare reuses
+`FaultSymptomPicker`'s exact shape as a new `SparePartPicker` component (search/filter
+over `GET /master-data/spare-parts`); a fresh `idempotencyKey` is generated once per tap
+via `offlineQueue.ts`'s new `generateIdempotencyKey()`, before it's known whether the
+request goes straight to the backend or into the offline queue, so a retried sync of the
+same tap always replays with the same key. Complete is a notes field plus a button that
+hands the job to QC. Both actions extend Phase 4's offline queue engine with two new
+`QueuedActionType`s (`NEED_SPARE`, `COMPLETE_VISIT`) - same dedup/replay/
+network-vs-backend-failure rules as the existing three, and a synced action of either
+type invalidates the `technician-job-card` query alongside the existing schedule/visit
+invalidation.
+
+**Verified:** 25 new tests (63/63 -> 88/88) - 8 on the offline queue engine (dispatch +
+replay for both new action types, idempotencyKey survives a network-failure retry,
+`generateIdempotencyKey()`'s shape/uniqueness), 3 on `OfflineQueueContext` (job-card
+invalidation on a synced Complete, a Need Spare backend rejection surfacing as failed
+rather than silently retried), and 14 on the appointment detail screen itself (all four
+Job Card card states, the spare part picker's search/select/error states, quantity
+defaulting/validation, Need Spare and Complete's online success/error paths, and both
+actions' offline enqueue + queued/failed display states) - `tsc --noEmit` clean, no open
+handles from the new 15s poll. Confirmed in the isolated cloud sandbox and cross-checked
+with a clean `tsc --noEmit` run on your actual machine (on-device `jest` timed out per
+the known device-shell-speed limitation - cloud sandbox's clean pass is definitive, same
+as every prior phase).
+
+**Phase 5 is fully built, backend and mobile client both** - not yet exercised against a
+live running server (Swagger/device-testable now that it's pushed - `POST
+/technician/visits/:appointmentId/need-spare`, `.../complete`,
+`POST /inventory/reservations/:id/review-need-spare`, `.../release`, `GET
+/technician/visits/:appointmentId/job-card`).
+
+**Holistic `test-master` QA pass across the whole Mobile App v1 (2026-09-07).** An
+independent look across all 5 phases, not just the newest one - the same reasoning as
+the Extra Role Access QA pass: coverage written by the same session that built a
+feature can share its blind spots. Cross-referenced every `src/` file against the test
+suite and found four real, previously-untouched files: `api.ts`'s 401-refresh
+interceptor (the retry-once guard, the shared in-flight refresh dedup, and the
+clear-tokens-and-bounce-to-login path when a refresh itself fails) had **zero**
+coverage anywhere - every screen test mocks `../lib/api` wholesale, so this
+security-relevant logic had never actually run in a test. Fixed with a dedicated
+`api.test.ts` that drives the real `api` axios instance through a custom `adapter`
+(the same layer real HTTP transport sits at) rather than reaching into axios's
+internal interceptor-handler array. `location.ts`'s `getCurrentLocationOrBlock()` was
+only ever exercised indirectly (2 of its 4 outcomes, via `appointment-detail.test.tsx`)
+- the GPS-fix success path, the 15s timeout race, and the generic "location services
+off" catch-all had no coverage, despite Start Visit being hard-blocked on this
+function's result with no manual-entry fallback. `masterDataApi.ts` and
+`technicianApi.ts` (all 9 exported functions between them, including Phase 5's three
+newest) were mocked wholesale in every screen test, so a wrong endpoint path or HTTP
+method would have silently 404'd in production with no test catching it - both now
+have dedicated wrapper tests asserting the exact call each function makes.
+
+**Verified:** 31 new tests (88/88 -> **119/119 passing**), `tsc --noEmit` clean,
+confirmed in the isolated cloud sandbox and cross-checked on your actual machine.
+Deliberately scoped out: `src/app/_layout.tsx`'s `Stack.Protected` auth-gate routing
+(genuine navigation/integration territory better suited to the live-device pass
+already queued for Phases 3-5 than a unit test faking `expo-router`'s navigation
+container) and `StatusPill`'s unknown-status fallback color (low-risk, cosmetic-only -
+every real status value already renders correctly through the screens that use it).
+
+**Confirmed - Phase 5 live-verified end-to-end against a real running server
+(2026-09-07).** The user walked the whole chain themselves via Swagger + the mobile
+app on one real test appointment: created appointment (with an invoice number, since
+`JobCardsService.create()` gates on it per FR-05) -> assigned technician -> Start
+Visit -> captured S/N + warranty -> captured fault/symptom -> staff-side created the
+Job Card (`POST /job-cards`) -> `validate-sn` -> `assign-section` (`ON_SITE_REPAIR`)
+-> the mobile app's 15s poll picked it up and the "Need spare & complete" card went
+live -> requested a spare part from the phone -> completed the visit with a note from
+the phone (`onSiteCompletionNotes: "Repair completed"` came through correctly) ->
+Job Card reached `READY_FOR_QC` -> `qc/approve` (after confirming the `QC_APPROVAL`
+grant, itself an existing Extra Role Access permission) -> `QC_PASSED`. Phases 1-2 and
+now 5 are live-verified; Phases 3-4 are still the only ones awaiting that same pass
+(built and fully tested, not yet walked live end-to-end).
+
+**Real gap surfaced by this live run, not caught by any test:** the Need Spare
+request created above was never reviewed by a Team Leader
+(`review-need-spare` was never called) and is still sitting `PENDING_REVIEW` -
+`InventoryService.consumeReservationsOnQcApproval()` only looks at `HELD`/
+`PARTIALLY_RESERVED` reservations, so QC approval sailed straight past it without
+touching it. The reservation is now permanently orphaned: the job it belongs to has
+already passed QC and moved on, so there's no natural point left in the workflow
+where anyone would think to go review it. Not fixed this session (a live-test
+discovery, not part of the Phase 5 scope) - worth a future decision: either
+`consumeReservationsOnQcApproval()` should also auto-reject any still-`PENDING_REVIEW`
+reservation on the job it's approving (parts nobody ever acted on shouldn't survive
+the job that requested them), or the stale-reservation view
+(`GET /inventory/reservations/stale`) should be extended to also surface
+`PENDING_REVIEW` requests, not just `HELD`/`PARTIALLY_RESERVED` ones, so a Team Leader
+has some way to notice this class of orphan at all.
 
 ---
 

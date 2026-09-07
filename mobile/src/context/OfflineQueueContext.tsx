@@ -14,13 +14,19 @@ import {
   type QueuedAction,
   type QueuedActionType,
 } from '../lib/offlineQueue';
-import type { CaptureFaultSymptomInput, CaptureSerialNumberInput, StartVisitInput } from '../lib/types';
+import type {
+  CaptureFaultSymptomInput,
+  CaptureSerialNumberInput,
+  CompleteVisitInput,
+  NeedSpareInput,
+  StartVisitInput,
+} from '../lib/types';
 
 interface EnqueueInput {
   type: QueuedActionType;
   appointmentId: string;
   label: string;
-  payload: StartVisitInput | CaptureSerialNumberInput | CaptureFaultSymptomInput;
+  payload: StartVisitInput | CaptureSerialNumberInput | CaptureFaultSymptomInput | NeedSpareInput | CompleteVisitInput;
 }
 
 interface OfflineQueueContextValue {
@@ -58,6 +64,10 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
         // could affect.
         queryClient.invalidateQueries({ queryKey: ['technician-schedule'] });
         queryClient.invalidateQueries({ queryKey: ['technician-visit'] });
+        // Mobile Phase 5: a synced NEED_SPARE/COMPLETE_VISIT action can change what the
+        // Job Card looks like (or bring one into existence) - same broad-invalidation
+        // reasoning as the two lines above.
+        queryClient.invalidateQueries({ queryKey: ['technician-job-card'] });
       }
     } finally {
       syncingRef.current = false;

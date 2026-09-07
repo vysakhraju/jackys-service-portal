@@ -1,7 +1,7 @@
 import { NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { InventoryService, STALE_HOURS, BLOCK_HOURS } from './inventory.service';
 import { InventoryStock, InventoryLocation } from './entities/inventory-stock.entity';
-import { ReservationStatus, ReviewDecision } from './entities/inventory-reservation.entity';
+import { ReservationStatus, ReviewDecision, NeedSpareReviewDecision } from './entities/inventory-reservation.entity';
 import { UserStatus } from '../auth/entities/user.entity';
 import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 
@@ -57,7 +57,9 @@ describe('InventoryService', () => {
     reservationRepository = {
       findOne: jest.fn(),
       find: jest.fn(),
+      create: jest.fn((data: any) => data),
       save: jest.fn((entity) => Promise.resolve(entity)),
+      count: jest.fn(),
     };
     sparePartRepository = { findOne: jest.fn() };
 
@@ -516,6 +518,171 @@ describe('InventoryService', () => {
 
       const lockCalls = manager.query.mock.calls.map((c: any) => c[1][0]);
       expect(lockCalls).toEqual(['jobcard:jc-1', 'part-a', 'part-b']);
+    });
+  });
+
+  // --- Mobile Phase 5: Need Spare + reassignment-guardrail support ---------------------
+
+  describe('requestNeedSpare', () => {
+    it('creates a PENDING_REVIEW reservation with no stock movement', async () => {
+      sparePartRepository.findOne.mockResolvedValue({ id: 'part-1', code: 'P-1' });
+
+      const result = await service.requestNeedSpare('part-1', 2, 'jc-1', 'tech-1', 'tech-1', 'tap-key-1', NOW);
+
+      expect(result.status).toBe(ReservationStatus.PENDING_REVIEW);
+      expect(result.quantityReserved).toBe(0);
+      expect(result.quantityRequested).toBe(2);
+      expect(result.idempotencyKey).toBe('tap-key-1');
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(stockRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException for an unknown spare part', async () => {
+      sparePartRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.requestNeedSpare('missing-part', 1, 'jc-1', 'tech-1', 'tech-1', 'tap-key-1', NOW),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the original row instead of erroring on a retried offline-queue sync (same idempotencyKey)', async () => {
+      sparePartRepository.findOne.mockResolvedValue({ id: 'part-1', code: 'P-1' });
+      const duplicateError: any = new Error('duplicate key value violates unique constraint');
+      duplicateError.code = '23505';
+      reservationRepository.save.mockRejectedValueOnce(duplicateError);
+      const original = reservation({ id: 'res-1', status: ReservationStatus.PENDING_REVIEW, idempotencyKey: 'tap-key-1' });
+      reservationRepository.findOne.mockResolvedValue(original);
+
+      const result = await service.requestNeedSpare('part-1', 2, 'jc-1', 'tech-1', 'tech-1', 'tap-key-1', NOW);
+
+      expect(result).toEqual(original);
+      expect(reservationRepository.findOne).toHaveBeenCalledWith({ where: { jobCardId: 'jc-1', idempotencyKey: 'tap-key-1' } });
+    });
+
+    it('re-throws a non-duplicate database error rather than swallowing it', async () => {
+      sparePartRepository.findOne.mockResolvedValue({ id: 'part-1', code: 'P-1' });
+      reservationRepository.save.mockRejectedValueOnce(new Error('connection reset'));
+
+      await expect(
+        service.requestNeedSpare('part-1', 2, 'jc-1', 'tech-1', 'tech-1', 'tap-key-1', NOW),
+      ).rejects.toThrow('connection reset');
+    });
+  });
+
+  describe('reviewNeedSpareRequest', () => {
+    const pending = (overrides: any = {}) => reservation({ status: ReservationStatus.PENDING_REVIEW, quantityReserved: 0, ...overrides });
+
+    it('REJECT closes the request with no stock touched', async () => {
+      reservationRepository.findOne.mockResolvedValue(pending());
+
+      const result = await service.reviewNeedSpareRequest('res-1', NeedSpareReviewDecision.REJECT, 'lead-1', 'Not actually needed', NOW);
+
+      expect(result.status).toBe(ReservationStatus.REJECTED);
+      expect(result.needSpareDecision).toBe(NeedSpareReviewDecision.REJECT);
+      expect(result.reviewedByUserId).toBe('lead-1');
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('APPROVE moves real stock and fully reserves when available - status HELD', async () => {
+      reservationRepository.findOne.mockResolvedValue(pending({ quantityRequested: 2 }));
+      manager.findOne.mockResolvedValue(stock({ quantityOnHand: 10, quantityReserved: 0 }));
+
+      const result = await service.reviewNeedSpareRequest('res-1', NeedSpareReviewDecision.APPROVE, 'lead-1', undefined, NOW);
+
+      expect(result.status).toBe(ReservationStatus.HELD);
+      expect(result.quantityReserved).toBe(2);
+      expect(result.needSpareDecision).toBe(NeedSpareReviewDecision.APPROVE);
+      expect(manager.query).toHaveBeenCalledWith('SELECT pg_advisory_xact_lock(hashtext($1))', ['part-1']);
+    });
+
+    it('APPROVE with insufficient stock reserves what is available - status PARTIALLY_RESERVED', async () => {
+      reservationRepository.findOne.mockResolvedValue(pending({ quantityRequested: 5 }));
+      manager.findOne.mockResolvedValue(stock({ quantityOnHand: 3, quantityReserved: 0 }));
+
+      const result = await service.reviewNeedSpareRequest('res-1', NeedSpareReviewDecision.APPROVE, 'lead-1', undefined, NOW);
+
+      expect(result.status).toBe(ReservationStatus.PARTIALLY_RESERVED);
+      expect(result.quantityReserved).toBe(3);
+    });
+
+    it('throws NotFoundException on APPROVE when no stock record exists yet', async () => {
+      reservationRepository.findOne.mockResolvedValue(pending());
+      manager.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.reviewNeedSpareRequest('res-1', NeedSpareReviewDecision.APPROVE, 'lead-1', undefined, NOW),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when the reservation is not PENDING_REVIEW', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ status: ReservationStatus.HELD }));
+
+      await expect(
+        service.reviewNeedSpareRequest('res-1', NeedSpareReviewDecision.APPROVE, 'lead-1', undefined, NOW),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('releaseReservation - the reassignment-guardrail escape hatch', () => {
+    it('closes a still-PENDING_REVIEW reservation directly to REJECTED - nothing to physically return', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ status: ReservationStatus.PENDING_REVIEW, quantityReserved: 0 }));
+
+      const result = await service.releaseReservation('res-1', 'lead-1', 'Reassigning job', NOW);
+
+      expect(result.status).toBe(ReservationStatus.REJECTED);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('moves a HELD reservation to RETURN_PENDING and frees the stock-level quantityReserved', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ status: ReservationStatus.HELD, quantityReserved: 4 }));
+      manager.findOne.mockResolvedValue(stock({ quantityOnHand: 10, quantityReserved: 4 }));
+
+      const result = await service.releaseReservation('res-1', 'lead-1', undefined, NOW);
+
+      expect(result.status).toBe(ReservationStatus.RETURN_PENDING);
+      const savedStock = manager.save.mock.calls[0][0];
+      expect(savedStock.quantityReserved).toBe(0);
+    });
+
+    it('floors quantityReserved at zero rather than going negative on a data mismatch', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ status: ReservationStatus.PARTIALLY_RESERVED, quantityReserved: 10 }));
+      manager.findOne.mockResolvedValue(stock({ quantityOnHand: 10, quantityReserved: 3 }));
+
+      await service.releaseReservation('res-1', 'lead-1', undefined, NOW);
+
+      const savedStock = manager.save.mock.calls[0][0];
+      expect(savedStock.quantityReserved).toBe(0);
+    });
+
+    it('throws BadRequestException for a reservation already RETURNED/CONSUMED/REJECTED', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ status: ReservationStatus.CONSUMED }));
+
+      await expect(service.releaseReservation('res-1', 'lead-1', undefined, NOW)).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('hasActiveReservationInCustody - the reassignment guardrail\'s read side', () => {
+    it('returns true when the technician holds a PENDING_REVIEW/HELD/PARTIALLY_RESERVED reservation on the Job Card', async () => {
+      reservationRepository.count.mockResolvedValue(1);
+
+      const result = await service.hasActiveReservationInCustody('jc-1', 'tech-1');
+
+      expect(result).toBe(true);
+      expect(reservationRepository.count).toHaveBeenCalledWith({
+        where: [
+          { jobCardId: 'jc-1', custodianUserId: 'tech-1', status: ReservationStatus.PENDING_REVIEW },
+          { jobCardId: 'jc-1', custodianUserId: 'tech-1', status: ReservationStatus.HELD },
+          { jobCardId: 'jc-1', custodianUserId: 'tech-1', status: ReservationStatus.PARTIALLY_RESERVED },
+        ],
+      });
+    });
+
+    it('returns false when no matching reservation exists (e.g. only a RETURN_PENDING one)', async () => {
+      reservationRepository.count.mockResolvedValue(0);
+
+      const result = await service.hasActiveReservationInCustody('jc-1', 'tech-1');
+
+      expect(result).toBe(false);
     });
   });
 });

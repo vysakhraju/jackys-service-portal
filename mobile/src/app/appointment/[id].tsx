@@ -6,13 +6,22 @@ import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, Te
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FaultSymptomPicker } from '../../components/FaultSymptomPicker';
 import { OfflineBanner } from '../../components/OfflineBanner';
+import { SparePartPicker } from '../../components/SparePartPicker';
 import { StatusPill } from '../../components/StatusPill';
 import { useOfflineQueue } from '../../context/OfflineQueueContext';
 import { getCurrentLocationOrBlock } from '../../lib/location';
-import { listFaultSymptoms } from '../../lib/masterDataApi';
-import type { QueuedAction, QueuedActionType } from '../../lib/offlineQueue';
-import { captureFaultSymptom, captureSerialNumber, getVisit, startVisit } from '../../lib/technicianApi';
-import type { FaultSymptom, ScheduledAppointment } from '../../lib/types';
+import { listFaultSymptoms, listSpareParts } from '../../lib/masterDataApi';
+import { generateIdempotencyKey, type QueuedAction, type QueuedActionType } from '../../lib/offlineQueue';
+import {
+  captureFaultSymptom,
+  captureSerialNumber,
+  completeVisit,
+  getOwnJobCard,
+  getVisit,
+  requestNeedSpare,
+  startVisit,
+} from '../../lib/technicianApi';
+import type { FaultSymptom, ScheduledAppointment, SparePart } from '../../lib/types';
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -66,6 +75,8 @@ export default function AppointmentDetailScreen() {
   const queuedStartVisit = findQueued(queuedItems, 'START_VISIT', params.id);
   const queuedSerialNumber = findQueued(queuedItems, 'CAPTURE_SERIAL_NUMBER', params.id);
   const queuedFaultSymptom = findQueued(queuedItems, 'CAPTURE_FAULT_SYMPTOM', params.id);
+  const queuedNeedSpare = findQueued(queuedItems, 'NEED_SPARE', params.id);
+  const queuedComplete = findQueued(queuedItems, 'COMPLETE_VISIT', params.id);
 
   const {
     data: visit,
@@ -176,6 +187,94 @@ export default function AppointmentDetailScreen() {
       return;
     }
     faultSymptomMutation.mutate();
+  }
+
+  // --- Job Card status + Need Spare / Complete (Phase 5) ---
+  // Staff (not this app) create the Job Card and assign it to on-site-repair some
+  // unknown time after Phases 1-3 finish - polled here rather than pushed, since there's
+  // no other signal this app gets when that happens. The 15s interval only runs while
+  // there's genuinely something to wait for (no Job Card yet, or one not assigned to
+  // this technician's on-site-repair section yet); it stops once Need Spare/Complete
+  // become available or the job's already past that point.
+  const {
+    data: jobCard,
+    isLoading: jobCardLoading,
+  } = useQuery({
+    queryKey: ['technician-job-card', params.id],
+    queryFn: () => getOwnJobCard(params.id),
+    enabled: Boolean(visit),
+    refetchInterval: (query) => {
+      const jc = query.state.data;
+      return !jc || (jc.status === 'SECTION_ASSIGNED' && jc.section !== 'ON_SITE_REPAIR') ? 15000 : false;
+    },
+  });
+  const jobCardReady = jobCard?.status === 'SECTION_ASSIGNED' && jobCard.section === 'ON_SITE_REPAIR';
+  const jobCardFinished = Boolean(jobCard) && !jobCardReady && jobCard!.status !== 'SECTION_ASSIGNED';
+
+  function invalidateJobCard() {
+    queryClient.invalidateQueries({ queryKey: ['technician-job-card', params.id] });
+  }
+
+  // --- Need Spare ---
+  const [sparePartPickerVisible, setSparePartPickerVisible] = useState(false);
+  const [selectedSparePart, setSelectedSparePart] = useState<SparePart | null>(null);
+  const [quantityInput, setQuantityInput] = useState('1');
+  const [needSpareSentThisSession, setNeedSpareSentThisSession] = useState(false);
+
+  const {
+    data: spareParts,
+    error: sparePartsError,
+    isLoading: sparePartsLoading,
+  } = useQuery({
+    queryKey: ['spare-parts'],
+    queryFn: () => listSpareParts(),
+    enabled: sparePartPickerVisible,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const needSpareMutation = useMutation({
+    mutationFn: (input: { sparePartId: string; quantity: number; idempotencyKey: string }) =>
+      requestNeedSpare(params.id, input),
+    onSuccess: () => {
+      setNeedSpareSentThisSession(true);
+      setSelectedSparePart(null);
+      setQuantityInput('1');
+    },
+  });
+
+  async function handleRequestNeedSpare() {
+    if (!selectedSparePart) return;
+    const quantity = Math.max(1, parseInt(quantityInput, 10) || 1);
+    // Generated once per tap, right here - reused as-is if this goes into the offline
+    // queue (a retried sync of the SAME queued item must replay with the SAME key), and
+    // never reused across a separate, later tap (see offlineQueue.ts's doc comment).
+    const idempotencyKey = generateIdempotencyKey();
+    const payload = { sparePartId: selectedSparePart.id, quantity, idempotencyKey };
+    if (!isOnline) {
+      await enqueue({ type: 'NEED_SPARE', appointmentId: params.id, label: queueLabel, payload });
+      setNeedSpareSentThisSession(true);
+      setSelectedSparePart(null);
+      setQuantityInput('1');
+      return;
+    }
+    needSpareMutation.mutate(payload);
+  }
+
+  // --- Complete / QC-handoff ---
+  const [completionNotesInput, setCompletionNotesInput] = useState('');
+
+  const completeMutation = useMutation({
+    mutationFn: () => completeVisit(params.id, { notes: completionNotesInput.trim() || undefined }),
+    onSuccess: invalidateJobCard,
+  });
+
+  async function handleCompleteVisit() {
+    const payload = { notes: completionNotesInput.trim() || undefined };
+    if (!isOnline) {
+      await enqueue({ type: 'COMPLETE_VISIT', appointmentId: params.id, label: queueLabel, payload });
+      return;
+    }
+    completeMutation.mutate();
   }
 
   if (!appointment) {
@@ -429,6 +528,145 @@ export default function AppointmentDetailScreen() {
             )}
           </View>
         )}
+
+        {visit && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Need spare &amp; complete</Text>
+
+            {jobCardLoading && <ActivityIndicator style={styles.spinner} />}
+
+            {!jobCardLoading && !jobCard && (
+              <Text style={styles.meta} testID="job-card-waiting">
+                Waiting for the office to create the job card for this visit - check back
+                in a bit, this refreshes on its own.
+              </Text>
+            )}
+
+            {!jobCardLoading && jobCard && jobCard.section !== 'ON_SITE_REPAIR' && jobCard.status === 'SECTION_ASSIGNED' && (
+              <Text style={styles.meta} testID="job-card-workshop">
+                This job card ({jobCard.jobCardNumber}) is assigned to the workshop, not
+                on-site repair - nothing to do here on this app.
+              </Text>
+            )}
+
+            {!jobCardLoading && (jobCardFinished || completeMutation.isSuccess) && (
+              <Text style={styles.visitStartedText} testID="job-card-finished">
+                {jobCard?.jobCardNumber ?? 'Job card'} sent to QC ✓
+              </Text>
+            )}
+
+            {!jobCardLoading && jobCard && jobCardReady && !completeMutation.isSuccess && (
+              <View>
+                <Text style={styles.meta}>{jobCard.jobCardNumber}</Text>
+
+                {/* Need Spare */}
+                {queuedNeedSpare ? (
+                  <Text style={styles.meta} testID="need-spare-queued">
+                    {queuedNeedSpare.status === 'failed'
+                      ? 'Could not sync this spare part request - see the sync status above to retry or discard.'
+                      : 'Queued - will send this request as soon as you’re back online.'}
+                  </Text>
+                ) : needSpareSentThisSession || needSpareMutation.isSuccess ? (
+                  <Text style={styles.meta} testID="need-spare-requested">
+                    Spare part requested - waiting for a Team Leader to review it.
+                  </Text>
+                ) : (
+                  <>
+                    {needSpareMutation.isError && (
+                      <Text style={styles.errorBoxText} testID="need-spare-error">
+                        {extractErrorMessage(needSpareMutation.error, 'Could not request this spare part. Try again.')}
+                      </Text>
+                    )}
+
+                    {selectedSparePart && (
+                      <View style={styles.capturedBox} testID="spare-part-selection">
+                        <Text style={styles.capturedValue}>{selectedSparePart.name}</Text>
+                        <Text style={styles.meta}>{selectedSparePart.code}</Text>
+                      </View>
+                    )}
+
+                    <Pressable
+                      style={styles.secondaryButton}
+                      onPress={() => setSparePartPickerVisible(true)}
+                      testID="open-spare-part-picker"
+                    >
+                      <Text style={styles.secondaryButtonText}>
+                        {selectedSparePart ? 'Change part' : 'Need a spare part?'}
+                      </Text>
+                    </Pressable>
+
+                    {selectedSparePart && (
+                      <>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Quantity"
+                          value={quantityInput}
+                          onChangeText={setQuantityInput}
+                          keyboardType="number-pad"
+                          testID="spare-part-quantity-input"
+                        />
+                        <Pressable
+                          style={[styles.button, needSpareMutation.isPending && styles.buttonDisabled]}
+                          onPress={handleRequestNeedSpare}
+                          disabled={needSpareMutation.isPending}
+                          testID="request-need-spare-button"
+                        >
+                          {needSpareMutation.isPending ? (
+                            <ActivityIndicator color="#fff" />
+                          ) : (
+                            <Text style={styles.buttonText}>Request spare part</Text>
+                          )}
+                        </Pressable>
+                      </>
+                    )}
+                  </>
+                )}
+
+                {/* Complete */}
+                {queuedComplete ? (
+                  <Text style={[styles.meta, styles.completeSectionSpacing]} testID="complete-visit-queued">
+                    {queuedComplete.status === 'failed'
+                      ? 'Could not sync completing this visit - see the sync status above to retry or discard.'
+                      : 'Queued - will complete this visit as soon as you’re back online.'}
+                  </Text>
+                ) : (
+                  <View style={styles.completeSectionSpacing}>
+                    {completeMutation.isError && (
+                      <Text style={styles.errorBoxText} testID="complete-visit-error">
+                        {extractErrorMessage(completeMutation.error, 'Could not complete this visit. Try again.')}
+                      </Text>
+                    )}
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Notes for QC (optional)"
+                      value={completionNotesInput}
+                      onChangeText={setCompletionNotesInput}
+                      multiline
+                      testID="completion-notes-input"
+                    />
+                    <Pressable
+                      style={[styles.button, completeMutation.isPending && styles.buttonDisabled]}
+                      onPress={handleCompleteVisit}
+                      disabled={completeMutation.isPending}
+                      testID="complete-visit-button"
+                    >
+                      {completeMutation.isPending ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <Text style={styles.buttonText}>Complete - send to QC</Text>
+                      )}
+                    </Pressable>
+                    <Text style={styles.hint}>
+                      {isOnline
+                        ? 'Hands this job to QC and marks your visit finished.'
+                        : 'You’re offline - this will be queued and sent once you’re back online.'}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+        )}
       </ScrollView>
 
       <FaultSymptomPicker
@@ -441,6 +679,18 @@ export default function AppointmentDetailScreen() {
           setPickerVisible(false);
         }}
         onClose={() => setPickerVisible(false)}
+      />
+
+      <SparePartPicker
+        visible={sparePartPickerVisible}
+        items={spareParts}
+        loading={sparePartsLoading}
+        error={sparePartsError ? extractErrorMessage(sparePartsError, 'Could not load spare parts.') : null}
+        onSelect={(item) => {
+          setSelectedSparePart(item);
+          setSparePartPickerVisible(false);
+        }}
+        onClose={() => setSparePartPickerVisible(false)}
       />
     </SafeAreaView>
   );
@@ -498,4 +748,5 @@ const styles = StyleSheet.create({
   capturedBox: { backgroundColor: '#f8fafc', borderRadius: 8, padding: 10, marginBottom: 12 },
   capturedRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   capturedValue: { fontSize: 15, fontWeight: '600', color: '#0f172a' },
+  completeSectionSpacing: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
 });

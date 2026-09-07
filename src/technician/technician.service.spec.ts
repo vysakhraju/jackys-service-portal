@@ -2,12 +2,15 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { TechnicianService } from './technician.service';
 import { WarrantyStatus } from './entities/technician-visit.entity';
 import { AppointmentStatus } from '../appointments/entities/appointment.entity';
+import { JobCardStatus, JobCardSection } from '../job-cards/entities/job-card.entity';
 
 describe('TechnicianService', () => {
   let service: TechnicianService;
   let visitRepository: any;
+  let jobCardRepository: any;
   let appointmentsService: any;
   let masterDataService: any;
+  let inventoryService: any;
 
   const fieldTech = (id = 'tech-1'): any => ({ id, role: { name: 'TECHNICIAN_FIELD' } });
   const supervisor = (id = 'lead-1'): any => ({ id, role: { name: 'TECHNICAL_TEAM_LEADER' } });
@@ -38,15 +41,29 @@ describe('TechnicianService', () => {
     ...overrides,
   });
 
+  const jobCard = (overrides: any = {}) => ({
+    id: 'jc-1',
+    jobCardNumber: 'JC-0001',
+    appointmentId: 'apt-1',
+    status: JobCardStatus.SECTION_ASSIGNED,
+    section: JobCardSection.ON_SITE_REPAIR,
+    ...overrides,
+  });
+
   beforeEach(() => {
     visitRepository = {
       findOne: jest.fn(),
       create: jest.fn((data: any) => data),
       save: jest.fn((data: any) => Promise.resolve({ ...data, id: data.id || 'visit-1' })),
     };
+    jobCardRepository = {
+      findOne: jest.fn(),
+      save: jest.fn((data: any) => Promise.resolve(data)),
+    };
     appointmentsService = {
       findById: jest.fn(),
       markOnSite: jest.fn(),
+      completeAppointment: jest.fn(),
       getTechnicianSchedule: jest.fn(),
     };
     masterDataService = {
@@ -54,8 +71,11 @@ describe('TechnicianService', () => {
       findFaultByCode: jest.fn(),
       findSymptomByCode: jest.fn(),
     };
+    inventoryService = {
+      requestNeedSpare: jest.fn(),
+    };
 
-    service = new TechnicianService(visitRepository, appointmentsService, masterDataService);
+    service = new TechnicianService(visitRepository, jobCardRepository, appointmentsService, masterDataService, inventoryService);
   });
 
   describe('startVisit', () => {
@@ -295,6 +315,155 @@ describe('TechnicianService', () => {
       await service.getMySchedule('tech-1');
 
       expect(appointmentsService.getTechnicianSchedule).toHaveBeenCalledWith('tech-1', expect.any(Date));
+    });
+  });
+
+  // --- Mobile Phase 5: Need Spare + Complete/QC-handoff --------------------------------
+
+  describe('getOwnJobCard', () => {
+    it('returns the Job Card when one exists for the appointment', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+
+      const result = await service.getOwnJobCard('apt-1', fieldTech());
+
+      expect(result).toEqual(jobCard());
+    });
+
+    it('returns null (not an error) when no Job Card exists yet', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.getOwnJobCard('apt-1', fieldTech());
+
+      expect(result).toBeNull();
+    });
+
+    it('throws ForbiddenException when a TECHNICIAN_FIELD user is not the assigned technician', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ technicianId: 'someone-else' }));
+
+      await expect(service.getOwnJobCard('apt-1', fieldTech('tech-1'))).rejects.toThrow(ForbiddenException);
+      expect(jobCardRepository.findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('requestNeedSpare', () => {
+    const dto = { sparePartId: 'part-1', quantity: 2, idempotencyKey: 'a1b2c3d4-tap-001' };
+
+    it('resolves the Job Card for the appointment and delegates to InventoryService.requestNeedSpare', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+      inventoryService.requestNeedSpare.mockResolvedValue({ id: 'res-1', status: 'PENDING_REVIEW' });
+
+      const result = await service.requestNeedSpare('apt-1', dto, fieldTech());
+
+      expect(jobCardRepository.findOne).toHaveBeenCalledWith({ where: { appointmentId: 'apt-1' } });
+      expect(inventoryService.requestNeedSpare).toHaveBeenCalledWith('part-1', 2, 'jc-1', 'tech-1', 'tech-1', 'a1b2c3d4-tap-001');
+      expect(result).toEqual({ id: 'res-1', status: 'PENDING_REVIEW' });
+    });
+
+    it('throws NotFoundException when no Job Card exists yet for the appointment', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.requestNeedSpare('apt-1', dto, fieldTech())).rejects.toThrow(NotFoundException);
+      expect(inventoryService.requestNeedSpare).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when the Job Card is not an assigned on-site-repair job', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ section: JobCardSection.WORKSHOP }));
+
+      await expect(service.requestNeedSpare('apt-1', dto, fieldTech())).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when the Job Card has already moved past SECTION_ASSIGNED', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC }));
+
+      await expect(service.requestNeedSpare('apt-1', dto, fieldTech())).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws ForbiddenException when a TECHNICIAN_FIELD user is not the assigned technician', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ technicianId: 'someone-else' }));
+
+      await expect(service.requestNeedSpare('apt-1', dto, fieldTech('tech-1'))).rejects.toThrow(ForbiddenException);
+      expect(jobCardRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('allows a supervisory role to request a spare on behalf of any technician', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ technicianId: 'someone-else' }));
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+      inventoryService.requestNeedSpare.mockResolvedValue({ id: 'res-1' });
+
+      await service.requestNeedSpare('apt-1', dto, supervisor('lead-1'));
+
+      expect(inventoryService.requestNeedSpare).toHaveBeenCalledWith('part-1', 2, 'jc-1', 'lead-1', 'lead-1', 'a1b2c3d4-tap-001');
+    });
+  });
+
+  describe('completeOnSiteRepair', () => {
+    it('completes the appointment and moves the Job Card to READY_FOR_QC', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ status: AppointmentStatus.ON_SITE }));
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+
+      const result = await service.completeOnSiteRepair('apt-1', { notes: 'Replaced compressor' }, fieldTech(), { headers: {} });
+
+      expect(appointmentsService.completeAppointment).toHaveBeenCalledWith('apt-1', 'tech-1', { headers: {} });
+      expect(jobCardRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: JobCardStatus.READY_FOR_QC, onSiteCompletionNotes: 'Replaced compressor' }),
+      );
+      expect(result).toEqual(expect.objectContaining({ status: JobCardStatus.READY_FOR_QC }));
+    });
+
+    it('completes without a note when none is given', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ status: AppointmentStatus.ON_SITE }));
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+
+      await service.completeOnSiteRepair('apt-1', {}, fieldTech(), {});
+
+      const saved = jobCardRepository.save.mock.calls[0][0];
+      expect(saved.status).toBe(JobCardStatus.READY_FOR_QC);
+      expect(saved.onSiteCompletionNotes).toBeUndefined();
+    });
+
+    it('throws NotFoundException when no Job Card exists yet for the appointment', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.completeOnSiteRepair('apt-1', {}, fieldTech(), {})).rejects.toThrow(NotFoundException);
+      expect(appointmentsService.completeAppointment).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when the Job Card is a workshop job, not on-site-repair', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ section: JobCardSection.WORKSHOP }));
+
+      await expect(service.completeOnSiteRepair('apt-1', {}, fieldTech(), {})).rejects.toThrow(BadRequestException);
+      expect(appointmentsService.completeAppointment).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when the Job Card is already READY_FOR_QC (double-tap protection)', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC }));
+
+      await expect(service.completeOnSiteRepair('apt-1', {}, fieldTech(), {})).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws ForbiddenException when a TECHNICIAN_FIELD user is not the assigned technician', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ technicianId: 'someone-else' }));
+
+      await expect(service.completeOnSiteRepair('apt-1', {}, fieldTech('tech-1'), {})).rejects.toThrow(ForbiddenException);
+      expect(jobCardRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('propagates the BadRequestException AppointmentsService throws when the appointment is not ON_SITE', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ status: AppointmentStatus.TECHNICIAN_ASSIGNED }));
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+      appointmentsService.completeAppointment.mockRejectedValue(new BadRequestException('Can only complete on-site appointments'));
+
+      await expect(service.completeOnSiteRepair('apt-1', {}, fieldTech(), {})).rejects.toThrow(BadRequestException);
+      expect(jobCardRepository.save).not.toHaveBeenCalled();
     });
   });
 });

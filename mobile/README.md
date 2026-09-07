@@ -22,8 +22,17 @@ flow. See the scope doc for the full phased build order.
   no signal, syncs automatically on reconnect, surfaces a real sync failure with a
   Retry/Discard choice rather than looping forever or dropping it silently.
   Live-verified.
-- **Phase 5:** Need Spare + Complete/QC-handoff. Not built yet - needs new backend
-  endpoints (see `docs/planning/MOBILE_APP_SCOPE_v1.md` §4).
+- **Phase 5 (latest):** Need Spare + Complete/QC-handoff, backend and mobile client
+  both built (new `POST /technician/visits/:appointmentId/need-spare` and
+  `.../complete` endpoints, TL review/release endpoints under
+  `/inventory/reservations`, a `GET /technician/visits/:appointmentId/job-card` poll -
+  see `docs/planning/STATUS_TRACKER.md` for the full design). A fourth card on the
+  appointment detail screen, "Need spare & complete", appears once staff assign the
+  Job Card to on-site repair. Built, tested, and **live-verified** end-to-end on a real
+  running server through to `QC_PASSED` (2026-09-07) - see the walkthrough section
+  below. One real gap surfaced by that live run: a Need Spare request never reviewed
+  by a Team Leader before QC approval is left permanently orphaned in
+  `PENDING_REVIEW` - not fixed yet, see `STATUS_TRACKER.md`.
 
 ## Running it
 
@@ -204,6 +213,38 @@ for this - no extra setup needed.
 If the list in the picker is empty, your seeded master data doesn't have any active
 fault/symptom entries yet - see `docs/testing/TESTING_GUIDE.md` for seeding master
 data via `POST /master-data/fault-symptoms` or the bulk import endpoint.
+
+## Testing Phase 5 (Need spare & complete) on the appointment detail screen
+
+Same starting point as the Phase 2/3 walkthrough above - open any appointment with a
+started visit. The new "Need spare & complete" card sits below Fault & symptom.
+
+- **Before a Job Card exists:** the card shows "Waiting for the office to create the
+  job card for this visit" - this is expected until staff create one from the staff
+  console/Swagger and assign it to the on-site-repair section (`POST /job-cards` then
+  the section-assignment step - see `docs/planning/STATUS_TRACKER.md`'s Phase 5/6
+  Workshop+Inventory sections for the staff-side flow). The app polls for this every
+  15 seconds on its own - no manual refresh needed.
+- **If the Job Card goes to the workshop instead:** the card shows a plain "assigned
+  to the workshop, not on-site repair" message and nothing else - correct, since this
+  app has nothing to do with workshop-section jobs.
+- **Need a spare part:** tap "Need a spare part?" to open a searchable picker pulled
+  from `GET /master-data/spare-parts` (seed some via that endpoint if the list is
+  empty). Pick one, adjust the quantity if needed, tap "Request spare part". This
+  creates a `PENDING_REVIEW` reservation with **no stock movement yet** - a Team
+  Leader/Service Head has to approve it first via
+  `POST /inventory/reservations/:id/review-need-spare` (Swagger, or the staff console
+  once that screen exists) before it actually reserves stock. The card shows "Spare
+  part requested - waiting for a Team Leader to review it" once sent.
+- **Complete - send to QC:** add an optional note for QC, then tap "Complete - send to
+  QC". This hands the Job Card to `READY_FOR_QC` and finishes the appointment - the
+  card switches to "... sent to QC ✓" and there's nothing further to do on this visit
+  from the mobile app.
+- **Offline:** both actions queue exactly like Phases 2-4's writes - a "Queued - will
+  ... as soon as you're back online" message appears immediately, and they sync
+  automatically on reconnect. Need Spare's queued request replays with the *same*
+  idempotency key it was created with, so a retried sync can never be mistaken for a
+  second, genuine request.
 
 ## Testing Phase 4 (offline queue) on a real device
 

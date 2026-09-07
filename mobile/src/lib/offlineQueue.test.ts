@@ -7,18 +7,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   enqueueAction,
   extractBackendErrorMessage,
+  generateIdempotencyKey,
   isNetworkError,
   loadQueue,
   processQueue,
   removeAction,
   retryAction,
 } from './offlineQueue';
-import { captureFaultSymptom, captureSerialNumber, startVisit } from './technicianApi';
+import { captureFaultSymptom, captureSerialNumber, completeVisit, requestNeedSpare, startVisit } from './technicianApi';
 
 jest.mock('./technicianApi', () => ({
   startVisit: jest.fn(),
   captureSerialNumber: jest.fn(),
   captureFaultSymptom: jest.fn(),
+  requestNeedSpare: jest.fn(),
+  completeVisit: jest.fn(),
+  getOwnJobCard: jest.fn(),
   getVisit: jest.fn(),
   getMySchedule: jest.fn(),
 }));
@@ -26,6 +30,8 @@ jest.mock('./technicianApi', () => ({
 const mockedStartVisit = startVisit as jest.Mock;
 const mockedCaptureSerialNumber = captureSerialNumber as jest.Mock;
 const mockedCaptureFaultSymptom = captureFaultSymptom as jest.Mock;
+const mockedRequestNeedSpare = requestNeedSpare as jest.Mock;
+const mockedCompleteVisit = completeVisit as jest.Mock;
 
 function networkError() {
   // Axios's shape for "request went out, nothing came back" - no `.response` at all.
@@ -212,6 +218,66 @@ describe('processQueue', () => {
     await processQueue();
 
     expect(mockedCaptureFaultSymptom).toHaveBeenCalledWith('appt-1', { faultCode: 'F001', symptomCode: 'S001' });
+  });
+
+  it('dispatches NEED_SPARE actions to requestNeedSpare, replaying the same idempotencyKey the screen generated at enqueue time', async () => {
+    mockedRequestNeedSpare.mockResolvedValue({ id: 'reservation-1', status: 'PENDING_REVIEW' });
+    await enqueueAction({
+      type: 'NEED_SPARE',
+      appointmentId: 'appt-1',
+      label: 'A',
+      payload: { sparePartId: 'part-1', quantity: 2, idempotencyKey: 'need-spare-fixed-key' },
+    });
+
+    await processQueue();
+
+    expect(mockedRequestNeedSpare).toHaveBeenCalledWith('appt-1', {
+      sparePartId: 'part-1',
+      quantity: 2,
+      idempotencyKey: 'need-spare-fixed-key',
+    });
+  });
+
+  it('dispatches COMPLETE_VISIT actions to completeVisit', async () => {
+    mockedCompleteVisit.mockResolvedValue({ id: 'job-card-1', status: 'READY_FOR_QC' });
+    await enqueueAction({
+      type: 'COMPLETE_VISIT',
+      appointmentId: 'appt-1',
+      label: 'A',
+      payload: { notes: 'Fixed loose connector on-site' },
+    });
+
+    await processQueue();
+
+    expect(mockedCompleteVisit).toHaveBeenCalledWith('appt-1', { notes: 'Fixed loose connector on-site' });
+  });
+
+  it('a rejected NEED_SPARE retry keeps the queued item pending on a network failure rather than dropping the idempotencyKey', async () => {
+    mockedRequestNeedSpare.mockRejectedValue(networkError());
+    await enqueueAction({
+      type: 'NEED_SPARE',
+      appointmentId: 'appt-1',
+      label: 'A',
+      payload: { sparePartId: 'part-1', quantity: 1, idempotencyKey: 'need-spare-abc' },
+    });
+
+    await processQueue();
+
+    const [item] = await loadQueue();
+    expect(item.status).toBe('pending');
+    expect((item.payload as { idempotencyKey: string }).idempotencyKey).toBe('need-spare-abc');
+  });
+});
+
+describe('generateIdempotencyKey', () => {
+  it('produces a need-spare-prefixed key', () => {
+    expect(generateIdempotencyKey()).toMatch(/^need-spare-/);
+  });
+
+  it('produces a different key on each call', () => {
+    const a = generateIdempotencyKey();
+    const b = generateIdempotencyKey();
+    expect(a).not.toBe(b);
   });
 });
 

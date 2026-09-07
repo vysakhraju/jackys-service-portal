@@ -2,12 +2,17 @@ import { Injectable, BadRequestException, NotFoundException, ForbiddenException 
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TechnicianVisit, WarrantyStatus } from './entities/technician-visit.entity';
+import { JobCard, JobCardStatus, JobCardSection } from '../job-cards/entities/job-card.entity';
 import { AppointmentsService } from '../appointments/appointments.service';
 import { MasterDataService } from '../master-data/master-data.service';
+import { InventoryService } from '../inventory/inventory.service';
+import { InventoryReservation } from '../inventory/entities/inventory-reservation.entity';
 import { AppointmentStatus } from '../appointments/entities/appointment.entity';
 import { StartVisitDto } from './dto/start-visit.dto';
 import { CaptureSerialNumberDto } from './dto/capture-serial-number.dto';
 import { CaptureFaultSymptomDto } from './dto/capture-fault-symptom.dto';
+import { NeedSpareDto } from './dto/need-spare.dto';
+import { CompleteVisitDto } from './dto/complete-visit.dto';
 import { User } from '../auth/entities/user.entity';
 
 const SELF_SERVICE_ONLY_ROLE = 'TECHNICIAN_FIELD';
@@ -17,8 +22,14 @@ export class TechnicianService {
   constructor(
     @InjectRepository(TechnicianVisit)
     private visitRepository: Repository<TechnicianVisit>,
+    // Entity-only repo, not JobCardsService - see the doc comment on TechnicianModule's
+    // TypeOrmModule.forFeature() import for why (JobCardsModule already imports this
+    // module, so the reverse would be a circular module dependency).
+    @InjectRepository(JobCard)
+    private jobCardRepository: Repository<JobCard>,
     private appointmentsService: AppointmentsService,
     private masterDataService: MasterDataService,
+    private inventoryService: InventoryService,
   ) {}
 
   /**
@@ -159,5 +170,85 @@ export class TechnicianService {
   /** Convenience for the mobile app's "my schedule" screen - defaults to today. */
   async getMySchedule(technicianId: string, date?: Date) {
     return this.appointmentsService.getTechnicianSchedule(technicianId, date ?? new Date());
+  }
+
+  /**
+   * Lean lookup used by both Mobile Phase 5 methods below - a Job Card only exists once
+   * staff have created it from this visit's captured data (JobCardsService.create()'s own
+   * Gate 1 already requires serial number + warranty + fault/symptom to all be present
+   * before that can happen), and only reaches ON_SITE_REPAIR/SECTION_ASSIGNED once
+   * assign-section has run. Both are staff-side actions that happen after the mobile
+   * Phases 1-3 capture flow, ahead of a technician ever reaching Need Spare or Complete.
+   */
+  private async findOwnJobCardForOnSiteRepair(appointmentId: string, caller: User): Promise<JobCard> {
+    const appointment = await this.appointmentsService.findById(appointmentId);
+    this.assertOwnership(appointment.technicianId, caller);
+
+    const jobCard = await this.jobCardRepository.findOne({ where: { appointmentId } });
+    if (!jobCard) {
+      throw new NotFoundException(
+        `No Job Card exists yet for appointment ${appointmentId} - this is created by staff once your visit data (serial number, warranty, fault/symptom) has been captured and the invoice is on file.`,
+      );
+    }
+    if (jobCard.section !== JobCardSection.ON_SITE_REPAIR || jobCard.status !== JobCardStatus.SECTION_ASSIGNED) {
+      throw new BadRequestException(
+        `This Job Card is ${jobCard.status} (section: ${jobCard.section ?? 'not assigned'}) - Need Spare/Complete are only available for an on-site repair job that's been assigned and not yet finished.`,
+      );
+    }
+    return jobCard;
+  }
+
+  /**
+   * Mobile Phase 5: the mobile app has no other way to know a Job Card exists yet (or
+   * what status/section it's in) for this appointment - JobCard creation, S/N validation
+   * and section assignment are all staff-side (Swagger/web) actions that happen some
+   * unknown time after the technician finishes Phases 1-3. Without this, the app would
+   * have to show Need Spare/Complete buttons blind and rely on the backend's error
+   * message alone. Returns null rather than throwing when there's no Job Card yet
+   * (deliberately different from findOwnJobCardForOnSiteRepair's throw above) - the
+   * mobile screen treats "no Job Card yet" as an ordinary, expected state to poll/wait
+   * on, not an error to surface.
+   */
+  async getOwnJobCard(appointmentId: string, caller: User): Promise<JobCard | null> {
+    const appointment = await this.appointmentsService.findById(appointmentId);
+    this.assertOwnership(appointment.technicianId, caller);
+    return this.jobCardRepository.findOne({ where: { appointmentId } });
+  }
+
+  /**
+   * Mobile Phase 5 (Need Spare): creates a PENDING_REVIEW reservation - see
+   * InventoryService.requestNeedSpare()'s doc comment for why nothing moves yet. The
+   * technician themself is the custodian, since they're who the part will eventually reach.
+   */
+  async requestNeedSpare(appointmentId: string, dto: NeedSpareDto, caller: User): Promise<InventoryReservation> {
+    const jobCard = await this.findOwnJobCardForOnSiteRepair(appointmentId, caller);
+    return this.inventoryService.requestNeedSpare(dto.sparePartId, dto.quantity, jobCard.id, caller.id, caller.id, dto.idempotencyKey);
+  }
+
+  /**
+   * Mobile Phase 5 (Complete/QC-handoff): the first status path ON_SITE_REPAIR Job Cards
+   * have ever had to READY_FOR_QC - WORKSHOP-section jobs get there via
+   * JobCardsService.completeWorkshop(); this mirrors that guard/transition shape for the
+   * on-site-repair case, implemented here rather than in JobCardsService only because of
+   * the circular-module-dependency constraint noted above (TechnicianModule can't import
+   * JobCardsModule). Also completes the underlying Appointment (technician's visit is
+   * over), matching the existing "reassignment/cancel already span two services" pattern
+   * elsewhere in this codebase.
+   *
+   * Deliberately no precondition check beyond the status/section gate above: by the time a
+   * Job Card exists at all, serial number + fault/symptom are already guaranteed captured
+   * (JobCardsService.create()'s Gate 1) - there's no diagnostic data this could be missing
+   * that QC needs. `notes` is a free-text on-site summary only, not validated data.
+   */
+  async completeOnSiteRepair(appointmentId: string, dto: CompleteVisitDto, caller: User, req?: any): Promise<JobCard> {
+    const jobCard = await this.findOwnJobCardForOnSiteRepair(appointmentId, caller);
+
+    await this.appointmentsService.completeAppointment(appointmentId, caller.id, req);
+
+    jobCard.status = JobCardStatus.READY_FOR_QC;
+    if (dto.notes) {
+      jobCard.onSiteCompletionNotes = dto.notes;
+    }
+    return this.jobCardRepository.save(jobCard);
   }
 }

@@ -13,6 +13,12 @@ import { JobCard } from '../../job-cards/entities/job-card.entity';
 import { User } from '../../auth/entities/user.entity';
 
 export enum ReservationStatus {
+  // Mobile Phase 5 (Need Spare): a field technician has asked for a part while on-site,
+  // but a TL hasn't reviewed it yet - deliberately NO stock movement at this point
+  // (quantityOnHand/quantityReserved both untouched). Distinct from HELD/PARTIALLY_RESERVED
+  // (which always mean stock WAS moved) - see InventoryService.requestNeedSpare()/
+  // reviewNeedSpareRequest().
+  PENDING_REVIEW = 'PENDING_REVIEW',
   // Fully reserved - the full requested quantity was available and set aside.
   HELD = 'HELD',
   // Stock was short at request time - quantityReserved < quantityRequested.
@@ -28,6 +34,12 @@ export enum ReservationStatus {
   // going back INTO Main Store, not out of it). Set only by
   // InventoryService.consumeReservationsOnQcApproval().
   CONSUMED = 'CONSUMED',
+  // Mobile Phase 5: a Need Spare request a TL rejected (reviewNeedSpareRequest), OR a
+  // still-PENDING_REVIEW request released via releaseReservation() (e.g. to unblock a
+  // technician reassignment) before a TL ever reviewed it. Both cases never moved any
+  // stock, so this is terminal with nothing to physically return - distinct from
+  // RETURN_PENDING, which always implies stock IS still out there somewhere.
+  REJECTED = 'REJECTED',
 }
 
 export enum ReviewDecision {
@@ -35,10 +47,27 @@ export enum ReviewDecision {
   REJECT = 'REJECT',
 }
 
+// Mobile Phase 5: a TL's decision on a technician's Need Spare request. Kept separate
+// from ReviewDecision above rather than reusing APPROVE_REALLOCATION/REJECT - that enum is
+// about what happens to an already-reserved, idle reservation (reallocate it back to Main
+// Store), which is a different real-world action from approving a brand-new request that
+// hasn't touched stock yet at all.
+export enum NeedSpareReviewDecision {
+  APPROVE = 'APPROVE',
+  REJECT = 'REJECT',
+}
+
 @Entity('inventory_reservations')
 @Index(['jobCardId'])
 @Index(['sparePartId'])
 @Index(['custodianUserId'])
+// Mobile Phase 5 idempotency: a mobile client generates a fresh idempotencyKey every time
+// the user taps "Need Spare" (never derived from jobCardId+sparePartId), so this unique
+// index only ever catches a true network-retry of the SAME tap (offline queue resending an
+// unsynced item) - a second, intentional request for the same part creates a second,
+// separate row. Nullable + unique is fine in Postgres: NULLs never conflict with each
+// other, so every pre-Phase-5 reservation (idempotencyKey always null) is unaffected.
+@Index(['jobCardId', 'idempotencyKey'], { unique: true })
 export class InventoryReservation {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -152,6 +181,20 @@ export class InventoryReservation {
 
   @Column({ type: 'text', nullable: true })
   reworkVerbalOverrideNotes: string | null;
+
+  // --- Mobile Phase 5: Need Spare ---------------------------------------------------
+  // Client-generated once per user-initiated "Need Spare" tap (see the unique index
+  // above). Null for every reservation created through the pre-existing WorkshopService
+  // reserve() path - idempotency only matters for a mobile client that might retry a
+  // request it can't confirm went through (offline queue, dropped connection).
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  idempotencyKey: string | null;
+
+  // Set only by InventoryService.reviewNeedSpareRequest() - kept separate from
+  // reviewDecision (see NeedSpareReviewDecision's doc comment) even though
+  // reviewedByUserId/lastReviewedAt/notes are shared with the older review() flow above.
+  @Column({ type: 'enum', enum: NeedSpareReviewDecision, nullable: true })
+  needSpareDecision: NeedSpareReviewDecision | null;
 
   @UpdateDateColumn()
   updatedAt: Date;

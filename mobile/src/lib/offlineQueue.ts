@@ -28,18 +28,44 @@
 //   before the item ever reaches the server.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isAxiosError } from 'axios';
-import { captureFaultSymptom, captureSerialNumber, startVisit } from './technicianApi';
-import type { CaptureFaultSymptomInput, CaptureSerialNumberInput, StartVisitInput } from './types';
+import { captureFaultSymptom, captureSerialNumber, completeVisit, requestNeedSpare, startVisit } from './technicianApi';
+import type {
+  CaptureFaultSymptomInput,
+  CaptureSerialNumberInput,
+  CompleteVisitInput,
+  NeedSpareInput,
+  StartVisitInput,
+} from './types';
 
 const STORAGE_KEY = '@jackys/offline-queue';
 
-export type QueuedActionType = 'START_VISIT' | 'CAPTURE_SERIAL_NUMBER' | 'CAPTURE_FAULT_SYMPTOM';
+// Mobile Phase 5 adds NEED_SPARE and COMPLETE_VISIT to the same queue engine Phase 4
+// built for Start Visit/Serial Number/Fault-Symptom - same storage, same replay/dedup
+// rules. NEED_SPARE's payload carries its own idempotencyKey (generated once by the
+// screen at enqueue time, NOT here) - a queued item's payload never changes once
+// enqueued, so every retry of the SAME queued action replays with that SAME key, and the
+// (jobCardId, idempotencyKey) unique index on the backend correctly treats it as one
+// retried request rather than a second one. A genuinely new "Need Spare" tap always goes
+// through enqueueAction() again with a freshly generated key, which (per the dedup rule
+// below) replaces whatever NEED_SPARE item was already queued for this appointment -
+// exactly one open Need Spare request queued per appointment at a time, matching how the
+// other three action types already work.
+export type QueuedActionType =
+  | 'START_VISIT'
+  | 'CAPTURE_SERIAL_NUMBER'
+  | 'CAPTURE_FAULT_SYMPTOM'
+  | 'NEED_SPARE'
+  | 'COMPLETE_VISIT';
 
 type PayloadFor<T extends QueuedActionType> = T extends 'START_VISIT'
   ? StartVisitInput
   : T extends 'CAPTURE_SERIAL_NUMBER'
     ? CaptureSerialNumberInput
-    : CaptureFaultSymptomInput;
+    : T extends 'CAPTURE_FAULT_SYMPTOM'
+      ? CaptureFaultSymptomInput
+      : T extends 'NEED_SPARE'
+        ? NeedSpareInput
+        : CompleteVisitInput;
 
 export interface QueuedAction {
   id: string;
@@ -49,7 +75,7 @@ export interface QueuedAction {
   // enqueued this action, since the queue engine itself only knows the appointmentId.
   // Not sent to the backend.
   label: string;
-  payload: StartVisitInput | CaptureSerialNumberInput | CaptureFaultSymptomInput;
+  payload: StartVisitInput | CaptureSerialNumberInput | CaptureFaultSymptomInput | NeedSpareInput | CompleteVisitInput;
   clientTimestamp: string;
   status: 'pending' | 'failed';
   errorMessage: string | null;
@@ -58,6 +84,15 @@ export interface QueuedAction {
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// Mobile Phase 5: exported so the appointment detail screen can generate ONE
+// idempotencyKey right when the technician taps "Need Spare" (before it's known whether
+// this goes straight to the backend or into the offline queue) - same generator shape
+// as generateId() above, just exposed under its own name so a NeedSpareInput's key
+// doesn't get confused with a QueuedAction's own id.
+export function generateIdempotencyKey(): string {
+  return `need-spare-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export async function loadQueue(): Promise<QueuedAction[]> {
@@ -144,6 +179,12 @@ async function executeAction(action: QueuedAction): Promise<void> {
       return;
     case 'CAPTURE_FAULT_SYMPTOM':
       await captureFaultSymptom(action.appointmentId, action.payload as CaptureFaultSymptomInput);
+      return;
+    case 'NEED_SPARE':
+      await requestNeedSpare(action.appointmentId, action.payload as NeedSpareInput);
+      return;
+    case 'COMPLETE_VISIT':
+      await completeVisit(action.appointmentId, action.payload as CompleteVisitInput);
       return;
   }
 }

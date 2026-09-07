@@ -9,6 +9,8 @@ describe('AppointmentsService', () => {
   let serviceCentreRepository: any;
   let userRepository: any;
   let auditLogRepository: any;
+  let jobCardRepository: any;
+  let inventoryService: any;
 
   const buildQb = (overrides: Partial<Record<string, any>> = {}) => ({
     where: jest.fn().mockReturnThis(),
@@ -51,12 +53,16 @@ describe('AppointmentsService', () => {
     serviceCentreRepository = { findOne: jest.fn() };
     userRepository = { findOne: jest.fn() };
     auditLogRepository = { create: jest.fn((d: any) => d), save: jest.fn().mockResolvedValue(undefined) };
+    jobCardRepository = { findOne: jest.fn().mockResolvedValue(null) };
+    inventoryService = { hasActiveReservationInCustody: jest.fn().mockResolvedValue(false) };
 
     service = new AppointmentsService(
       appointmentRepository,
       serviceCentreRepository,
       userRepository,
       auditLogRepository,
+      jobCardRepository,
+      inventoryService,
     );
   });
 
@@ -283,6 +289,56 @@ describe('AppointmentsService', () => {
         expect.objectContaining({ technicianId: 'tech-2' }),
       );
       expect(result).toEqual(appointment({ technicianId: 'tech-2' }));
+    });
+
+    // --- Mobile Phase 5 reassignment guardrail (the-fool pre-mortem finding) -----------
+
+    it('blocks reassignment with ConflictException when the outgoing technician holds an open reservation on the linked Job Card', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ technicianId: 'tech-1' }));
+      jobCardRepository.findOne.mockResolvedValue({ id: 'jc-1', jobCardNumber: 'JC-0001' });
+      inventoryService.hasActiveReservationInCustody.mockResolvedValue(true);
+
+      await expect(
+        service.update('apt-1', { technicianId: 'tech-2' } as any, 'user-1'),
+      ).rejects.toThrow(ConflictException);
+
+      expect(inventoryService.hasActiveReservationInCustody).toHaveBeenCalledWith('jc-1', 'tech-1');
+      // Blocked before ever checking the new technician's own availability.
+      expect(userRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('allows reassignment when a Job Card exists but the outgoing technician holds no open reservation', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ technicianId: 'tech-1' }));
+      jobCardRepository.findOne.mockResolvedValue({ id: 'jc-1', jobCardNumber: 'JC-0001' });
+      inventoryService.hasActiveReservationInCustody.mockResolvedValue(false);
+      userRepository.findOne.mockResolvedValue({ id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } });
+      appointmentRepository.createQueryBuilder.mockReturnValueOnce(buildQb({ getCount: 0 }));
+
+      const result = await service.update('apt-1', { technicianId: 'tech-2' } as any, 'user-1');
+
+      expect(result).toEqual(appointment({ technicianId: 'tech-2' }));
+    });
+
+    it('skips the guardrail entirely when the appointment has no Job Card yet', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ technicianId: 'tech-1' }));
+      jobCardRepository.findOne.mockResolvedValue(null);
+      userRepository.findOne.mockResolvedValue({ id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } });
+      appointmentRepository.createQueryBuilder.mockReturnValueOnce(buildQb({ getCount: 0 }));
+
+      await service.update('apt-1', { technicianId: 'tech-2' } as any, 'user-1');
+
+      expect(inventoryService.hasActiveReservationInCustody).not.toHaveBeenCalled();
+    });
+
+    it('skips the guardrail on a first-time assignment (no prior technician to hold a reservation)', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ technicianId: null }));
+      userRepository.findOne.mockResolvedValue({ id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } });
+      appointmentRepository.createQueryBuilder.mockReturnValueOnce(buildQb({ getCount: 0 }));
+
+      await service.update('apt-1', { technicianId: 'tech-2' } as any, 'user-1');
+
+      expect(jobCardRepository.findOne).not.toHaveBeenCalled();
+      expect(inventoryService.hasActiveReservationInCustody).not.toHaveBeenCalled();
     });
   });
 

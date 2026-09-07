@@ -4,6 +4,10 @@ import { api } from './api';
 import type {
   CaptureFaultSymptomInput,
   CaptureSerialNumberInput,
+  CompleteVisitInput,
+  JobCardSummary,
+  NeedSpareInput,
+  NeedSpareReservation,
   ScheduledAppointment,
   StartVisitInput,
   TechnicianVisit,
@@ -33,3 +37,23 @@ export const captureSerialNumber = (appointmentId: string, data: CaptureSerialNu
 // GET /master-data/fault-symptoms list the backend validates against.
 export const captureFaultSymptom = (appointmentId: string, data: CaptureFaultSymptomInput) =>
   api.post<TechnicianVisit>(`${TECH_BASE}/visits/${appointmentId}/fault-symptom`, data).then((r) => r.data);
+
+// Mobile Phase 5. Always 200 - a null body means staff haven't created a Job Card for
+// this visit yet, which is expected and NOT surfaced as an error (unlike getVisit's
+// 404-means-not-started convention above). The detail screen polls this to decide when
+// to show Need Spare/Complete.
+export const getOwnJobCard = (appointmentId: string) =>
+  api.get<JobCardSummary | null>(`${TECH_BASE}/visits/${appointmentId}/job-card`).then((r) => r.data);
+
+// Creates a PENDING_REVIEW request - no stock moves until a TL reviews it. `idempotencyKey`
+// must be generated once per user-initiated tap (see offlineQueue.ts) so a retried
+// offline-queue sync for the SAME tap can't be mistaken for a second, genuine request.
+export const requestNeedSpare = (appointmentId: string, data: NeedSpareInput) =>
+  api.post<NeedSpareReservation>(`${TECH_BASE}/visits/${appointmentId}/need-spare`, data).then((r) => r.data);
+
+// Hands the Job Card to QC and completes the appointment. No precondition beyond the
+// Job Card already being an assigned on-site-repair job - by the time one exists at all,
+// serial number + fault/symptom are already guaranteed captured (JobCardsService.create()'s
+// own Gate 1), so there's no diagnostic data this could be missing.
+export const completeVisit = (appointmentId: string, data: CompleteVisitInput) =>
+  api.post<JobCardSummary>(`${TECH_BASE}/visits/${appointmentId}/complete`, data).then((r) => r.data);
