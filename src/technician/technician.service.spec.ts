@@ -73,6 +73,7 @@ describe('TechnicianService', () => {
     };
     inventoryService = {
       requestNeedSpare: jest.fn(),
+      findLatestNeedSpareRequestForJobCard: jest.fn(),
     };
 
     service = new TechnicianService(visitRepository, jobCardRepository, appointmentsService, masterDataService, inventoryService);
@@ -321,22 +322,36 @@ describe('TechnicianService', () => {
   // --- Mobile Phase 5: Need Spare + Complete/QC-handoff --------------------------------
 
   describe('getOwnJobCard', () => {
-    it('returns the Job Card when one exists for the appointment', async () => {
+    it('returns the Job Card plus its latest Need Spare request (2026-09-07 fix)', async () => {
       appointmentsService.findById.mockResolvedValue(appointment());
       jobCardRepository.findOne.mockResolvedValue(jobCard());
+      inventoryService.findLatestNeedSpareRequestForJobCard.mockResolvedValue({ id: 'res-1', status: 'PENDING_REVIEW' });
 
       const result = await service.getOwnJobCard('apt-1', fieldTech());
 
-      expect(result).toEqual(jobCard());
+      expect(inventoryService.findLatestNeedSpareRequestForJobCard).toHaveBeenCalledWith(jobCard().id);
+      expect(result).toEqual({ jobCard: jobCard(), spareRequest: { id: 'res-1', status: 'PENDING_REVIEW' } });
     });
 
-    it('returns null (not an error) when no Job Card exists yet', async () => {
+    it('returns spareRequest: null when this Job Card has never had a Need Spare request', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+      inventoryService.findLatestNeedSpareRequestForJobCard.mockResolvedValue(null);
+
+      const result = await service.getOwnJobCard('apt-1', fieldTech());
+
+      expect(result).toEqual({ jobCard: jobCard(), spareRequest: null });
+    });
+
+    it('returns {jobCard: null, spareRequest: null} (not an error) when no Job Card exists yet', async () => {
       appointmentsService.findById.mockResolvedValue(appointment());
       jobCardRepository.findOne.mockResolvedValue(null);
 
       const result = await service.getOwnJobCard('apt-1', fieldTech());
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ jobCard: null, spareRequest: null });
+      // No Job Card means nothing to look up a reservation against - never called at all.
+      expect(inventoryService.findLatestNeedSpareRequestForJobCard).not.toHaveBeenCalled();
     });
 
     it('throws ForbiddenException when a TECHNICIAN_FIELD user is not the assigned technician', async () => {

@@ -17,6 +17,19 @@ import { User } from '../auth/entities/user.entity';
 
 const SELF_SERVICE_ONLY_ROLE = 'TECHNICIAN_FIELD';
 
+/**
+ * Mobile Phase 5 bug fix (2026-09-07): getOwnJobCard() used to return a bare JobCard,
+ * which gave the mobile app's poll no way to know whether a Need Spare request already
+ * exists for it - see InventoryService.findLatestNeedSpareRequestForJobCard()'s doc
+ * comment for the full story. `spareRequest` is that reservation's latest row (or null),
+ * loaded alongside the Job Card so the mobile screen can rehydrate its own display state
+ * from the server instead of a local mutation-success flag that a screen remount wipes.
+ */
+export interface OwnJobCardResult {
+  jobCard: JobCard | null;
+  spareRequest: InventoryReservation | null;
+}
+
 @Injectable()
 export class TechnicianService {
   constructor(
@@ -209,10 +222,14 @@ export class TechnicianService {
    * mobile screen treats "no Job Card yet" as an ordinary, expected state to poll/wait
    * on, not an error to surface.
    */
-  async getOwnJobCard(appointmentId: string, caller: User): Promise<JobCard | null> {
+  async getOwnJobCard(appointmentId: string, caller: User): Promise<OwnJobCardResult> {
     const appointment = await this.appointmentsService.findById(appointmentId);
     this.assertOwnership(appointment.technicianId, caller);
-    return this.jobCardRepository.findOne({ where: { appointmentId } });
+    const jobCard = await this.jobCardRepository.findOne({ where: { appointmentId } });
+    const spareRequest = jobCard
+      ? await this.inventoryService.findLatestNeedSpareRequestForJobCard(jobCard.id)
+      : null;
+    return { jobCard, spareRequest };
   }
 
   /**

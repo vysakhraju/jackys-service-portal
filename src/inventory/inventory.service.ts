@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, Not, IsNull } from 'typeorm';
 import { InventoryStock, InventoryLocation } from './entities/inventory-stock.entity';
 import { InventoryReservation, ReservationStatus, ReviewDecision, NeedSpareReviewDecision } from './entities/inventory-reservation.entity';
 import { SparePart } from '../master-data/entities/spare-part.entity';
@@ -467,6 +467,51 @@ export class InventoryService {
         return a.custodianActive ? 1 : -1; // inactive-custodian reservations first
       }
       return b.ageHours - a.ageHours; // oldest first
+    });
+  }
+
+  /**
+   * GET /inventory/reservations/pending-need-spare - the listing that never existed for
+   * Mobile Phase 5's PENDING_REVIEW reservations (getStaleReservations() above only ever
+   * looks at HELD/PARTIALLY_RESERVED). Confirmed gap from the 2026-09-07 live-verification
+   * run: a Team Leader had no way to even see a technician's Need Spare request short of
+   * querying Postgres directly. Oldest-first, same convention as getStaleReservations() -
+   * whoever's been waiting longest surfaces first. sparePart/jobCard/requestedBy are all
+   * relations already declared on the entity, loaded here (unlike getStaleReservations())
+   * because this list is meant to be read and acted on by a human deciding whether a
+   * specific part for a specific job is worth approving - raw ids alone aren't enough for
+   * that judgment call the way they are for the "go look at the Job Card" link on the
+   * stale-reservations screen.
+   */
+  async getPendingNeedSpareRequests(): Promise<InventoryReservation[]> {
+    return this.reservationRepository.find({
+      where: { status: ReservationStatus.PENDING_REVIEW },
+      relations: { sparePart: true, jobCard: true, requestedBy: true },
+      order: { requestedAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Mobile Phase 5 bug fix (2026-09-07 live-verification run): the mobile app's "Need
+   * spare & complete" card only ever tracked "a request was just sent" in local
+   * component/mutation state, which is lost the instant the technician navigates away and
+   * back - the screen would silently show the request form again as if nothing had been
+   * sent, and tapping it again creates a genuine SECOND reservation rather than a no-op
+   * (idempotencyKey is deliberately fresh per tap - see the entity's own doc comment on
+   * why a real second request must never collide with a retry). This lets
+   * TechnicianService.getOwnJobCard() rehydrate that state from the database on every
+   * poll instead. Scoped to `idempotencyKey IS NOT NULL` - the one column that reliably
+   * distinguishes a mobile Need Spare request from a staff-side reserve() call on the same
+   * Job Card (which never sets it), so a WORKSHOP-section job's ordinary reservations can
+   * never leak into this. Returns only the single latest one - the mobile screen shows one
+   * active request at a time - and its `status`/`needSpareDecision` alone is enough for
+   * the client to render "waiting for review" / "approved" / "rejected, request again".
+   */
+  async findLatestNeedSpareRequestForJobCard(jobCardId: string): Promise<InventoryReservation | null> {
+    return this.reservationRepository.findOne({
+      where: { jobCardId, idempotencyKey: Not(IsNull()) },
+      relations: { sparePart: true },
+      order: { requestedAt: 'DESC' },
     });
   }
 

@@ -20,12 +20,23 @@ import { join } from 'path';
  * (5173) when the frontend was scaffolded; the gateway's fallback array was never updated
  * to match, so every local WebSocket handshake from the real frontend was silently CORS-
  * rejected while Swagger/curl-based REST testing (which never exercises this code path)
- * stayed green. This test catches that class of drift for good: it asserts the gateway's
- * fallback CORS origin list is always a superset of main.ts's own fallback list, rather
- * than hardcoding a duplicate list here that could just as easily go stale a second time.
+ * stayed green. This test catches that class of drift for good: it asserts every
+ * gateway's fallback CORS origin list is always a superset of main.ts's own fallback
+ * list, rather than hardcoding a duplicate list here that could just as easily go stale a
+ * second time.
+ *
+ * Extended 2026-09-07 to cover InventoryGateway (the Need Spare review notification
+ * channel) too, once it copied this exact CORS block verbatim - a second gateway means a
+ * second place this drift can silently recur, so the check is now parameterized over
+ * every gateway file rather than hardcoded to Reports alone.
  */
-describe('ReportsGateway CORS fallback stays in sync with main.ts', () => {
+describe('WebSocket gateways CORS fallback stays in sync with main.ts', () => {
   const srcDir = join(__dirname, '..');
+
+  const GATEWAYS: Array<{ name: string; relativePath: string[] }> = [
+    { name: 'ReportsGateway', relativePath: ['reports', 'reports.gateway.ts'] },
+    { name: 'InventoryGateway', relativePath: ['inventory', 'inventory.gateway.ts'] },
+  ];
 
   function extractFallbackOrigins(source: string, marker: string): string[] {
     const markerIndex = source.indexOf(marker);
@@ -47,9 +58,9 @@ describe('ReportsGateway CORS fallback stays in sync with main.ts', () => {
     expect(origins).toContain('http://localhost:5173');
   });
 
-  it("ReportsGateway's own CORS fallback is a superset of main.ts's fallback", () => {
+  it.each(GATEWAYS)("$name's own CORS fallback is a superset of main.ts's fallback", ({ relativePath }) => {
     const mainSource = readFileSync(join(srcDir, 'main.ts'), 'utf-8');
-    const gatewaySource = readFileSync(join(srcDir, 'reports', 'reports.gateway.ts'), 'utf-8');
+    const gatewaySource = readFileSync(join(srcDir, ...relativePath), 'utf-8');
 
     const mainOrigins = extractFallbackOrigins(mainSource, "origin: process.env.CORS_ORIGIN?.split(',') ||");
     const gatewayOrigins = extractFallbackOrigins(gatewaySource, "origin: process.env.CORS_ORIGIN?.split(',') ||");
@@ -62,8 +73,8 @@ describe('ReportsGateway CORS fallback stays in sync with main.ts', () => {
     }
   });
 
-  it('ReportsGateway CORS fallback explicitly includes http://localhost:5173', () => {
-    const gatewaySource = readFileSync(join(srcDir, 'reports', 'reports.gateway.ts'), 'utf-8');
+  it.each(GATEWAYS)('$name CORS fallback explicitly includes http://localhost:5173', ({ relativePath }) => {
+    const gatewaySource = readFileSync(join(srcDir, ...relativePath), 'utf-8');
     const origins = extractFallbackOrigins(gatewaySource, "origin: process.env.CORS_ORIGIN?.split(',') ||");
     expect(origins).toContain('http://localhost:5173');
   });

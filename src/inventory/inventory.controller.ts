@@ -63,6 +63,14 @@ export class InventoryController {
     return this.inventoryService.getStaleReservations();
   }
 
+  @Get('reservations/pending-need-spare')
+  @Roles(...READ_ROLES)
+  @ApiOperation({ summary: "Mobile Phase 5: field technicians' Need Spare requests still awaiting a TL+ decision, oldest first, with spare part/job card/requester loaded" })
+  @ApiResponse({ status: 200 })
+  async getPendingNeedSpare() {
+    return this.inventoryService.getPendingNeedSpareRequests();
+  }
+
   @Post('reservations/:id/review')
   @Roles(...REVIEW_ROLES)
   @UseInterceptors(AuditInterceptor)

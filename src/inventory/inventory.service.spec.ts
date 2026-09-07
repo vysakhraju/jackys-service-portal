@@ -292,6 +292,53 @@ describe('InventoryService', () => {
     });
   });
 
+  describe('getPendingNeedSpareRequests (2026-09-07 fix - the previously-missing listing)', () => {
+    it('returns only PENDING_REVIEW reservations, oldest first, with sparePart/jobCard/requestedBy relations requested', async () => {
+      reservationRepository.find.mockResolvedValue([reservation({ id: 'res-1', status: ReservationStatus.PENDING_REVIEW })]);
+
+      const result = await service.getPendingNeedSpareRequests();
+
+      expect(reservationRepository.find).toHaveBeenCalledWith({
+        where: { status: ReservationStatus.PENDING_REVIEW },
+        relations: { sparePart: true, jobCard: true, requestedBy: true },
+        order: { requestedAt: 'ASC' },
+      });
+      expect(result).toEqual([reservation({ id: 'res-1', status: ReservationStatus.PENDING_REVIEW })]);
+    });
+
+    it('returns an empty array when nothing is pending review', async () => {
+      reservationRepository.find.mockResolvedValue([]);
+
+      const result = await service.getPendingNeedSpareRequests();
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('findLatestNeedSpareRequestForJobCard (2026-09-07 mobile "forgotten request" fix)', () => {
+    it('queries scoped to this job card and idempotencyKey IS NOT NULL, ordered newest first', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ idempotencyKey: 'a1b2c3-tap-1' }));
+
+      await service.findLatestNeedSpareRequestForJobCard('jc-1');
+
+      const call = reservationRepository.findOne.mock.calls[0][0];
+      expect(call.where.jobCardId).toBe('jc-1');
+      expect(call.order).toEqual({ requestedAt: 'DESC' });
+      expect(call.relations).toEqual({ sparePart: true });
+      // Not() + IsNull() compiles to an operator object, not a plain value - just confirm
+      // the where clause isn't accidentally scoping on a literal null/undefined instead.
+      expect(call.where.idempotencyKey).toBeDefined();
+    });
+
+    it('returns null when this job card has no mobile-originated Need Spare request', async () => {
+      reservationRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.findLatestNeedSpareRequestForJobCard('jc-1');
+
+      expect(result).toBeNull();
+    });
+  });
+
   describe('hasUnresolvedStaleReservation - the request-spare block gate', () => {
     it('returns null when nothing on the job is past BLOCK_HOURS', async () => {
       const r = reservation({ requestedAt: new Date(NOW.getTime() - (STALE_HOURS + 1) * 60 * 60 * 1000) });
