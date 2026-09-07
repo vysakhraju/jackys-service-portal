@@ -1,7 +1,7 @@
 import { NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { InventoryService, STALE_HOURS, BLOCK_HOURS } from './inventory.service';
 import { InventoryStock, InventoryLocation } from './entities/inventory-stock.entity';
-import { ReservationStatus, ReviewDecision, NeedSpareReviewDecision } from './entities/inventory-reservation.entity';
+import { InventoryReservation, ReservationStatus, ReviewDecision, NeedSpareReviewDecision } from './entities/inventory-reservation.entity';
 import { UserStatus } from '../auth/entities/user.entity';
 import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 
@@ -49,6 +49,7 @@ describe('InventoryService', () => {
       query: jest.fn().mockResolvedValue(undefined),
       findOne: jest.fn(),
       find: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       save: jest.fn((entity) => Promise.resolve(entity)),
       create: jest.fn((_cls, data) => data),
     };
@@ -385,12 +386,26 @@ describe('InventoryService', () => {
       });
     }
 
+    // manager.find is called twice by consumeReservationsOnQcApproval - once for active
+    // (HELD/PARTIALLY_RESERVED) reservations (an array `where`, matching either status),
+    // once for PENDING_REVIEW ones (a plain object `where`). Dispatch on that shape rather
+    // than call order, and default pendingReview to [] so every existing test in this
+    // describe block (written before the orphan fix) keeps its original behavior untouched.
+    function wireReservations(active: any[], pendingReview: any[] = []) {
+      manager.find.mockImplementation((_entityClass: any, opts: any) => {
+        if (Array.isArray(opts?.where)) {
+          return Promise.resolve(active);
+        }
+        return Promise.resolve(pendingReview);
+      });
+    }
+
     it('happy path: consumes the reservation, moves stock Main Store -> Damage Location, and passes the job - all in one transaction', async () => {
       const jc = readyJobCard();
       wireManager(jc, {
         'part-1:MAIN_STORE': stock({ sparePartId: 'part-1', quantityOnHand: 10, quantityReserved: 3 }),
       });
-      manager.find.mockResolvedValue([reservation({ sparePartId: 'part-1', status: ReservationStatus.HELD, quantityReserved: 3 })]);
+      wireReservations([reservation({ sparePartId: 'part-1', status: ReservationStatus.HELD, quantityReserved: 3 })]);
 
       const result = await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
 
@@ -409,7 +424,7 @@ describe('InventoryService', () => {
         'part-1:MAIN_STORE': stock({ sparePartId: 'part-1', quantityOnHand: 5, quantityReserved: 2 }),
         // no 'part-1:DAMAGE_LOCATION' entry - simulates it not existing yet
       });
-      manager.find.mockResolvedValue([reservation({ sparePartId: 'part-1', status: ReservationStatus.HELD, quantityReserved: 2 })]);
+      wireReservations([reservation({ sparePartId: 'part-1', status: ReservationStatus.HELD, quantityReserved: 2 })]);
 
       await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
 
@@ -440,7 +455,7 @@ describe('InventoryService', () => {
     it('the negative-inventory gate: blocks approval when a spare part is still short overall (a lone PARTIALLY_RESERVED row, no top-up)', async () => {
       const jc = readyJobCard();
       wireManager(jc, { 'part-1:MAIN_STORE': stock({ sparePartId: 'part-1', quantityOnHand: 10, quantityReserved: 2 }) });
-      manager.find.mockResolvedValue([
+      wireReservations([
         reservation({ sparePartId: 'part-1', status: ReservationStatus.PARTIALLY_RESERVED, quantityReserved: 2, quantityRequested: 5 }),
       ]);
 
@@ -456,7 +471,7 @@ describe('InventoryService', () => {
       const jc = readyJobCard();
       wireManager(jc, { 'part-1:MAIN_STORE': stock({ sparePartId: 'part-1', quantityOnHand: 20, quantityReserved: 10 }) });
       const earlier = new Date(NOW.getTime() - 60 * 60 * 1000);
-      manager.find.mockResolvedValue([
+      wireReservations([
         reservation({ id: 'res-original', sparePartId: 'part-1', status: ReservationStatus.PARTIALLY_RESERVED, quantityRequested: 10, quantityReserved: 3, requestedAt: earlier }),
         reservation({ id: 'res-topup', sparePartId: 'part-1', status: ReservationStatus.HELD, quantityRequested: 7, quantityReserved: 7, requestedAt: NOW }),
       ]);
@@ -471,7 +486,7 @@ describe('InventoryService', () => {
     it('defensive invariant: blocks (rather than going negative) if recorded on-hand stock is somehow less than what is reserved', async () => {
       const jc = readyJobCard();
       wireManager(jc, { 'part-1:MAIN_STORE': stock({ sparePartId: 'part-1', quantityOnHand: 1, quantityReserved: 1 }) });
-      manager.find.mockResolvedValue([reservation({ sparePartId: 'part-1', status: ReservationStatus.HELD, quantityReserved: 3 })]);
+      wireReservations([reservation({ sparePartId: 'part-1', status: ReservationStatus.HELD, quantityReserved: 3 })]);
 
       await expect(service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW)).rejects.toThrow(ConflictException);
     });
@@ -479,7 +494,7 @@ describe('InventoryService', () => {
     it('a job with no spare reservations at all still passes QC (a repair needing no parts)', async () => {
       const jc = readyJobCard();
       wireManager(jc, {});
-      manager.find.mockResolvedValue([]);
+      wireReservations([]);
 
       const result = await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
 
@@ -492,7 +507,7 @@ describe('InventoryService', () => {
         'part-short:MAIN_STORE': stock({ sparePartId: 'part-short', quantityOnHand: 10, quantityReserved: 2 }),
         'part-ok:MAIN_STORE': stock({ sparePartId: 'part-ok', quantityOnHand: 10, quantityReserved: 1 }),
       });
-      manager.find.mockResolvedValue([
+      wireReservations([
         reservation({ id: 'res-short', sparePartId: 'part-short', status: ReservationStatus.PARTIALLY_RESERVED, quantityRequested: 5, quantityReserved: 2 }),
         // this unrelated part being fully held is what flipped the Job Card back to
         // IN_PROGRESS in WorkshopService, letting it reach READY_FOR_QC at all
@@ -509,7 +524,7 @@ describe('InventoryService', () => {
         'part-b:MAIN_STORE': stock({ sparePartId: 'part-b', quantityOnHand: 10, quantityReserved: 1 }),
         'part-a:MAIN_STORE': stock({ sparePartId: 'part-a', quantityOnHand: 10, quantityReserved: 1 }),
       });
-      manager.find.mockResolvedValue([
+      wireReservations([
         reservation({ id: 'res-b', sparePartId: 'part-b', status: ReservationStatus.HELD, quantityReserved: 1 }),
         reservation({ id: 'res-a', sparePartId: 'part-a', status: ReservationStatus.HELD, quantityReserved: 1 }),
       ]);
@@ -518,6 +533,126 @@ describe('InventoryService', () => {
 
       const lockCalls = manager.query.mock.calls.map((c: any) => c[1][0]);
       expect(lockCalls).toEqual(['jobcard:jc-1', 'part-a', 'part-b']);
+    });
+
+    // --- 2026-09-07: the orphaned Need Spare reservation fix ---------------------------
+    describe('auto-rejects still-PENDING_REVIEW reservations (the orphaned Need Spare fix)', () => {
+      it('auto-rejects a PENDING_REVIEW reservation nobody reviewed, with no stock movement', async () => {
+        const jc = readyJobCard();
+        wireManager(jc, {});
+        wireReservations(
+          [],
+          [reservation({ id: 'res-pending', sparePartId: 'part-1', status: ReservationStatus.PENDING_REVIEW, quantityReserved: 0 })],
+        );
+
+        const result = await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
+
+        expect(result.status).toBe(JobCardStatus.QC_PASSED);
+        expect(manager.update).toHaveBeenCalledWith(
+          InventoryReservation,
+          { id: 'res-pending', status: ReservationStatus.PENDING_REVIEW },
+          expect.objectContaining({
+            status: ReservationStatus.REJECTED,
+            reviewedByUserId: 'qc-officer-1',
+            lastReviewedAt: NOW,
+            notes: expect.stringContaining('Auto-rejected'),
+          }),
+        );
+        // No InventoryStock lookup/save for a part that only ever had a PENDING_REVIEW
+        // request - nothing was ever reserved, so there's nothing to consume.
+        expect(manager.findOne).not.toHaveBeenCalledWith(InventoryStock, expect.anything());
+      });
+
+      it('auto-rejects every PENDING_REVIEW reservation on the job when there is more than one', async () => {
+        const jc = readyJobCard();
+        wireManager(jc, {});
+        wireReservations(
+          [],
+          [
+            reservation({ id: 'res-pending-1', sparePartId: 'part-1', status: ReservationStatus.PENDING_REVIEW }),
+            reservation({ id: 'res-pending-2', sparePartId: 'part-2', status: ReservationStatus.PENDING_REVIEW }),
+          ],
+        );
+
+        await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
+
+        expect(manager.update).toHaveBeenCalledWith(InventoryReservation, { id: 'res-pending-1', status: ReservationStatus.PENDING_REVIEW }, expect.anything());
+        expect(manager.update).toHaveBeenCalledWith(InventoryReservation, { id: 'res-pending-2', status: ReservationStatus.PENDING_REVIEW }, expect.anything());
+      });
+
+      it('does NOT touch an already-HELD reservation for the same part a PENDING_REVIEW request also exists for', async () => {
+        // A job can have both a fully-held reservation (from a reviewed request) AND a
+        // separate still-pending one for the same part (a technician tapped Need Spare
+        // twice) - only the PENDING_REVIEW row should be auto-rejected; the HELD one
+        // still gets consumed normally.
+        const jc = readyJobCard();
+        wireManager(jc, { 'part-1:MAIN_STORE': stock({ sparePartId: 'part-1', quantityOnHand: 10, quantityReserved: 3 }) });
+        wireReservations(
+          [reservation({ id: 'res-held', sparePartId: 'part-1', status: ReservationStatus.HELD, quantityReserved: 3 })],
+          [reservation({ id: 'res-pending', sparePartId: 'part-1', status: ReservationStatus.PENDING_REVIEW })],
+        );
+
+        const result = await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
+
+        expect(result.status).toBe(JobCardStatus.QC_PASSED);
+        expect(manager.save).toHaveBeenCalledWith(expect.objectContaining({ id: 'res-held', status: ReservationStatus.CONSUMED }));
+        expect(manager.update).toHaveBeenCalledWith(InventoryReservation, { id: 'res-pending', status: ReservationStatus.PENDING_REVIEW }, expect.anything());
+      });
+
+      it('folds PENDING_REVIEW spare parts into the same sorted advisory-lock set as active reservations (race safety)', async () => {
+        // part-a only has a PENDING_REVIEW request, part-b only has a HELD one - both must
+        // be locked (in sorted order) so a concurrent reviewNeedSpareRequest(APPROVE) on
+        // part-a's reservation can never interleave with this auto-reject.
+        const jc = readyJobCard();
+        wireManager(jc, { 'part-b:MAIN_STORE': stock({ sparePartId: 'part-b', quantityOnHand: 10, quantityReserved: 1 }) });
+        wireReservations(
+          [reservation({ id: 'res-b', sparePartId: 'part-b', status: ReservationStatus.HELD, quantityReserved: 1 })],
+          [reservation({ id: 'res-a', sparePartId: 'part-a', status: ReservationStatus.PENDING_REVIEW })],
+        );
+
+        await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
+
+        const lockCalls = manager.query.mock.calls.map((c: any) => c[1][0]);
+        expect(lockCalls).toEqual(['jobcard:jc-1', 'part-a', 'part-b']);
+      });
+
+      it('never throws or looks up MAIN_STORE stock for a part that only ever had a PENDING_REVIEW request (no GRN done yet)', async () => {
+        // Regression guard for a bug caught in review: folding PENDING_REVIEW spare parts
+        // into the CONSUME loop (rather than just the lock-acquisition set) would wrongly
+        // throw "no stock record" for a part nobody ever actually reserved stock for.
+        const jc = readyJobCard();
+        wireManager(jc, {}); // no InventoryStock row exists for 'part-never-grnd' at all
+        wireReservations(
+          [],
+          [reservation({ id: 'res-pending', sparePartId: 'part-never-grnd', status: ReservationStatus.PENDING_REVIEW })],
+        );
+
+        const result = await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
+
+        expect(result.status).toBe(JobCardStatus.QC_PASSED);
+      });
+
+      it('a job with only a PENDING_REVIEW reservation and nothing else still passes QC', async () => {
+        const jc = readyJobCard();
+        wireManager(jc, {});
+        wireReservations([], [reservation({ id: 'res-pending', sparePartId: 'part-1', status: ReservationStatus.PENDING_REVIEW })]);
+
+        const result = await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
+
+        expect(result.status).toBe(JobCardStatus.QC_PASSED);
+        expect(result.qcApprovedByUserId).toBe('qc-officer-1');
+      });
+
+      it('does not error or double-process if the guarded update reports 0 rows affected (a TL/technician already resolved it in a genuine race)', async () => {
+        const jc = readyJobCard();
+        wireManager(jc, {});
+        wireReservations([], [reservation({ id: 'res-pending', sparePartId: 'part-1', status: ReservationStatus.PENDING_REVIEW })]);
+        manager.update.mockResolvedValue({ affected: 0 });
+
+        const result = await service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW);
+
+        expect(result.status).toBe(JobCardStatus.QC_PASSED);
+      });
     });
   });
 

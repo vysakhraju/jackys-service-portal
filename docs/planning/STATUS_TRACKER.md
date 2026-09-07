@@ -2907,9 +2907,12 @@ both files' source and asserts the gateway's fallback list is always a superset 
 build instead of silently breaking the live dashboard again.
 
 **Verified:** 642/642 backend tests passing (639 + 3 new), `tsc -b` clean, confirmed in
-the isolated cloud sandbox and cross-checked on your actual machine. Not yet re-verified
-against your real running server - restart the backend to pick up the fix, then repeat
-the `/reports` pill check; this should now go `Live` within a couple seconds.
+the isolated cloud sandbox and cross-checked on your actual machine. **Committed as
+`dc47427`** (main + master). **Re-tested live against your real running server
+(2026-09-07): confirmed fixed** - the connection pill now goes `Live` within a couple
+seconds of the page loading, exactly as designed. This closes out the last open item from
+Frontend Phase 12's live run - the manual WebSocket check that `verify-phase12.ps1`
+couldn't automate now passes by hand too.
 
 Known, explicitly-deferred follow-ups, unrelated to the frontend build, if you want them
 at some point instead:
@@ -3642,6 +3645,59 @@ the holistic test-master QA pass, and this live-verification writeup - landed in
 one commit, `78b729e`, on both `main` and `master` (34 files, 2699 insertions).
 Not yet pushed to the remote - that step is manual by design (no git push
 credentials live in this session); push both branches yourself when ready.
+
+## Orphaned Need Spare reservation gap - fixed (2026-09-07)
+
+A `the-fool` pre-mortem (mode: Find failure modes) ran on the fix design before writing
+any code, since this touches inventory/reservation state transitions - the standing
+practice for this class of change. It surfaced a real race condition the original "just
+auto-reject on QC approval" idea would have missed, plus a UI-breaking side effect of the
+other option on the table, both resolved before implementation:
+
+- **The chosen fix:** `consumeReservationsOnQcApproval()` now also finds any reservation
+  on the Job Card still in `PENDING_REVIEW` and auto-rejects it (no stock movement - none
+  was ever reserved), with an audit note ("Auto-rejected: Job Card was QC-approved while
+  this Need Spare request was still pending Team Leader review") and `reviewedByUserId`
+  set to the QC approver. Auto-reject was chosen over auto-approve-into-`HELD`: the job
+  just passed QC *without* this part, so whatever was requested clearly wasn't blocking,
+  and silently reserving stock for a request nobody reviewed would violate the whole point
+  of Need Spare's TL-review gate (a deliberate Mobile Phase 5 design decision).
+- **Race condition caught by the pre-mortem:** `reviewNeedSpareRequest()`'s APPROVE branch
+  takes a Postgres advisory lock on the reservation's spare part before moving stock, but
+  a naive "read the row, flip it, save it" auto-reject wouldn't have shared that lock -
+  a TL approving a Need Spare request at the exact moment QC is approved for the same job
+  could have had their approval (and the stock it moved) silently overwritten back to
+  REJECTED. Fixed by folding every `PENDING_REVIEW` reservation's spare part into the same
+  sorted advisory-lock set `consumeReservationsOnQcApproval()` already acquires for its
+  existing HELD/PARTIALLY_RESERVED consumption, so the two code paths can never interleave
+  - plus the actual update is a conditional `UPDATE ... WHERE status = 'PENDING_REVIEW'`
+  rather than a blind overwrite, so it's a safe no-op if a human reviewer won a genuine
+  race instead.
+- **The "surface PENDING_REVIEW in the stale-reservations view" option was NOT built this
+  pass** - the pre-mortem's implementation check found the existing Inventory frontend
+  page (`InventoryPage.tsx`'s `ReservationRow`) always renders "Approve reallocation" /
+  "Reject" buttons that call the OLD `review()` endpoint (`ReviewDecision`), which rejects
+  a `PENDING_REVIEW` row's status outright - surfacing these rows there without also
+  updating that component would have shipped confusing, broken buttons. Since the
+  auto-reject above already fully closes the orphan gap on its own (no permanent orphan
+  can occur anymore, at all), this is now a nice-to-have deferred to the backlog rather
+  than a real remaining gap - see the roadmap for "surface stale PENDING_REVIEW requests"
+  as its own, frontend-inclusive follow-up if wanted later.
+- Also confirmed during the pre-mortem, no fix needed: a `PENDING_REVIEW` reservation
+  correctly stays untouched on QC **reject** (`qcReject()` never calls this method at
+  all - only the approve path does), and a rework/re-visit after QC naturally creates a
+  fresh Need Spare request (fresh `idempotencyKey`) rather than needing to "undo" an
+  auto-rejection, so no special-case handling was needed for either scenario.
+
+**New tests** (`inventory.service.spec.ts`, 7 new): auto-rejects a lone pending request
+with no stock movement; auto-rejects multiple pending requests on the same job; leaves an
+already-HELD reservation for the same part untouched while rejecting a separate pending
+one; the advisory-lock ordering includes pending-only spare parts; never throws a
+false "no stock record" error for a part that was only ever requested, never GRN'd; a job
+with only a pending request still reaches `QC_PASSED`; and a 0-affected-rows guarded
+update (a genuine race already resolved by a human) doesn't error. **649/649 backend
+tests passing (642 + 7 new), `tsc -b` clean**, confirmed in the isolated cloud sandbox and
+cross-checked on your actual machine.
 
 ---
 

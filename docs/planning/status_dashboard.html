@@ -1001,7 +1001,12 @@
         <span class="mono">tsc -b</span> clean. Restart your backend and re-check the pill
         — it should now go <span class="mono">Live</span>.
       </p>
-      <span class="resolved-tag" style="background:var(--success);">Found, fixed, and unit-tested — awaiting your re-test</span>
+      <p>
+        <b>Re-tested live (2026-09-07): confirmed fixed.</b> Committed as
+        <span class="mono">dc47427</span>. The connection pill now goes
+        <span class="mono">Live</span> within a couple seconds, as designed.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Found, fixed, and live-verified</span>
     </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Backend Phase 12: Warranty Claims — built, unit-tested, live-verified (70/70)</h3>
@@ -1470,6 +1475,48 @@
         surfaced.
       </p>
       <span class="resolved-tag" style="background:var(--success);">Live-verified end-to-end — Phase 5 of 5 complete</span>
+    </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Orphaned Need Spare reservation gap — fixed (2026-09-07)</h3>
+      <p>
+        <span class="mono">the-fool</span> pre-mortem (mode: Find failure modes) ran
+        before writing code — inventory/reservation state changes always get one. It
+        caught a real race condition the obvious fix would have missed: a naive
+        "read the row, flip it, save it" auto-reject wouldn't share the advisory lock
+        <span class="mono">reviewNeedSpareRequest()</span>'s APPROVE branch takes before
+        moving stock, so a Team Leader approving a request at the exact moment QC is
+        approved could have had their approval silently overwritten back to REJECTED.
+      </p>
+      <p>
+        <b>Fix:</b> <span class="mono">consumeReservationsOnQcApproval()</span> now also
+        auto-rejects any still-<span class="mono">PENDING_REVIEW</span> reservation on the
+        Job Card (no stock movement — none was ever reserved), with an audit note and the
+        QC approver recorded as reviewer. Its spare part is folded into the same sorted
+        advisory-lock set the method already acquires, so the two code paths can never
+        interleave — and the actual update is a conditional
+        <span class="mono">WHERE status = 'PENDING_REVIEW'</span>, a safe no-op if a human
+        reviewer won a genuine race instead. Auto-reject (not auto-approve) was the right
+        default: the job passed QC <i>without</i> the part, and silently reserving stock
+        for a request nobody reviewed would defeat Need Spare's whole TL-review gate.
+      </p>
+      <p>
+        The "surface it in the stale-reservations view" option was deliberately <b>not</b>
+        built this pass — the existing Inventory page's reservation row always renders
+        "Approve reallocation"/"Reject" buttons wired to the old
+        <span class="mono">review()</span> endpoint, which would reject a
+        <span class="mono">PENDING_REVIEW</span> row outright; shipping that without a
+        matching frontend update would have meant confusing, broken buttons. Since the
+        auto-reject above already fully closes the gap on its own, that's now a
+        nice-to-have on the backlog, not a remaining problem.
+      </p>
+      <p>
+        <b>7 new tests</b> (auto-reject with no stock movement, multiple pending requests,
+        a HELD reservation for the same part left untouched, lock-ordering, no false "no
+        stock record" error for an ungrn'd part, QC still passes with only a pending
+        request, and a 0-affected-rows race resolves cleanly) — <b>649/649 backend tests
+        passing</b> (642 + 7 new), <span class="mono">tsc -b</span> clean.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Found via live testing, fixed, unit-tested</span>
     </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Holistic mobile QA pass (2026-09-07): four real coverage gaps found and fixed across all 5 phases</h3>

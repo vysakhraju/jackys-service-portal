@@ -291,6 +291,29 @@ export class InventoryService {
    * spare part this job touches, sorted alphabetically by id, so two concurrent
    * QC-approvals on different jobs that happen to share parts in reverse order can never
    * deadlock against each other.
+   *
+   * 2026-09-07 the-fool pre-mortem (orphaned Need Spare fix): also auto-rejects any
+   * still-PENDING_REVIEW reservation on this Job Card - a Need Spare request no TL ever
+   * reviewed. Before this fix, such a request survived QC approval untouched (this method
+   * only ever looked at HELD/PARTIALLY_RESERVED) and became permanently orphaned - the job
+   * moves on to QC_PASSED and nothing in the workflow ever surfaces it again. Auto-reject
+   * is the right default here, not auto-approve-into-HELD: the job just passed QC WITHOUT
+   * this part, so whatever was requested clearly wasn't blocking, and silently reserving
+   * stock for a request nobody reviewed would violate the whole point of Need Spare's
+   * TL-review gate (Mobile Phase 5 pre-mortem finding). No stock movement either way, since
+   * PENDING_REVIEW never touched stock in the first place - same as reviewNeedSpareRequest's
+   * own REJECT branch and releaseReservation's PENDING_REVIEW branch.
+   *
+   * Race safety: reviewNeedSpareRequest's APPROVE branch takes a pg_advisory_xact_lock on
+   * the reservation's sparePartId before moving stock - PENDING_REVIEW reservations found
+   * here have their spare parts folded into the SAME sorted advisory-lock set below, so a
+   * TL approving one of these requests at the exact moment QC is approved can never race
+   * against this auto-reject (each blocks the other until the first transaction commits).
+   * The actual UPDATE is also conditioned on the row still being PENDING_REVIEW at write
+   * time (manager.update's WHERE clause, not a blind manager.save of a stale in-memory
+   * read) - belt-and-braces: if a TL's REJECT call (which takes no lock at all, since
+   * REJECT never touches stock and losing that race is harmless either way) already closed
+   * it first, this is silently a no-op rather than clobbering their decision.
    */
   async consumeReservationsOnQcApproval(jobCardId: string, approvedByUserId: string, now: Date = new Date()): Promise<JobCard> {
     return this.dataSource.transaction(async (manager) => {
@@ -311,6 +334,10 @@ export class InventoryService {
           { jobCardId, status: ReservationStatus.HELD },
           { jobCardId, status: ReservationStatus.PARTIALLY_RESERVED },
         ],
+      });
+
+      const pendingReviewReservations = await manager.find(InventoryReservation, {
+        where: { jobCardId, status: ReservationStatus.PENDING_REVIEW },
       });
 
       const latestByPart = new Map<string, InventoryReservation>();
@@ -337,9 +364,33 @@ export class InventoryService {
         // valid, just nothing to consume. Fall through to the status transition below.
       }
 
+      // Two different sets on purpose: lockSparePartIds covers every part touched by EITHER
+      // an active (HELD/PARTIALLY_RESERVED) reservation or a PENDING_REVIEW one, since both
+      // need the same advisory lock for race safety (see method doc above). The consume
+      // loop below must stay scoped to sparePartIds (active reservations only) though - a
+      // part that only ever had a PENDING_REVIEW request may have no InventoryStock row at
+      // MAIN_STORE yet at all (never GRN'd), and that's fine, since nothing is being
+      // consumed for it; folding it into the consume loop would wrongly throw a "no stock
+      // record" ConflictException for a part this job never actually reserved any of.
       const sparePartIds = Array.from(new Set(activeReservations.map((r) => r.sparePartId))).sort();
-      for (const sparePartId of sparePartIds) {
+      const lockSparePartIds = Array.from(
+        new Set([...activeReservations, ...pendingReviewReservations].map((r) => r.sparePartId)),
+      ).sort();
+      for (const sparePartId of lockSparePartIds) {
         await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sparePartId]);
+      }
+
+      for (const reservation of pendingReviewReservations) {
+        await manager.update(
+          InventoryReservation,
+          { id: reservation.id, status: ReservationStatus.PENDING_REVIEW },
+          {
+            status: ReservationStatus.REJECTED,
+            reviewedByUserId: approvedByUserId,
+            notes: 'Auto-rejected: Job Card was QC-approved while this Need Spare request was still pending Team Leader review.',
+            lastReviewedAt: now,
+          },
+        );
       }
 
       for (const sparePartId of sparePartIds) {
