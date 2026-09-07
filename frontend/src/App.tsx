@@ -49,7 +49,11 @@ import { ContractsPage } from './pages/amc/ContractsPage';
 import { ExpiringContractsPage } from './pages/amc/ExpiringContractsPage';
 import { UpsellCandidatesPage } from './pages/amc/UpsellCandidatesPage';
 import { DismantlingPage } from './pages/dismantling/DismantlingPage';
+import { ReportsLayout } from './pages/reports/ReportsLayout';
 import { ReportsPage } from './pages/reports/ReportsPage';
+import { FinanceReportsPage } from './pages/reports/FinanceReportsPage';
+import { QualityReportsPage } from './pages/reports/QualityReportsPage';
+import { OperationalReportsPage } from './pages/reports/OperationalReportsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -138,7 +142,13 @@ export function App() {
                 </Route>
 
                 <Route path="/dismantling" element={<DismantlingPage />} />
-                <Route path="/reports" element={<ReportsPage />} />
+
+                <Route path="/reports" element={<ReportsLayout />}>
+                  <Route index element={<ReportsPage />} />
+                  <Route path="finance" element={<FinanceReportsPage />} />
+                  <Route path="quality" element={<QualityReportsPage />} />
+                  <Route path="operational" element={<OperationalReportsPage />} />
+                </Route>
               </Route>
             </Route>
 

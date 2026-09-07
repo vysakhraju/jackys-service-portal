@@ -1663,35 +1663,62 @@
       </p>
       <span class="resolved-tag" style="background:var(--success);">Fixed and re-tested this session</span>
     </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Frontend Phase 14 (2026-09-07): BRD 18.2/18.3/18.4 report screens shipped</h3>
+      <p>
+        The last three deferred report dashboards get their frontend - Finance (18.2),
+        Quality/Product (18.3, AC-22/23/24), Operational (18.4). Backends were already
+        built and live-verified in backend Phase 13 (110/110 checks) - this phase is
+        purely consumption, no backend change at all. A new <span class="mono">ReportsLayout</span>
+        adds a tab strip (Live Board / Finance / Quality / Operational) above the existing
+        <span class="mono">/reports</span> routes; every tab is always visible (same
+        precedent as the top-level nav), each destination page runs its own role check
+        before firing any network call.
+      </p>
+      <p>
+        <b>Finance:</b> Revenue/Cost/Profit + OOW/Warranty(IW)/AMC summary cards, GP by
+        Service Centre, Interdepartment Recharge (never "Settled"), Unpaid Invoices
+        (B2B/B2C aging), Profit Trend. A shared formatter enforces "—" for every genuinely
+        unknown figure, never a fabricated 0. <b>Quality:</b> Product Failure Ratio,
+        Repeat Complaints, RWR Analysis (free-text reason, no invented taxonomy).
+        <b>Operational:</b> Technician Productivity (no customer-rating column), SLA
+        Breach (configurable threshold), Spare Parts Consumption.
+      </p>
+      <p>
+        <span class="mono">test-master</span> coverage: <b>31 new frontend tests, 355/355
+        passing app-wide</b> (was 324), <span class="mono">tsc -b</span> clean. Two
+        write-in-progress test bugs caught and fixed before landing: a value/model shared
+        by two widgets needed <span class="mono">findAllByText</span>, not
+        <span class="mono">findByText</span>; and the customer-rating check was rewritten
+        to look for an absent table column, not an absent phrase (the report's own note
+        legitimately explains the omission in prose).
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+    </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Phase 5 live-verified. Phases 3-4's live pass + customer portal next</h3>
-        <h2>Need Spare + Complete/QC-handoff walked end-to-end on a real appointment through to QC_PASSED. Next up: the same live-device pass for Phases 3-4, then customer portal polish.</h2>
-        <p>Nothing is blocking. The <b>mobile app</b> (React Native/Expo) has shipped and now
-        live-verified Phase 5 in <span class="mono">MOBILE_APP_SCOPE_v1.md</span> §7
-        end-to-end (client + backend + a real QC approval) — see
-        <span class="mono">STATUS_TRACKER.md</span> for the full walkthrough, including one
-        real gap the live run surfaced (an orphaned <span class="mono">PENDING_REVIEW</span>
-        reservation that QC-approve doesn't clean up). A holistic
-        <span class="mono">test-master</span> QA pass across all 5 phases also ran this
-        session and found/fixed four real coverage gaps. 639/639 backend and
-        <b>119/119 mobile</b> tests passing, <span class="mono">tsc --noEmit</span> clean on
-        both. Phases 1-2 and 5 are now live-device-verified; <b>Phases 3-4</b> are built,
-        fully tested, and QA'd but still awaiting that same live pass — queued next.
-        <b>Extra Role Access</b> is live — an admin can grant any user another role's
-        access, time-boxed and previewed before confirming, on top of User Management's
-        account creation and role changes. The <b>customer portal</b> will get a
-        branding/visual polish pass on the existing no-login
-        <span class="mono">/track/:token</span> page rather than a full customer-login
-        system — not started yet, queued behind Phases 3-4's live pass.
+        <h3>BRD 18.2-18.4 report screens shipped. Warranty Claims frontend is the last P2 item</h3>
+        <h2>Finance/Quality/Operational dashboards are live. Only Warranty Claims frontend remains from the P2 roadmap tier, plus the Phases 3-4 live pass and the second half of the WebSocket check.</h2>
+        <p>Nothing is blocking. Today's session found and fixed a real WebSocket CORS bug
+        (live-verified, the pill goes <span class="mono">Live</span>), closed the orphaned
+        <span class="mono">PENDING_REVIEW</span> Need Spare reservation gap (auto-reject on
+        QC approval, race-safe, independently QA'd), and shipped
+        <b>Frontend Phase 14</b> - the BRD 18.2/18.3/18.4 Finance/Quality/Operational
+        report screens, the last deferred piece of Reports/Dashboards. <b>651/651 backend
+        and 355/355 frontend tests passing</b>, <span class="mono">tsc -b</span> clean on
+        both. The mobile app's Phases 1-2 and 5 are live-device-verified; <b>Phases 3-4</b>
+        are built, tested, and QA'd but still awaiting that same live pass. The
+        <b>customer portal</b> branding/visual polish pass on the existing no-login
+        <span class="mono">/track/:token</span> page hasn't started yet.
         <b>WhatsApp Business API</b> stays paused until the company creates its own
-        WhatsApp Business account — not a technical blocker here. Still open: your own
+        account — not a technical blocker here. Still open: your own
         <span class="mono">git push</span> (run
         <span class="mono">git log origin/main..main</span> yourself for the current count)
-        and the Reports/Dashboards WebSocket manual spot-check from Frontend Phase 12.</p>
+        and advancing a Job Card in a second tab to confirm the Kanban board updates live
+        (the pill itself is already confirmed live).</p>
       </div>
       <div class="go">Next →</div>
     </div>
@@ -1699,7 +1726,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at e16805a — awaiting push from your machine (dc47427, bdd4602, e16805a all unpushed)</span>
+    <span>master + main synced locally at 71c0b52, Frontend Phase 14 not yet committed — awaiting push from your machine</span>
   </footer>
 
 </div>

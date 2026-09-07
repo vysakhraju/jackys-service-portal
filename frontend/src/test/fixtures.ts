@@ -17,10 +17,21 @@ import type {
   ApprovalAgingItem,
   ApprovalAgingReport,
   DashboardOverview,
+  FinanceSummary,
   FirstTimeFixRateReport,
+  GpByServiceCentreRow,
+  InterdepartmentRechargeRow,
   KanbanBoard,
   KanbanCard,
+  ProductFailureRatioRow,
+  ProfitTrendPoint,
+  RepeatComplaintItem,
+  RwrAnalysisRow,
   ServiceEfficiencyReport,
+  SlaBreachReport,
+  SpareConsumptionReport,
+  TechnicianProductivityReport,
+  UnpaidInvoicesReport,
 } from '../lib/reportsTypes';
 import type { AppointmentDashboardStats } from '../lib/appointmentsTypes';
 import type { GlPosting } from '../lib/glLedgerTypes';
@@ -667,6 +678,205 @@ export function makeRoleCapabilityModule(overrides: Partial<RoleCapabilityModule
       { method: 'POST', path: '/job-cards/:id/warranty-override', summary: 'Warranty Override (FR-17/AC-18)', requiresSeparatePermissionGrant: null },
       { method: 'POST', path: '/job-cards/:id/qc/approve', summary: 'QC approve (FR-10)', requiresSeparatePermissionGrant: 'QC_APPROVAL' },
     ],
+    ...overrides,
+  };
+}
+
+// Frontend Phase 14 additions below (BRD 18.2/18.3/18.4 reports).
+
+export function makeFinanceSummary(overrides: Partial<FinanceSummary> = {}): FinanceSummary {
+  return {
+    periodStart: null,
+    periodEnd: null,
+    periodBasis: { oow: 'Invoice.createdAt', iw: 'DebitNote.postedAt' },
+    revenueSummary: {
+      totalServiceRevenue: 5000,
+      totalLabourRevenue: null,
+      totalSparePartsRevenue: null,
+      totalAmcRevenue: 1200,
+    },
+    costSummary: {
+      totalLabourCost: null,
+      totalSparePartsCost: null,
+      totalAmcCost: null,
+      totalCOGS: null,
+    },
+    profitSummary: { grossProfit: null, grossProfitMarginPct: null },
+    oow: {
+      totalOowRevenue: 5000,
+      totalLabourRevenueOow: null,
+      totalLabourCostOow: null,
+      labourProfitOow: null,
+      totalSpareRevenueOow: null,
+      totalSpareCostOow: null,
+      spareProfitOow: null,
+      totalOowProfit: null,
+      oowMarginPct: null,
+      note: 'OOW cost is not tracked at a per-job level in this app.',
+    },
+    warranty: {
+      totalSpareCostIw: 800,
+      totalLabourCostIw: 200,
+      totalWarrantyCost: 1000,
+      amountClaimedFromSuppliers: 900,
+      amountReceived: 700,
+      recoveryRatePct: 70,
+    },
+    amc: {
+      totalAmcRevenue: 1200,
+      totalAmcLabourCost: null,
+      totalAmcSpareCost: null,
+      amcGrossProfit: null,
+      amcMarginPct: null,
+      activeContractsCount: 3,
+      costTrackingNote: 'AMC cost is not tracked per-visit in this app.',
+    },
+    ...overrides,
+  };
+}
+
+export function makeGpByServiceCentreRow(overrides: Partial<GpByServiceCentreRow> = {}): GpByServiceCentreRow {
+  return {
+    serviceCentreId: 'sc-1',
+    serviceCentreName: 'Dubai Main',
+    oowRevenue: 5000,
+    iwRechargeRevenue: 1000,
+    iwLabourCost: 200,
+    amcRevenue: 1200,
+    grossProfit: null,
+    gpMarginPct: null,
+    ...overrides,
+  };
+}
+
+export function makeInterdepartmentRechargeRow(overrides: Partial<InterdepartmentRechargeRow> = {}): InterdepartmentRechargeRow {
+  return {
+    salesChannelName: 'Retail',
+    jobCount: 4,
+    sparePartsCostInternal: 400,
+    labourCostInternal: 100,
+    totalDebitNoteAmount: 500,
+    pendingCount: 1,
+    postedToGlCount: 3,
+    ...overrides,
+  };
+}
+
+export function makeUnpaidInvoicesReport(overrides: Partial<UnpaidInvoicesReport> = {}): UnpaidInvoicesReport {
+  return {
+    asOf: '2026-09-07T09:00:00Z',
+    b2b: [
+      {
+        jobCardId: 'jc-1',
+        jobCardNumber: 'JC-0001',
+        customerName: 'Acme LLC',
+        invoiceId: 'inv-1',
+        invoiceNumber: 'INV-0001',
+        invoiceDate: '2026-09-01T00:00:00Z',
+        amountDue: 500,
+        agingBucket: '3-7 days',
+      },
+    ],
+    b2c: [],
+    note: 'Aging buckets: 0-2/3-7/8+ days since invoice date.',
+    ...overrides,
+  };
+}
+
+export function makeProfitTrendPoint(overrides: Partial<ProfitTrendPoint> = {}): ProfitTrendPoint {
+  return {
+    periodLabel: '2026-09',
+    periodStart: '2026-09-01T00:00:00Z',
+    periodEnd: '2026-09-30T00:00:00Z',
+    oowRevenue: 5000,
+    iwRechargeRevenue: 1000,
+    amcRevenue: 1200,
+    iwCost: 200,
+    iwGrossProfit: 800,
+    totalCOGS: null,
+    totalGrossProfit: null,
+    gpMarginPct: null,
+    ...overrides,
+  };
+}
+
+export function makeProductFailureRatioRow(overrides: Partial<ProductFailureRatioRow> = {}): ProductFailureRatioRow {
+  return {
+    periodLabel: '2026-09',
+    model: 'WM-500',
+    brand: 'Samsung',
+    count: 3,
+    ...overrides,
+  };
+}
+
+export function makeRepeatComplaintItem(overrides: Partial<RepeatComplaintItem> = {}): RepeatComplaintItem {
+  return {
+    serialNumber: 'SN-000123',
+    totalJobCount: 2,
+    repeatWithin30Days: true,
+    jobCardNumbers: ['JC-0001', 'JC-0002'],
+    minGapDays: 10,
+    ...overrides,
+  };
+}
+
+export function makeRwrAnalysisRow(overrides: Partial<RwrAnalysisRow> = {}): RwrAnalysisRow {
+  return {
+    model: 'WM-500',
+    reason: 'Customer declined repair cost',
+    region: 'Dubai',
+    count: 2,
+    ...overrides,
+  };
+}
+
+export function makeTechnicianProductivityReport(overrides: Partial<TechnicianProductivityReport> = {}): TechnicianProductivityReport {
+  return {
+    asOf: '2026-09-07T09:00:00Z',
+    periodStart: null,
+    periodEnd: null,
+    rows: [
+      {
+        technicianId: 'user-1',
+        technicianName: 'Test Technician',
+        jobsCompleted: 4,
+        avgHoursLoginToQc: 3.5,
+        onTimeArrivalPct: 90,
+      },
+    ],
+    note: 'Customer rating is not captured anywhere in this app.',
+    ...overrides,
+  };
+}
+
+export function makeSlaBreachReport(overrides: Partial<SlaBreachReport> = {}): SlaBreachReport {
+  return {
+    asOf: '2026-09-07T09:00:00Z',
+    thresholdHours: 48,
+    breachedCount: 1,
+    items: [
+      {
+        jobCardId: 'jc-1',
+        jobCardNumber: 'JC-0001',
+        createdAt: '2026-09-01T00:00:00Z',
+        qcApprovedAt: '2026-09-05T00:00:00Z',
+        hoursElapsed: 96,
+        hoursOverThreshold: 48,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+export function makeSpareConsumptionReport(overrides: Partial<SpareConsumptionReport> = {}): SpareConsumptionReport {
+  return {
+    periodStart: null,
+    periodEnd: null,
+    topByQuantity: [{ sparePartId: 'sp-1', code: 'SP-001', name: 'Drum Belt', totalQuantity: 10, totalValue: 500 }],
+    topByValue: [{ sparePartId: 'sp-2', code: 'SP-002', name: 'Motor', totalQuantity: 2, totalValue: 2000 }],
+    byModel: [{ key: 'WM-500', totalQuantity: 6, totalValue: 1200 }],
+    byWarrantyStatus: [{ key: 'OOW', totalQuantity: 8, totalValue: 1800 }],
     ...overrides,
   };
 }

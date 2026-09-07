@@ -3722,6 +3722,61 @@ Committed as `e16805a`.
 
 ---
 
+## Frontend Phase 14: BRD 18.2/18.3/18.4 report screens — done (31 new frontend tests)
+
+The last three deferred report dashboards get their frontend: Finance (18.2), Quality/
+Product (18.3, AC-22/23/24), Operational (18.4). All three backends were already built and
+live-verified in backend Phase 13 (110/110 checks passed) - this phase is purely
+consumption, no new endpoint, no backend change at all.
+
+**Structure:** `ReportsLayout.tsx` adds a tab strip (Live Board / Finance / Quality /
+Operational) above the existing `/reports` routes, wrapping the already-shipped
+`ReportsPage.tsx` (untouched) plus three new pages. Deliberately does NOT gate or filter
+tabs by role at the layout level, unlike `FinanceLayout` - Finance reports pull in
+ACCOUNTANT/FINANCE_MANAGER, which Quality/Operational explicitly exclude (they reuse
+`REPORTS_VIEW_ROLES` verbatim, the same Service Head/Super Admin/Technical Team Leader
+list as the Live Board), so a single layout-level role list would be wrong for at least
+two of the four tabs. Every tab is always visible - same precedent as `AppLayout`'s own
+top-level nav, which never hides a module from a role that can't use it either - and each
+destination page runs its own `canView` check before firing any network call (the-fool
+finding #5 from Phase 12, carried forward: no query, no request, for a disallowed role).
+
+**Finance (18.2):** Summary cards for Revenue/Cost/Profit plus OOW/Warranty(IW)/AMC
+sections, GP by Service Centre table, Interdepartment Recharge table (Pending/Posted to GL
+counts, never "Settled"), Unpaid Invoices split B2B/B2C with aging-bucket badges, Profit
+Trend table with a week/month/quarter selector. A shared `formatAedOrDash()`/
+`formatPctOrDash()` pair is the one place the backend's "—" vs. fabricated-0 distinction is
+enforced client-side - every widget calls through it rather than hand-rolling its own `??
+0`, so a null OOW cost or a null GP margin renders "—" everywhere on the page, never a
+silently-wrong zero.
+
+**Quality (18.3):** Product Failure Ratio (brand/model/fault-code filters, month/quarter/
+year grouping), Repeat Complaints (30-day-window flag), RWR Analysis (free-text reason,
+"Not specified" when absent - no fabricated reason-code taxonomy).
+
+**Operational (18.4):** Technician Productivity (no customer-rating column - nothing
+captures it), SLA Breach Report (configurable threshold, default 48h), Spare Parts
+Consumption (top-10 by quantity/value, by-model, by-warranty-status breakdowns).
+
+**Tests:** 31 new frontend tests across `ReportsLayout.test.tsx` (tab routing, no role
+gating at this level) and one file per report page - role-gate coverage (every permitted
+role, the exact restricted-access message, zero queries fired for a disallowed role) plus
+widget-level coverage (the Finance "—"-not-zero rule, Interdepartment Recharge never
+showing "Settled", the SLA threshold input re-fetching on change, Technician Productivity
+never showing a customer-rating column). Two write-in-progress test bugs were caught and
+fixed before landing, not shipped: `AED 5000.00` and `WM-500` each legitimately appear
+twice on their pages (once per widget that happens to share the same fixture value) - the
+first drafts used `findByText` (which throws on multiple matches) where `findAllByText`
+was actually needed; and the customer-rating check was wrongly written as "this phrase
+must not appear anywhere," which broke against the report's own note explaining the
+omission - fixed to check for the absence of an actual table column instead.
+
+**Verified:** `tsc -b` clean, **355/355 frontend tests passing** (324 + 31 new), confirmed
+in the isolated cloud sandbox and cross-checked on your actual machine (`tsc -b` clean
+there too). No backend changes, so the backend suite is untouched at 651/651.
+
+---
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
