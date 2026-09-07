@@ -3718,6 +3718,7 @@ those blocking checks in the code, but nothing asserted the ordering. Added 2 te
 a shortfall on an unrelated part correctly blocks the whole approval AND leaves the
 pending request untouched (`manager.update` never called); the "not READY_FOR_QC" guard
 does the same. **651/651 backend tests passing (649 + 2 new), `tsc -b` clean.**
+Committed as `e16805a`.
 
 ---
 
