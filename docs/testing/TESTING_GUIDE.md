@@ -2785,6 +2785,79 @@ instead of by user (used internally, not surfaced as its own screen).
   `POST /permissions/grant` for `QC_APPROVAL` - delegated role access and a QC permission
   grant are deliberately two different things, not one shortcut for the other.
 
+## 34. Mobile App — Field Technician (React Native/Expo, Phases 1-4)
+
+A separate app in `mobile/` for Field Technicians only - not a mobile version of this
+Swagger/React staff console. It calls the same backend (`src/technician`'s
+`TechnicianController`, already covered by Section 6 above) over HTTP; there's no
+separate mobile backend. Scoped in `docs/planning/MOBILE_APP_SCOPE_v1.md`.
+
+**a. Prerequisites, beyond the backend already running (Section 0):** a way to load
+the app - the free **Expo Go** app on a real phone (fastest), an Android emulator
+(Android Studio), or the iOS Simulator (Mac + Xcode) - plus your machine's LAN IP
+(`ipconfig`), since a phone can't reach `localhost`. A `TECHNICIAN_FIELD` login from
+`npm run seed:technician` (Section 4) works here too.
+
+**b. Start it:**
+
+```powershell
+cd "D:\Jackys\jackys service portal\mobile"
+npm install
+cp .env.example .env
+```
+
+Set `EXPO_PUBLIC_API_BASE_URL=http://<your LAN IP>:3000/api/v1` in `mobile/.env` (not
+`localhost`), then `npm start` - scan the printed QR code with Expo Go, or press
+`a`/`i` for an emulator/simulator. Sign in with the technician login above.
+
+**c. Phase 1 - login + Today's Schedule:** you'll need an appointment assigned to that
+technician first - `POST /appointments` (Section 5a) then
+`PUT /appointments/{id}/assign-technician` (Section 5b, this is the step that actually
+makes it show up on the schedule, not the create body's `technicianId` field). Sign in
+and confirm the appointment appears, sorted by time; the `‹`/`›` date arrows and
+pull-to-refresh work; sign-out returns to login; closing and reopening the app without
+signing out keeps the session.
+
+**d. Phase 2 - Start Visit + GPS:** tap an appointment card to open its detail screen,
+tap **Start Visit**, allow the location permission prompt. A denied prompt shows a
+retry message (or "Open Settings" if denied permanently) - there is no manual-entry
+fallback for GPS, by design. Success flips the card to "Visit started" with a
+timestamp - this is `POST /technician/visits/:appointmentId/start` (Section 6).
+
+**e. Phase 3 - Serial Number/warranty + Fault/Symptom:** on the same detail screen,
+type a serial number and tap Capture - a real one from your seeded `WarrantyMaster`
+data (Section 3) returns "In Warranty", anything else "Out of Warranty", both shown
+immediately with supplier/period. Fault/Symptom unlocks only once a serial number is
+captured (the backend's own gate) - tap "Choose fault / symptom" for a searchable list
+of fault+symptom *pairs* pulled from `GET /master-data/fault-symptoms` (Section 3),
+pick one, tap Capture. Re-capturing the serial number clears whatever fault/symptom was
+already recorded, and the app tells you so before you do it.
+
+**f. Phase 4 - offline queue:** the one thing that needs a real device, not just
+`npm test` - turn on **Airplane Mode** on the phone while on the appointment detail
+screen, then try Start Visit or either capture action. Instead of the normal
+button/form you should see a "Queued - will sync as soon as you're back online"
+message, and an offline banner near the top should reflect it. Turn Airplane Mode back
+off - within a few seconds it should sync automatically (no manual retry needed) and
+the screen should update to show the action actually landed. To see the failure path:
+queue an action offline for an appointment you then make invalid (e.g. cancel it) while
+still offline, then reconnect - it should surface as **failed** with the backend's own
+error message and Retry/Discard buttons, never disappearing silently or retrying
+forever. Killing and reopening the app with items still queued should also survive -
+the queue is persisted to on-device storage.
+
+**g. Automated tests (no backend/phone needed):** `npm test` and `npm run typecheck`
+inside `mobile/` - 63/63 tests passing as of Phase 4 (engine, context/NetInfo
+integration, and screen-level coverage for all four phases), `tsc --noEmit` clean.
+
+**h. Known gotcha while setting up test data:** `POST /appointments` can return `409
+Conflict "Service centre at capacity (0/0)"` if that service centre's `schedule` has
+`maxJobsPerDay: 0` for the appointment's weekday (see the Troubleshooting table below) -
+not a mobile-app bug, an appointment-setup trap that affects Swagger testing too.
+
+Full step-by-step walkthrough with more detail and Windows-specific troubleshooting
+(Wi-Fi/firewall issues connecting a phone, stuck ports, etc.): `mobile/README.md`.
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2853,6 +2926,13 @@ One known, deliberate gap to be aware of while testing:
 Spare-part consumption is no longer a gap — Section 12 covers the QC-approval step that
 permanently deducts a spare from `quantityOnHand` (Main Store → Damage Location) once a
 job passes QC.
+
+The **mobile app** (`mobile/`, React Native/Expo, Field Technician only, Section 34)
+has Phases 1-4 built and live-verified on a real device - login, Today's Schedule,
+Start Visit + GPS, Serial Number/warranty + Fault/Symptom capture, and an offline queue
+for all three write actions (63/63 automated tests, `tsc --noEmit` clean). Phase 5
+(Need Spare + Complete/QC-handoff) is next, not built yet - it needs new backend
+endpoints (`docs/planning/MOBILE_APP_SCOPE_v1.md` §4).
 
 `docs/planning/STATUS_TRACKER.md` always reflects current status — check there first if
 you're unsure what's ready.

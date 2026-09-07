@@ -12,13 +12,18 @@ the web app's `FieldVisitsPage.tsx` is a working reference implementation of the
 flow. See the scope doc for the full phased build order.
 
 - **Phase 1:** app skeleton, JWT login (same credentials/backend as web), Today's
-  Schedule (read-only).
+  Schedule (read-only). Live-verified.
 - **Phase 2:** Start Visit + GPS capture (appointment detail screen, blocks until a
-  real GPS fix is obtained).
-- **Phase 3 (latest):** Serial number + warranty capture, Fault/Symptom capture - both
-  on the same appointment detail screen, both online-first like Phase 2.
-- **Phase 4-5:** an offline action queue, then Need Spare + Complete/QC-handoff. Not
-  built yet.
+  real GPS fix is obtained). Live-verified.
+- **Phase 3:** Serial number + warranty capture, Fault/Symptom capture - both on the
+  same appointment detail screen, both online-first like Phase 2. Built and tested.
+- **Phase 4 (latest):** an offline action queue retrofitted onto Phases 2-3's write
+  actions (Start Visit, Serial Number, Fault/Symptom) - queues on-device when there's
+  no signal, syncs automatically on reconnect, surfaces a real sync failure with a
+  Retry/Discard choice rather than looping forever or dropping it silently.
+  Live-verified.
+- **Phase 5:** Need Spare + Complete/QC-handoff. Not built yet - needs new backend
+  endpoints (see `docs/planning/MOBILE_APP_SCOPE_v1.md` §4).
 
 ## Running it
 

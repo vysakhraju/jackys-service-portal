@@ -6,16 +6,24 @@ Built with **NestJS + PostgreSQL + JWT** (backend) and **React** (frontend).
 
 ## Status
 
-Backend: MVP (8-week plan) + AMC + Dismantling + Reports/Dashboards all built and
-live-verified — 140 REST endpoints, 1 WebSocket gateway, 489 automated tests passing.
-Frontend: phase 1 of 12 (Authentication) built and live-verified; the rest are being
-built one module at a time in the same order the backend was.
+Backend: MVP (8-week plan) + AMC + Dismantling + Reports/Dashboards + Warranty Claims +
+Finance/Quality/Operational Dashboards + User Management + Extra Role Access all built
+and live-verified — 158+ REST endpoints, 1 WebSocket gateway, 600+ automated tests
+passing. Frontend: all 12 phases (Authentication through Reports/Dashboards) built and
+live-verified, plus User Management and Extra Role Access.
 
-Full detail, updated every session: **`docs/planning/STATUS_TRACKER.md.new`** (what's
+Mobile app (`mobile/`, React Native/Expo, Field Technician only): Phases 1-4 built and
+live-verified - login, Today's Schedule, Start Visit + GPS, Serial Number/warranty +
+Fault/Symptom capture, and an offline queue so a technician with no signal can keep
+working and sync automatically once reconnected. Phase 5 (Need Spare +
+Complete/QC-handoff) is next. See "Running the Mobile App" below and `mobile/README.md`
+for the full walkthrough.
+
+Full detail, updated every session: **`docs/planning/STATUS_TRACKER.md`** (what's
 built, what's not, design decisions and honest simplifications) and
-**`docs/testing/TESTING_GUIDE.md.new`** (a complete click-through testing guide, endpoint
-by endpoint). Start with those two files, not this README, for anything beyond "how do I
-start the app."
+**`docs/testing/TESTING_GUIDE.md`** (a complete click-through testing guide, endpoint
+by endpoint, including the mobile app). Start with those two files, not this README,
+for anything beyond "how do I start the app."
 
 ## Project Structure
 
@@ -46,12 +54,18 @@ jackys-service-portal/
 │       ├── lib/                # api client, auth context, shared types
 │       ├── components/         # ProtectedRoute, AppLayout
 │       └── pages/               # LoginPage, DashboardPage, ... (more added each phase)
+├── mobile/                      # React Native/Expo app - Field Technician only (see mobile/README.md)
+│   └── src/
+│       ├── app/                 # expo-router screens (file-based routing)
+│       ├── context/             # AuthContext, OfflineQueueContext
+│       ├── lib/                 # api client, offline queue engine, types
+│       └── components/          # OfflineBanner, FaultSymptomPicker, StatusPill
 ├── scripts/                     # Seed scripts + PowerShell E2E test scripts per phase
 ├── docs/
 │   ├── brd/                   # Original BRD documents
 │   ├── discovery/                # Discovery document
-│   ├── planning/                  # Implementation plan, STATUS_TRACKER.md.new, status dashboard
-│   └── testing/                    # TESTING_GUIDE.md.new
+│   ├── planning/                  # Implementation plan, STATUS_TRACKER.md, status dashboard
+│   └── testing/                    # TESTING_GUIDE.md
 ├── .env                          # Backend config (gitignored — see Environment Variables below)
 ├── package.json
 ├── tsconfig.json
@@ -162,16 +176,61 @@ PostgreSQL can stay running all the time — no need to stop it between sessions
 | First-ever login setup | `npm run seed:admin` (repo root, once only) | — |
 | Default login | — | `admin@jackys.com` / `Admin123!` |
 
+## Running the Mobile App (Field Technician)
+
+The mobile app is a separate React Native/Expo project in `mobile/` - it talks to the
+same backend over HTTP, so steps 1-2 above (Postgres + `npm run start:dev`) still need
+to be running. There's no separate mobile backend.
+
+**Prerequisites** (in addition to the backend already running):
+- A way to load the app - either the free **Expo Go** app on a real phone (fastest to
+  set up), an **Android emulator** (Android Studio), or the **iOS Simulator** (Mac +
+  Xcode only).
+- Your machine's **LAN IP address** (`ipconfig`, look for `IPv4 Address`) - a phone
+  can't reach `localhost`, it needs your PC's real address on the network.
+- A `TECHNICIAN_FIELD` login - create one with `npm run seed:technician` (repo root)
+  if you don't already have one.
+
+**Start it:**
+
+```powershell
+cd "D:\Jackys\jackys service portal\mobile"
+npm install
+cp .env.example .env
+```
+
+Edit `mobile/.env` and set `EXPO_PUBLIC_API_BASE_URL` to `http://<your LAN
+IP>:3000/api/v1` (not `localhost`), then:
+
+```powershell
+npm start
+```
+
+This opens the Expo dev server and prints a QR code. Scan it with Expo Go (phone must
+be on the **same Wi-Fi network** as this PC), or press `a`/`i` in the terminal for an
+Android emulator/iOS Simulator. Sign in with the `TECHNICIAN_FIELD` login above.
+
+**What's built:** login + Today's Schedule, Start Visit + GPS capture, Serial
+Number/warranty + Fault/Symptom capture, and an offline queue that lets a technician
+keep working with no signal and syncs automatically once reconnected - all built and
+live-verified. Need Spare + Complete/QC-handoff is next, not built yet.
+
+**Full walkthrough, including a real device-connectivity test for the offline queue
+and troubleshooting a stuck LAN connection:** `mobile/README.md`. Endpoint-level detail
+for everything the mobile app calls: `docs/testing/TESTING_GUIDE.md`.
+
 ## How to actually test the app
 
-- **Swagger** (backend only, works today for all 140 endpoints): open
+- **Swagger** (every backend endpoint, 158+ of them): open
   http://localhost:3000/api/docs, click **Authorize**, log in, then try any endpoint —
-  `docs/testing/TESTING_GUIDE.md.new` walks through every module with sample request
+  `docs/testing/TESTING_GUIDE.md` walks through every module with sample request
   bodies, in the order to test them in (each module generally needs data from the one
   before it, e.g. you need an Appointment before you can create a Job Card).
-- **The React app** (only Authentication is built so far — Section 18 of the testing
-  guide): open http://localhost:5173, sign in, look around, and tell me what looks wrong
-  or confusing so the next frontend phase can fix it before it compounds.
+- **The React app** (all 12 frontend phases, Authentication through
+  Reports/Dashboards, plus User Management and Extra Role Access - Sections 18-29 and
+  32-33 of the testing guide): open http://localhost:5173, sign in, look around.
+- **The mobile app** (Field Technician only, Phases 1-4 - Section 34 of the testing
+  guide): see "Running the Mobile App" above.
 - There are also ready-made PowerShell smoke-test scripts per backend phase under
   `scripts/` (e.g. `scripts/phase7-e2e-test.ps1`) that run a whole workflow end-to-end in
   one shot instead of clicking through Swagger manually — see the testing guide for which
@@ -196,7 +255,7 @@ approval flow), Workshop + Inventory (reserve/consume model), QC gate + admin-as
 permissions, Delivery + POD + OOW payment block, Invoicing + interdepartment Debit Notes
 + GL posting log, Customer Portal (public tracking pages), AMC contracts, Dismantling
 (component recovery), and Reports/Dashboards (live WebSocket Kanban board). Full detail
-on every one of these is in `docs/planning/STATUS_TRACKER.md.new`, phase by phase.
+on every one of these is in `docs/planning/STATUS_TRACKER.md`, phase by phase.
 
 ## User Roles (from BRD)
 
@@ -219,7 +278,7 @@ on every one of these is in `docs/planning/STATUS_TRACKER.md.new`, phase by phas
 
 Note: QC approval and rework approval are **not** tied to the `QC_OFFICER` role alone —
 they're admin-assignable to any user via the `permissions` module, by deliberate design
-decision (see `STATUS_TRACKER.md.new`, Phase 6).
+decision (see `STATUS_TRACKER.md`, Phase 6).
 
 ## Business Rules (Key)
 
@@ -279,8 +338,11 @@ VITE_WS_BASE_URL=http://localhost:3000
 - **BRD**: `docs/brd/`
 - **Discovery**: `docs/discovery/DISCOVERY_v1.md`
 - **Implementation Plan**: `docs/planning/IMPLEMENTATION_PLAN_v1.md`
-- **Status Tracker** (what's built, phase by phase): `docs/planning/STATUS_TRACKER.md.new`
-- **Testing Guide** (how to test every endpoint + the app): `docs/testing/TESTING_GUIDE.md.new`
+- **Status Tracker** (what's built, phase by phase): `docs/planning/STATUS_TRACKER.md`
+- **Testing Guide** (how to test every endpoint + the app, including the mobile app):
+  `docs/testing/TESTING_GUIDE.md`
+- **Mobile App** (scope, running it, full testing walkthrough): `mobile/README.md`,
+  scoped in `docs/planning/MOBILE_APP_SCOPE_v1.md`
 
 ## License
 
