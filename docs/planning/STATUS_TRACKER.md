@@ -5,7 +5,7 @@ role's access to a user without changing their real role; see the write-up below
 new backend tests, 8 new frontend tests, 597/597 + 321/321 passing app-wide, `tsc -b`
 clean on both sides. Mobile app (React Native) v1 scoping is also done - see
 `docs/planning/MOBILE_APP_SCOPE_v1.md` - no mobile code written yet, scoping only)
-**Stack:** NestJS + PostgreSQL + JWT + React (all 12 frontend phases live-verified; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
+**Stack:** NestJS + PostgreSQL + JWT + React (13 frontend phases live-verified/tested; backend now covers the full 8-week MVP plus AMC, Dismantling, Reports/Dashboards (18.1-18.4), and Warranty Claims)
 **Repo:** `D:\Jackys\jackys service portal` (git initialized, commits on `master`+`main` (synced), latest `451ca7c`)
 **GitHub:** https://github.com/vysakhraju/jackys-service-portal — local `main`/`master` at `a0f99c0` (Mobile Phase 2 self-conflict fix). Not yet pushed - I have no git push credentials in the device bridge shell (`fatal: could not read Username for 'https://github.com'`), so **run `git push origin main` and `git push origin master` yourself** to bring GitHub up to date. Last confirmed push was through `5f52aaa`; everything since (Mobile Phase 1 fixes, Mobile Phase 2 build, this bug fix) is local-only.
 **Next session:** Extra Role Access is done (see the write-up below) - an admin can
@@ -1381,10 +1381,9 @@ no application code changes were needed after the live run, only confirmation.
   - same "no separate master-data entity" simplification `WarrantyMaster` itself already
     makes. A typo or renamed vendor string would silently split what should be one vendor's
     claims into two. Revisit if a real Vendor master-data table is ever added.
-- **No Warranty Claims screen exists in the frontend yet (Phase 12)** - this phase is
-  backend-only; a Warranty Clerk/Accountant currently has to use Swagger or a script to
-  aggregate/submit/credit a claim. Would need its own future frontend phase (there are
-  currently 12 frontend phases, all covering earlier backend phases) if a UI is wanted.
+- ~~No Warranty Claims screen exists in the frontend yet (Phase 12)~~ - resolved in
+  Frontend Phase 15: a Warranty Clerk/Accountant now has a real screen for
+  aggregate/submit/credit-note/cancel instead of Swagger or a script.
 - **The dev database now has several inactive-in-practice, never-cleaned-up
   `WarrantyMaster` test rows from the Phase 12 E2E script's first three live runs**
   (ranges like `WCA00000-WCA99999`, `WCA6205700000-WCA6205799999`, real suppliers like
@@ -2923,9 +2922,9 @@ at some point instead:
   below); the other report screens (product failure ratio, repeat complaints, RWR
   analysis, technician productivity, SLA breach, spare-parts consumption) still have no
   frontend built - would need their own future frontend phase.
-- Warranty Claims — the backend module is now built and live-verified (see backend
-  Phase 12 above); no frontend screen exists for it yet, would need its own future
-  frontend phase.
+- ~~Warranty Claims frontend~~ — resolved in Frontend Phase 15 (see write-up above):
+  aggregate/submit/credit-note/cancel screens now exist, backend was already
+  live-verified (Phase 12).
 - The genuine push-on-mutation WebSocket architecture (vs. the current poll-and-diff
   simplification) if true sub-second update detection ever becomes a real requirement.
 - The device-side `npm install`/test runner for `frontend/` has hit native-binding
@@ -3775,6 +3774,58 @@ omission - fixed to check for the absence of an actual table column instead.
 in the isolated cloud sandbox and cross-checked on your actual machine (`tsc -b` clean
 there too). No backend changes, so the backend suite is untouched at 651/651.
 Committed as `41215e2`.
+
+---
+
+## Frontend Phase 15: Warranty Claims — done (27 new frontend tests)
+
+The last post-MVP backend module without a screen (Phase 12, EPIC-007 "[Optional]") gets
+its frontend. Backend was already built and live-verified (70/70 checks) - this phase is
+purely consumption, no backend change at all.
+
+**Structure:** deliberately mirrors `DismantlingPage.tsx` rather than inventing a new
+shape, since both workflows are structurally identical - a header record moving through a
+small linear status chain, gated by different role lists at different transitions.
+`WarrantyClaimsPage.tsx` (list + filters + a Recovery Rate widget + "+ New Claim"
+aggregate modal) plus a `WarrantyClaimDetail` component keyed off `?claimId=`, same
+`useSearchParams()`-driven detail-panel pattern as Dismantling.
+
+**Permissions:** a single `warrantyClaimsPermissions(roleName)` helper collapses the
+backend's per-endpoint `@Roles(...)` lists into one flags object -
+`WARRANTY_CLERK`/`SERVICE_HEAD`/`SUPER_ADMIN` can aggregate/submit/cancel;
+`ACCOUNTANT`/`FINANCE_MANAGER`/`SUPER_ADMIN` can record a credit note; both groups plus
+`WARRANTY_CLERK` can view. `canView` gates the page before any query fires (no network
+call at all for a disallowed role, same the-fool finding #5 precedent carried through
+every module).
+
+**Workflow:** Aggregate (supplier + period → generates a claim from unclaimed CONSUMED
+warranty spares, surfaces the backend's "no unclaimed spares found" error verbatim) → Mark
+Submitted (vendor claim reference number, required) → Record Credit Note (vendor credit
+note number + amount, amount must be a positive number) or Cancel (reason, min 2 chars,
+only while still DRAFT). Status-gated buttons mirror the backend's own DRAFT → SUBMITTED →
+CREDIT_RECEIVED / DRAFT → CANCELLED lifecycle as defense-in-depth on top of the backend's
+role+status guards. Recovery Rate widget shows "—" (never a fabricated 0) both when
+nothing's been claimed yet and when the rate itself is null.
+
+**Tests:** 27 new tests across 7 `describe` blocks - role gate, list/filters/recovery
+rate, aggregate form (happy path + backend error surfaced verbatim), status-gated action
+visibility (DRAFT/SUBMITTED/CREDIT_RECEIVED, plus role-restricted variants), submit
+action, credit note action, cancel action, lines table. Two RTL test-authoring bugs were
+caught and fixed while writing: a `Modal` trigger button and its own in-modal submit
+button sharing the same accessible name (e.g. both say "Record Credit Note") makes
+`getByRole` throw "found multiple elements" once the modal is open, since this app's
+`Modal` doesn't unmount page content behind it - fixed with
+`getAllByRole(...)[length - 1]` (the modal's own button is added later in the DOM, same
+fix already proven in Frontend Phase 14's report-screen tests); and two tests exercising
+the credit-note button hadn't switched the mocked user off the suite's default
+`SERVICE_HEAD` role (clerk-level, not credit-note-level), so the button legitimately never
+rendered for them - fixed by mocking `ACCOUNTANT` in those tests instead of chasing a
+phantom rendering bug.
+
+**Verified:** `tsc -b` clean, **382/382 frontend tests passing** (355 + 27 new, one
+unrelated `DeliveriesPage.test.tsx` failure confirmed flaky/pre-existing - passes in
+isolation, no file in that test or page was touched this phase). No backend changes, so
+the backend suite is untouched at 651/651.
 
 ---
 

@@ -1695,30 +1695,65 @@
       </p>
       <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
     </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Frontend Phase 15 (2026-09-07): Warranty Claims screen shipped</h3>
+      <p>
+        The last post-MVP backend module without a screen (Phase 12, EPIC-007
+        <span class="mono">[Optional]</span>) gets its frontend - backend was already built
+        and live-verified (70/70 checks), so this phase is purely consumption, no backend
+        change at all. Deliberately mirrors <span class="mono">DismantlingPage.tsx</span>'s
+        structure rather than inventing a new one, since both workflows are the same shape:
+        a header record moving through a small linear status chain, gated by different role
+        lists at different transitions.
+      </p>
+      <p>
+        <b>Workflow:</b> Aggregate (supplier + period, surfaces the backend's "no unclaimed
+        spares found" error verbatim) → Mark Submitted (vendor claim reference number) →
+        Record Credit Note (vendor credit note number + amount) or Cancel (reason, min 2
+        chars, DRAFT only). A single <span class="mono">warrantyClaimsPermissions()</span>
+        helper gates both page-level view access (no network call at all for a disallowed
+        role) and each action button individually. Recovery Rate widget shows "—" - never a
+        fabricated 0 - both when nothing's been claimed yet and when the rate itself is null.
+      </p>
+      <p>
+        <span class="mono">test-master</span> coverage: <b>27 new frontend tests, 382/382
+        passing app-wide</b> (was 355), <span class="mono">tsc -b</span> clean. Two RTL
+        test-authoring bugs caught and fixed while writing: a modal's trigger button and its
+        own in-modal submit button sharing one accessible name needed
+        <span class="mono">getAllByRole(...)[length&nbsp;-&nbsp;1]</span> (same fix already
+        proven in Phase 14's report-screen tests); and two credit-note tests hadn't switched
+        the mocked user off the suite's default clerk-level role, so the button legitimately
+        never rendered until they were switched to an accountant-level role. One unrelated
+        <span class="mono">DeliveriesPage.test.tsx</span> failure confirmed flaky/pre-existing
+        (passes in isolation; no file it touches was changed this phase). No backend changes,
+        so the backend suite stays at 651/651.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+    </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>BRD 18.2-18.4 report screens shipped. Warranty Claims frontend is the last P2 item</h3>
-        <h2>Finance/Quality/Operational dashboards are live. Only Warranty Claims frontend remains from the P2 roadmap tier, plus the Phases 3-4 live pass and the second half of the WebSocket check.</h2>
+        <h3>Warranty Claims frontend shipped. The P2 roadmap tier is now fully built</h3>
+        <h2>Finance/Quality/Operational dashboards and Warranty Claims are all live now. What remains is the mobile Phases 3-4 live pass and confirming the second half of the WebSocket check.</h2>
         <p>Nothing is blocking. Today's session found and fixed a real WebSocket CORS bug
         (live-verified, the pill goes <span class="mono">Live</span>), closed the orphaned
         <span class="mono">PENDING_REVIEW</span> Need Spare reservation gap (auto-reject on
         QC approval, race-safe, independently QA'd), and shipped
-        <b>Frontend Phase 14</b> - the BRD 18.2/18.3/18.4 Finance/Quality/Operational
-        report screens, the last deferred piece of Reports/Dashboards. <b>651/651 backend
-        and 355/355 frontend tests passing</b>, <span class="mono">tsc -b</span> clean on
-        both. The mobile app's Phases 1-2 and 5 are live-device-verified; <b>Phases 3-4</b>
-        are built, tested, and QA'd but still awaiting that same live pass. The
-        <b>customer portal</b> branding/visual polish pass on the existing no-login
-        <span class="mono">/track/:token</span> page hasn't started yet.
-        <b>WhatsApp Business API</b> stays paused until the company creates its own
+        <b>Frontend Phase 14</b> (BRD 18.2/18.3/18.4 report screens) and
+        <b>Frontend Phase 15</b> (Warranty Claims) - the last two deferred pieces of the P2
+        roadmap tier. <b>651/651 backend and 382/382 frontend tests passing</b>,
+        <span class="mono">tsc -b</span> clean on both. The mobile app's Phases 1-2 and 5
+        are live-device-verified; <b>Phases 3-4</b> are built, tested, and QA'd but still
+        awaiting that same live pass. The <b>customer portal</b> branding/visual polish pass
+        on the existing no-login <span class="mono">/track/:token</span> page hasn't started
+        yet. <b>WhatsApp Business API</b> stays paused until the company creates its own
         account — not a technical blocker here. Still open: your own
         <span class="mono">git push</span> (run
         <span class="mono">git log origin/main..main</span> yourself for the current count)
-        and advancing a Job Card in a second tab to confirm the Kanban board updates live
-        (the pill itself is already confirmed live).</p>
+        and confirming a Job Card advanced in a second tab makes the Kanban board update
+        live within ~5s (the connection pill itself is already confirmed live).</p>
       </div>
       <div class="go">Next →</div>
     </div>

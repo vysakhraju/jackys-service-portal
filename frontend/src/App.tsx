@@ -54,6 +54,7 @@ import { ReportsPage } from './pages/reports/ReportsPage';
 import { FinanceReportsPage } from './pages/reports/FinanceReportsPage';
 import { QualityReportsPage } from './pages/reports/QualityReportsPage';
 import { OperationalReportsPage } from './pages/reports/OperationalReportsPage';
+import { WarrantyClaimsPage } from './pages/warrantyClaims/WarrantyClaimsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -142,6 +143,7 @@ export function App() {
                 </Route>
 
                 <Route path="/dismantling" element={<DismantlingPage />} />
+                <Route path="/warranty-claims" element={<WarrantyClaimsPage />} />
 
                 <Route path="/reports" element={<ReportsLayout />}>
                   <Route index element={<ReportsPage />} />

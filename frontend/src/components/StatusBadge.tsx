@@ -58,6 +58,10 @@ export const COLOR_BY_STATUS: Record<string, string> = {
   COMPONENTS_LOGGED: 'bg-amber-50 text-amber-700',
   VERIFIED: 'bg-sky-50 text-sky-700',
   POSTED: 'bg-emerald-50 text-emerald-700',
+  // Warranty claims (src/warranty-claims/entities/warranty-claim.entity.ts's
+  // WarrantyClaimStatus) - DRAFT/CANCELLED reuse the colors already defined above.
+  SUBMITTED: 'bg-sky-50 text-sky-700',
+  CREDIT_RECEIVED: 'bg-emerald-50 text-emerald-700',
 };
 
 export function StatusBadge({ status }: { status: string }) {

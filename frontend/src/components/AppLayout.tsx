@@ -18,6 +18,7 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Finance & Customer Portal', path: '/finance' },
   { label: 'AMC Contracts', path: '/amc' },
   { label: 'Dismantling', path: '/dismantling' },
+  { label: 'Warranty Claims', path: '/warranty-claims' },
   { label: 'Reports & Dashboards', path: '/reports' },
 ];
 

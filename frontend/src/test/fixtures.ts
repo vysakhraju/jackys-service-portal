@@ -13,6 +13,7 @@ import type { PortalInvoiceView, PortalSummaryView, PortalTrackView } from '../l
 import type { AmcBillingInvoice, AmcContract, AmcScheduleVisit, AmcVisitCompletion, UpsellCandidate } from '../lib/amcTypes';
 import type { DismantlingRecord, HarvestedComponent } from '../lib/dismantlingTypes';
 import type { ComponentYieldMatrix } from '../lib/masterDataTypes';
+import type { RecoveryRate, WarrantyClaim, WarrantyClaimLine } from '../lib/warrantyClaimsTypes';
 import type {
   ApprovalAgingItem,
   ApprovalAgingReport,
@@ -877,6 +878,63 @@ export function makeSpareConsumptionReport(overrides: Partial<SpareConsumptionRe
     topByValue: [{ sparePartId: 'sp-2', code: 'SP-002', name: 'Motor', totalQuantity: 2, totalValue: 2000 }],
     byModel: [{ key: 'WM-500', totalQuantity: 6, totalValue: 1200 }],
     byWarrantyStatus: [{ key: 'OOW', totalQuantity: 8, totalValue: 1800 }],
+    ...overrides,
+  };
+}
+
+// Frontend Phase 15 additions below (Warranty Claims, BRD Workflow 12).
+
+export function makeWarrantyClaimLine(overrides: Partial<WarrantyClaimLine> = {}): WarrantyClaimLine {
+  return {
+    id: 'line-1',
+    warrantyClaimId: 'claim-1',
+    inventoryReservationId: 'res-1',
+    jobCardId: 'jc-1',
+    jobCardNumber: 'JC-0001',
+    serialNumber: 'SN-000123',
+    sparePartCode: 'SP-001',
+    sparePartName: 'Drum Belt',
+    quantity: 1,
+    unitCost: 85,
+    lineAmount: 85,
+    consumedAt: '2026-08-15T10:00:00Z',
+    createdAt: '2026-09-01T09:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeWarrantyClaim(overrides: Partial<WarrantyClaim> = {}): WarrantyClaim {
+  return {
+    id: 'claim-1',
+    claimNumber: 'WCLM-0001',
+    supplier: 'Samsung Gulf FZE',
+    periodStart: '2026-08-01T00:00:00Z',
+    periodEnd: '2026-08-31T00:00:00Z',
+    status: 'DRAFT',
+    totalClaimedAmount: 85,
+    generatedByUserId: 'user-1',
+    claimReferenceNumber: null,
+    submittedByUserId: null,
+    submittedAt: null,
+    creditNoteNumber: null,
+    creditNoteAmount: null,
+    creditReceivedByUserId: null,
+    creditReceivedAt: null,
+    notes: null,
+    cancellationReason: null,
+    lines: [makeWarrantyClaimLine()],
+    createdAt: '2026-09-01T09:00:00Z',
+    updatedAt: '2026-09-01T09:00:00Z',
+    ...overrides,
+  };
+}
+
+export function makeRecoveryRate(overrides: Partial<RecoveryRate> = {}): RecoveryRate {
+  return {
+    supplier: null,
+    totalClaimed: 850,
+    totalRecovered: 700,
+    rate: 82.35,
     ...overrides,
   };
 }
