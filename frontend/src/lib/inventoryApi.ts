@@ -8,6 +8,7 @@ import type {
   GrnInput,
   InventoryReservation,
   InventoryReservationWithAge,
+  ReviewNeedSpareInput,
   ReviewReservationInput,
   StockLookupResult,
 } from './inventoryTypes';
@@ -23,6 +24,14 @@ export const getStock = (sparePartId: string, location?: 'MAIN_STORE' | 'DAMAGE_
 
 export const getStaleReservations = () =>
   api.get<InventoryReservationWithAge[]>(`${BASE}/reservations/stale`).then((r) => r.data);
+
+// 2026-09-07: the previously-missing listing for Mobile Phase 5's PENDING_REVIEW
+// reservations - see InventoryService.getPendingNeedSpareRequests()'s own doc comment.
+export const getPendingNeedSpareRequests = () =>
+  api.get<InventoryReservation[]>(`${BASE}/reservations/pending-need-spare`).then((r) => r.data);
+
+export const reviewNeedSpare = (id: string, data: ReviewNeedSpareInput) =>
+  api.post<InventoryReservation>(`${BASE}/reservations/${id}/review-need-spare`, data).then((r) => r.data);
 
 export const reviewReservation = (id: string, data: ReviewReservationInput) =>
   api.post<InventoryReservation>(`${BASE}/reservations/${id}/review`, data).then((r) => r.data);

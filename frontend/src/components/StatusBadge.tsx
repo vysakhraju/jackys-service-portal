@@ -34,7 +34,10 @@ export const COLOR_BY_STATUS: Record<string, string> = {
   EXPIRED: 'bg-slate-100 text-slate-400',
   // Inventory reservations (src/inventory/entities/inventory-reservation.entity.ts's
   // ReservationStatus) - APPROVED/REJECTED above are Estimate-only, reservations never
-  // reuse them so there's no collision.
+  // reuse them so there's no collision. PENDING_REVIEW (Mobile Phase 5's Need Spare
+  // requests, added 2026-09-07 alongside the review screen) reuses the same amber as
+  // other "awaiting action" states below (PARTIALLY_RESERVED, SPARE_PENDING).
+  PENDING_REVIEW: 'bg-amber-50 text-amber-700',
   HELD: 'bg-indigo-50 text-indigo-700',
   PARTIALLY_RESERVED: 'bg-amber-50 text-amber-700',
   RETURN_PENDING: 'bg-sky-50 text-sky-700',

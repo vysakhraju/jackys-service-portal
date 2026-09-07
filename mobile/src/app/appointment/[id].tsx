@@ -192,22 +192,35 @@ export default function AppointmentDetailScreen() {
   // --- Job Card status + Need Spare / Complete (Phase 5) ---
   // Staff (not this app) create the Job Card and assign it to on-site-repair some
   // unknown time after Phases 1-3 finish - polled here rather than pushed, since there's
-  // no other signal this app gets when that happens. The 15s interval only runs while
-  // there's genuinely something to wait for (no Job Card yet, or one not assigned to
-  // this technician's on-site-repair section yet); it stops once Need Spare/Complete
-  // become available or the job's already past that point.
+  // no other signal this app gets when that happens. The 15s interval runs while there's
+  // genuinely something to wait for: no Job Card yet, one not assigned to this
+  // technician's on-site-repair section yet, or (2026-09-07) a Need Spare request still
+  // waiting on a Team Leader's decision - so an approval/rejection shows up here on its
+  // own instead of requiring the technician to leave and re-open the screen.
   const {
-    data: jobCard,
+    data: ownJobCard,
     isLoading: jobCardLoading,
   } = useQuery({
     queryKey: ['technician-job-card', params.id],
     queryFn: () => getOwnJobCard(params.id),
     enabled: Boolean(visit),
     refetchInterval: (query) => {
-      const jc = query.state.data;
-      return !jc || (jc.status === 'SECTION_ASSIGNED' && jc.section !== 'ON_SITE_REPAIR') ? 15000 : false;
+      const result = query.state.data;
+      const jc = result?.jobCard;
+      if (!jc || (jc.status === 'SECTION_ASSIGNED' && jc.section !== 'ON_SITE_REPAIR')) return 15000;
+      if (result?.spareRequest?.status === 'PENDING_REVIEW') return 15000;
+      return false;
     },
   });
+  const jobCard = ownJobCard?.jobCard ?? null;
+  // The latest Need Spare request made for this Job Card, straight from the server -
+  // 2026-09-07 fix for the "forgotten request" bug: this used to be local-only React
+  // state (`needSpareSentThisSession`/`needSpareMutation.isSuccess`) that silently reset
+  // whenever this screen remounted (navigating back to Schedule and into the appointment
+  // again), even though the real request was still sitting there waiting for review.
+  // Deriving it from the poll instead means it survives remounts, app restarts, and even
+  // reflects a Team Leader's decision made in the meantime.
+  const spareRequest = ownJobCard?.spareRequest ?? null;
   const jobCardReady = jobCard?.status === 'SECTION_ASSIGNED' && jobCard.section === 'ON_SITE_REPAIR';
   const jobCardFinished = Boolean(jobCard) && !jobCardReady && jobCard!.status !== 'SECTION_ASSIGNED';
 
@@ -219,7 +232,10 @@ export default function AppointmentDetailScreen() {
   const [sparePartPickerVisible, setSparePartPickerVisible] = useState(false);
   const [selectedSparePart, setSelectedSparePart] = useState<SparePart | null>(null);
   const [quantityInput, setQuantityInput] = useState('1');
-  const [needSpareSentThisSession, setNeedSpareSentThisSession] = useState(false);
+
+  const spareRequestPending = spareRequest?.status === 'PENDING_REVIEW';
+  const spareRequestApproved = spareRequest?.status === 'HELD' || spareRequest?.status === 'PARTIALLY_RESERVED';
+  const spareRequestRejected = spareRequest?.status === 'REJECTED';
 
   const {
     data: spareParts,
@@ -236,7 +252,10 @@ export default function AppointmentDetailScreen() {
     mutationFn: (input: { sparePartId: string; quantity: number; idempotencyKey: string }) =>
       requestNeedSpare(params.id, input),
     onSuccess: () => {
-      setNeedSpareSentThisSession(true);
+      // Refetches the Job Card poll so `spareRequest` picks up the PENDING_REVIEW row
+      // this just created - the source of truth for the "waiting for review" state below
+      // from now on, not a local flag.
+      invalidateJobCard();
       setSelectedSparePart(null);
       setQuantityInput('1');
     },
@@ -251,8 +270,11 @@ export default function AppointmentDetailScreen() {
     const idempotencyKey = generateIdempotencyKey();
     const payload = { sparePartId: selectedSparePart.id, quantity, idempotencyKey };
     if (!isOnline) {
+      // Nothing to invalidate yet - there's no server-side reservation until this syncs.
+      // The persisted offline queue (queuedNeedSpare below) is what keeps "queued" visible
+      // across a remount until then; OfflineQueueContext already invalidates the Job Card
+      // query itself once the sync succeeds, which is what brings the real spareRequest in.
       await enqueue({ type: 'NEED_SPARE', appointmentId: params.id, label: queueLabel, payload });
-      setNeedSpareSentThisSession(true);
       setSelectedSparePart(null);
       setQuantityInput('1');
       return;
@@ -566,12 +588,24 @@ export default function AppointmentDetailScreen() {
                       ? 'Could not sync this spare part request - see the sync status above to retry or discard.'
                       : 'Queued - will send this request as soon as you’re back online.'}
                   </Text>
-                ) : needSpareSentThisSession || needSpareMutation.isSuccess ? (
+                ) : spareRequestPending ? (
                   <Text style={styles.meta} testID="need-spare-requested">
                     Spare part requested - waiting for a Team Leader to review it.
                   </Text>
+                ) : spareRequestApproved ? (
+                  <Text style={styles.meta} testID="need-spare-approved">
+                    {spareRequest?.status === 'PARTIALLY_RESERVED'
+                      ? 'Spare part approved - only part of the quantity was available, check with the store.'
+                      : 'Spare part approved - pick it up from the store.'}
+                  </Text>
                 ) : (
                   <>
+                    {spareRequestRejected && (
+                      <Text style={styles.meta} testID="need-spare-rejected">
+                        Your last request wasn&apos;t approved - request again if you still need it.
+                      </Text>
+                    )}
+
                     {needSpareMutation.isError && (
                       <Text style={styles.errorBoxText} testID="need-spare-error">
                         {extractErrorMessage(needSpareMutation.error, 'Could not request this spare part. Try again.')}

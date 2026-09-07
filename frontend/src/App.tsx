@@ -29,6 +29,7 @@ import { WorkshopInventoryLayout } from './pages/workshop/WorkshopInventoryLayou
 import { WorkshopInventoryHome } from './pages/workshop/WorkshopInventoryHome';
 import { WorkshopPage } from './pages/workshop/WorkshopPage';
 import { InventoryPage } from './pages/inventory/InventoryPage';
+import { NeedSpareReviewPage } from './pages/inventory/NeedSpareReviewPage';
 import { QcPermissionsLayout } from './pages/qc/QcPermissionsLayout';
 import { QcPermissionsHome } from './pages/qc/QcPermissionsHome';
 import { QcPage } from './pages/qc/QcPage';
@@ -114,6 +115,7 @@ export function App() {
                   <Route index element={<WorkshopInventoryHome />} />
                   <Route path="workshop" element={<WorkshopPage />} />
                   <Route path="inventory" element={<InventoryPage />} />
+                  <Route path="need-spare" element={<NeedSpareReviewPage />} />
                 </Route>
 
                 <Route path="/qc-permissions" element={<QcPermissionsLayout />}>

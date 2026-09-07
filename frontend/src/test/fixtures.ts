@@ -4,7 +4,7 @@
 import type { Appointment } from '../lib/appointmentsTypes';
 import type { JobCard } from '../lib/jobCardsTypes';
 import type { Estimate } from '../lib/estimatesTypes';
-import type { InventoryReservationWithAge } from '../lib/inventoryTypes';
+import type { InventoryReservation, InventoryReservationWithAge } from '../lib/inventoryTypes';
 import type { WorkshopState } from '../lib/workshopTypes';
 import type { UserPermissionGrant } from '../lib/permissionsTypes';
 import type { Delivery, ReadyForDeliveryRow } from '../lib/deliveryTypes';
@@ -171,6 +171,45 @@ export function makeReservation(overrides: Partial<InventoryReservationWithAge> 
     updatedAt: '2026-08-01T08:00:00Z',
     ageHours: 30,
     custodianActive: true,
+    ...overrides,
+  };
+}
+
+// GET /inventory/reservations/pending-need-spare's shape - a PENDING_REVIEW reservation
+// with sparePart/jobCard/requestedBy relations loaded (see
+// InventoryService.getPendingNeedSpareRequests()), used by NeedSpareReviewPage and the
+// NeedSpareNotifier toast - both added 2026-09-07.
+export function makeNeedSpareRequest(overrides: Partial<InventoryReservation> = {}): InventoryReservation {
+  return {
+    id: 'res-need-spare-1',
+    sparePartId: 'sp-1',
+    sparePart: { id: 'sp-1', code: 'SP-001', name: 'Drum Belt' },
+    jobCardId: 'jc-1',
+    jobCard: { id: 'jc-1', jobCardNumber: 'JC-0001' },
+    custodian: undefined,
+    custodianUserId: 'tech-1',
+    quantityRequested: 2,
+    quantityReserved: 0,
+    status: 'PENDING_REVIEW',
+    requestedBy: { id: 'tech-1', firstName: 'Ravi', lastName: 'Kumar', email: 'ravi@jackys.com' },
+    requestedByUserId: 'tech-1',
+    requestedAt: '2026-09-07T08:00:00Z',
+    lastReviewedAt: null,
+    reviewedBy: null,
+    reviewedByUserId: null,
+    reviewDecision: null,
+    notes: null,
+    quantityReturned: null,
+    returnConfirmedByUserId: null,
+    returnConfirmedAt: null,
+    consumedAt: null,
+    consumedBy: null,
+    consumedByUserId: null,
+    reworkApprovedByUserId: null,
+    reworkApprovedBy: null,
+    reworkVerbalOverrideBy: null,
+    reworkVerbalOverrideNotes: null,
+    updatedAt: '2026-09-07T08:00:00Z',
     ...overrides,
   };
 }

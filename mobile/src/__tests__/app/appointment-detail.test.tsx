@@ -12,7 +12,7 @@ import {
   requestNeedSpare,
   startVisit,
 } from '../../lib/technicianApi';
-import type { FaultSymptom, JobCardSummary, ScheduledAppointment, SparePart } from '../../lib/types';
+import type { FaultSymptom, JobCardSummary, NeedSpareReservation, ScheduledAppointment, SparePart } from '../../lib/types';
 
 const mockBack = jest.fn();
 let mockParams: { id: string; appt?: string } = { id: 'appt-1' };
@@ -148,6 +148,24 @@ function jobCardFixture(overrides: Partial<JobCardSummary> = {}): JobCardSummary
   };
 }
 
+// 2026-09-07: getOwnJobCard's real response is always this {jobCard, spareRequest}
+// wrapper - pass `null` for jobCardOverrides to get the "staff haven't created one yet"
+// shape, and spareRequestOverrides to simulate a Need Spare request the server already
+// knows about (this is what proves the "forgotten request" fix: the screen must derive
+// its state from this, not from anything set only by a prior mutation in this session).
+function ownJobCardFixture(
+  jobCardOverrides: Partial<JobCardSummary> | null = {},
+  spareRequestOverrides: Partial<NeedSpareReservation> | null = null,
+): { jobCard: JobCardSummary | null; spareRequest: NeedSpareReservation | null } {
+  return {
+    jobCard: jobCardOverrides === null ? null : jobCardFixture(jobCardOverrides),
+    spareRequest:
+      spareRequestOverrides === null
+        ? null
+        : { id: 'reservation-1', sparePartId: 'part-1', quantityRequested: 1, status: 'PENDING_REVIEW', ...spareRequestOverrides },
+  };
+}
+
 function sparePartFixture(overrides: Partial<SparePart> = {}): SparePart {
   return {
     id: 'part-1',
@@ -189,7 +207,7 @@ beforeEach(() => {
   // Sane default for the Job Card poll (Phase 5) so every pre-existing test - none of
   // which know about Job Cards - renders the "waiting for the office" state rather than
   // an unhandled rejection from an un-mocked getOwnJobCard() call.
-  mockedGetOwnJobCard.mockResolvedValue(null);
+  mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture(null));
   mockedListSpareParts.mockResolvedValue([]);
 });
 
@@ -447,7 +465,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('shows a waiting message once a visit exists but staff have not created a Job Card yet', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(null);
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture(null));
     await renderScreen(appt());
 
     await waitFor(() => expect(screen.getByTestId('job-card-waiting')).toBeOnTheScreen());
@@ -457,7 +475,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('shows a workshop message and no Need Spare/Complete controls when the Job Card was assigned to the workshop instead', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture({ section: 'WORKSHOP' }));
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture({ section: 'WORKSHOP' }));
     await renderScreen(appt());
 
     await waitFor(() => expect(screen.getByTestId('job-card-workshop')).toBeOnTheScreen());
@@ -467,7 +485,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('shows the finished state when the Job Card has already moved past SECTION_ASSIGNED', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture({ status: 'READY_FOR_QC' }));
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture({ status: 'READY_FOR_QC' }));
     await renderScreen(appt());
 
     await waitFor(() => expect(screen.getByTestId('job-card-finished')).toHaveTextContent('JC-0001 sent to QC ✓'));
@@ -476,7 +494,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('shows Need Spare and Complete controls once the Job Card is assigned to on-site repair', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     await renderScreen(appt());
 
     await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
@@ -485,12 +503,19 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('opens the spare part picker, filters by search, selects a part, and requests it', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    // First fetch (on mount): no request yet. Second fetch (after the mutation succeeds
+    // and invalidates the Job Card query): the server now knows about the PENDING_REVIEW
+    // request just created - this is what the screen's "waiting for review" state below
+    // actually reads, not anything set locally by the mutation itself.
+    mockedGetOwnJobCard.mockResolvedValueOnce(ownJobCardFixture());
     mockedListSpareParts.mockResolvedValue([
       sparePartFixture(),
       sparePartFixture({ id: 'part-2', code: 'SP-002', name: 'Door gasket', brand: 'LG' }),
     ]);
-    mockedRequestNeedSpare.mockResolvedValue({ id: 'reservation-1', status: 'PENDING_REVIEW' });
+    mockedRequestNeedSpare.mockResolvedValue({ id: 'reservation-1', sparePartId: 'part-2', quantityRequested: 3, status: 'PENDING_REVIEW' });
+    mockedGetOwnJobCard.mockResolvedValueOnce(
+      ownJobCardFixture({}, { id: 'reservation-1', sparePartId: 'part-2', quantityRequested: 3 }),
+    );
     await renderScreen(appt());
 
     await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
@@ -521,7 +546,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('defaults to quantity 1 and treats a non-numeric quantity as 1', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedListSpareParts.mockResolvedValue([sparePartFixture()]);
     mockedRequestNeedSpare.mockResolvedValue({ id: 'reservation-1', status: 'PENDING_REVIEW' });
     await renderScreen(appt());
@@ -539,7 +564,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('shows an error message when the Need Spare request fails', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedListSpareParts.mockResolvedValue([sparePartFixture()]);
     mockedRequestNeedSpare.mockRejectedValue({
       isAxiosError: true,
@@ -560,7 +585,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('shows an error in the spare part picker when the spare parts list fails to load', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedListSpareParts.mockRejectedValue(new Error('network down'));
     await renderScreen(appt());
 
@@ -572,7 +597,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('completes the visit with notes and shows the finished state on success', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedCompleteVisit.mockResolvedValue(jobCardFixture({ status: 'READY_FOR_QC' }));
     await renderScreen(appt());
 
@@ -588,7 +613,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('completes the visit with no notes when the field is left blank', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedCompleteVisit.mockResolvedValue(jobCardFixture({ status: 'READY_FOR_QC' }));
     await renderScreen(appt());
 
@@ -600,7 +625,7 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
 
   it('shows an error message when completing the visit fails', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedCompleteVisit.mockRejectedValue({
       isAxiosError: true,
       response: { status: 400, data: { message: 'Job card is not ready for completion' } },
@@ -614,6 +639,83 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
       expect(screen.getByTestId('complete-visit-error')).toHaveTextContent('Job card is not ready for completion'),
     );
     expect(screen.queryByTestId('job-card-finished')).toBeNull();
+  });
+});
+
+// 2026-09-07 fix: a live-verify run on a real device found that navigating away from this
+// screen and back made an already-sent Need Spare request look like it had never been
+// sent - `needSpareSentThisSession`/`needSpareMutation.isSuccess` were local React state
+// that a screen remount (a fresh mount of this component, exactly what happens navigating
+// Schedule -> appointment -> Schedule -> same appointment) always reset to false/idle,
+// even though the real PENDING_REVIEW reservation was still sitting on the server. These
+// tests render the screen "fresh" (no mutation ever called in this test) with the server
+// already reporting a spareRequest, which is the only way to prove the state genuinely
+// survives a remount rather than merely surviving within one mutation's lifetime.
+describe('AppointmentDetailScreen - Need Spare state survives a remount (server-derived, not local state)', () => {
+  it('shows "waiting for review" on a fresh mount when the server already has a PENDING_REVIEW request', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture({}, { status: 'PENDING_REVIEW' }));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('need-spare-requested')).toBeOnTheScreen());
+    // The picker/submit form for a fresh request must not be offered while one is pending.
+    expect(screen.queryByTestId('open-spare-part-picker')).toBeNull();
+    expect(mockedRequestNeedSpare).not.toHaveBeenCalled();
+  });
+
+  it('shows an approved/reserved message on a fresh mount when the server has a HELD request', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture({}, { status: 'HELD' }));
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('need-spare-approved')).toHaveTextContent('Spare part approved - pick it up from the store.'),
+    );
+    expect(screen.queryByTestId('open-spare-part-picker')).toBeNull();
+  });
+
+  it('shows a partial-reservation message on a fresh mount when the server has a PARTIALLY_RESERVED request', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture({}, { status: 'PARTIALLY_RESERVED' }));
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('need-spare-approved')).toHaveTextContent(/only part of the quantity was available/),
+    );
+  });
+
+  it('on a fresh mount with a REJECTED request, shows the rejection note and still offers the form to request again', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture({}, { status: 'REJECTED' }));
+    mockedListSpareParts.mockResolvedValue([sparePartFixture()]);
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('need-spare-rejected')).toBeOnTheScreen());
+    expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen();
+
+    // And requesting again works exactly like a first-ever request.
+    await fireEvent.press(screen.getByTestId('open-spare-part-picker'));
+    await waitFor(() => expect(screen.getByTestId('spare-part-option-part-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('spare-part-option-part-1'));
+    await fireEvent.press(screen.getByTestId('request-need-spare-button'));
+
+    await waitFor(() =>
+      expect(mockedRequestNeedSpare).toHaveBeenCalledWith(
+        'appt-1',
+        expect.objectContaining({ sparePartId: 'part-1', quantity: 1 }),
+      ),
+    );
+  });
+
+  it('offers the request form on a fresh mount when no Need Spare request has ever been made', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-spare-part-picker')).toBeOnTheScreen());
+    expect(screen.queryByTestId('need-spare-requested')).toBeNull();
+    expect(screen.queryByTestId('need-spare-approved')).toBeNull();
+    expect(screen.queryByTestId('need-spare-rejected')).toBeNull();
   });
 });
 
@@ -802,7 +904,7 @@ describe('AppointmentDetailScreen - offline queue', () => {
 
   it('enqueues Need Spare instead of calling the mutation when offline', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedListSpareParts.mockResolvedValue([sparePartFixture()]);
     mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
     await renderScreen(appt());
@@ -822,12 +924,17 @@ describe('AppointmentDetailScreen - offline queue', () => {
       }),
     );
     expect(mockedRequestNeedSpare).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByTestId('need-spare-requested')).toBeOnTheScreen());
+    // No local "just requested" flag anymore (that was the bug) - what actually shows a
+    // queued state is `queuedNeedSpare` reading OfflineQueueContext's real pendingItems,
+    // covered by the dedicated "shows a queued message..." test below. This mock's static
+    // pendingItems: [] doesn't reactively pick up the enqueue() call above, so the picker
+    // simply remains available here, same as the sibling Start Visit/Serial Number offline
+    // tests above.
   });
 
   it('shows a queued message instead of the picker/submit button when a need-spare item is pending', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedUseOfflineQueue.mockReturnValue(
       offlineQueueValue({ pendingItems: [queuedAction({ type: 'NEED_SPARE', appointmentId: 'appt-1' })] }),
     );
@@ -843,7 +950,7 @@ describe('AppointmentDetailScreen - offline queue', () => {
 
   it('shows a sync-failed message instead of the picker/submit button when a need-spare item failed', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedUseOfflineQueue.mockReturnValue(
       offlineQueueValue({
         isOnline: true,
@@ -863,7 +970,7 @@ describe('AppointmentDetailScreen - offline queue', () => {
 
   it('enqueues Complete instead of calling the mutation when offline', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
     await renderScreen(appt());
 
@@ -884,7 +991,7 @@ describe('AppointmentDetailScreen - offline queue', () => {
 
   it('shows a queued message instead of the completion form when a complete-visit item is pending', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedUseOfflineQueue.mockReturnValue(
       offlineQueueValue({ pendingItems: [queuedAction({ type: 'COMPLETE_VISIT', appointmentId: 'appt-1' })] }),
     );
@@ -900,7 +1007,7 @@ describe('AppointmentDetailScreen - offline queue', () => {
 
   it('shows a sync-failed message instead of the completion form when a complete-visit item failed', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
-    mockedGetOwnJobCard.mockResolvedValue(jobCardFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
     mockedUseOfflineQueue.mockReturnValue(
       offlineQueueValue({
         isOnline: true,

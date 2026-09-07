@@ -8,6 +8,7 @@ import type {
   JobCardSummary,
   NeedSpareInput,
   NeedSpareReservation,
+  OwnJobCardResult,
   ScheduledAppointment,
   StartVisitInput,
   TechnicianVisit,
@@ -38,12 +39,14 @@ export const captureSerialNumber = (appointmentId: string, data: CaptureSerialNu
 export const captureFaultSymptom = (appointmentId: string, data: CaptureFaultSymptomInput) =>
   api.post<TechnicianVisit>(`${TECH_BASE}/visits/${appointmentId}/fault-symptom`, data).then((r) => r.data);
 
-// Mobile Phase 5. Always 200 - a null body means staff haven't created a Job Card for
-// this visit yet, which is expected and NOT surfaced as an error (unlike getVisit's
-// 404-means-not-started convention above). The detail screen polls this to decide when
-// to show Need Spare/Complete.
+// Mobile Phase 5. Always 200 - `jobCard` is null until staff create one for this visit,
+// which is expected and NOT surfaced as an error (unlike getVisit's 404-means-not-started
+// convention above). `spareRequest` (added 2026-09-07) is the latest Need Spare request
+// ever made against that Job Card, or null - see OwnJobCardResult's doc comment. The
+// detail screen polls this to decide when to show Need Spare/Complete, and to reflect a
+// Team Leader's review of a pending request without the technician having to do anything.
 export const getOwnJobCard = (appointmentId: string) =>
-  api.get<JobCardSummary | null>(`${TECH_BASE}/visits/${appointmentId}/job-card`).then((r) => r.data);
+  api.get<OwnJobCardResult>(`${TECH_BASE}/visits/${appointmentId}/job-card`).then((r) => r.data);
 
 // Creates a PENDING_REVIEW request - no stock moves until a TL reviews it. `idempotencyKey`
 // must be generated once per user-initiated tap (see offlineQueue.ts) so a retried

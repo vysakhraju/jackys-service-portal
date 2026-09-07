@@ -5,7 +5,16 @@ vi.mock('./api', () => ({
 }));
 
 import { api } from './api';
-import { confirmReturn, getStaleReservations, getStock, grn, requestReturn, reviewReservation } from './inventoryApi';
+import {
+  confirmReturn,
+  getPendingNeedSpareRequests,
+  getStaleReservations,
+  getStock,
+  grn,
+  requestReturn,
+  reviewNeedSpare,
+  reviewReservation,
+} from './inventoryApi';
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
@@ -57,5 +66,21 @@ describe('inventoryApi', () => {
     (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'res1', status: 'RETURNED', quantityReturned: 2 } });
     await confirmReturn('res1', { quantityReturned: 2 });
     expect(api.post).toHaveBeenCalledWith('/inventory/reservations/res1/confirm-return', { quantityReturned: 2 });
+  });
+
+  // 2026-09-07: the previously-missing listing + its review action.
+  it('getPendingNeedSpareRequests fetches the pending-need-spare listing', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await getPendingNeedSpareRequests();
+    expect(api.get).toHaveBeenCalledWith('/inventory/reservations/pending-need-spare');
+  });
+
+  it('reviewNeedSpare posts the decision payload to the review-need-spare route', async () => {
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'res1', status: 'HELD' } });
+    await reviewNeedSpare('res1', { decision: 'APPROVE', notes: 'confirmed with technician' });
+    expect(api.post).toHaveBeenCalledWith('/inventory/reservations/res1/review-need-spare', {
+      decision: 'APPROVE',
+      notes: 'confirmed with technician',
+    });
   });
 });

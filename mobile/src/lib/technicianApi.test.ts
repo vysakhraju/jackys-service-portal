@@ -77,9 +77,22 @@ describe('getOwnJobCard', () => {
     expect(mockedGet).toHaveBeenCalledWith('/technician/visits/appt-1/job-card');
   });
 
-  it('resolves with null when the backend has not created a Job Card yet', async () => {
-    mockedGet.mockResolvedValue({ data: null });
-    await expect(getOwnJobCard('appt-1')).resolves.toBeNull();
+  // 2026-09-07: the response is always the {jobCard, spareRequest} wrapper now, never a
+  // bare null - jobCard itself is null until staff create one.
+  it('resolves with jobCard: null when the backend has not created a Job Card yet', async () => {
+    mockedGet.mockResolvedValue({ data: { jobCard: null, spareRequest: null } });
+    await expect(getOwnJobCard('appt-1')).resolves.toEqual({ jobCard: null, spareRequest: null });
+  });
+
+  it('resolves with the latest Need Spare request alongside the Job Card', async () => {
+    mockedGet.mockResolvedValue({
+      data: {
+        jobCard: { id: 'jc-1', jobCardNumber: 'JC-0001', status: 'SECTION_ASSIGNED', section: 'ON_SITE_REPAIR', onSiteCompletionNotes: null },
+        spareRequest: { id: 'res-1', sparePartId: 'part-1', quantityRequested: 2, status: 'PENDING_REVIEW' },
+      },
+    });
+    const result = await getOwnJobCard('appt-1');
+    expect(result.spareRequest).toEqual({ id: 'res-1', sparePartId: 'part-1', quantityRequested: 2, status: 'PENDING_REVIEW' });
   });
 });
 

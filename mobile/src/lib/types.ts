@@ -179,6 +179,20 @@ export interface NeedSpareReservation {
   status: string;
 }
 
+// GET /technician/visits/:appointmentId/job-card's actual response shape - was just
+// `JobCardSummary | null` through the rest of Phase 5, but the 2026-09-07 "forgotten
+// request" fix (see STATUS_TRACKER.md) taught TechnicianService.getOwnJobCard() to also
+// return the latest Need Spare request made against this Job Card (or null if none was
+// ever made), so this screen can derive "waiting for review"/"approved"/"rejected" from
+// server state on every poll instead of the local-only React state a screen remount used
+// to silently wipe. `spareRequest` mirrors `findLatestNeedSpareRequestForJobCard()` on the
+// backend - latest by requestedAt, regardless of status, so a rejected request that was
+// then re-requested still surfaces the newer one.
+export interface OwnJobCardResult {
+  jobCard: JobCardSummary | null;
+  spareRequest: NeedSpareReservation | null;
+}
+
 export interface CompleteVisitInput {
   notes?: string;
 }

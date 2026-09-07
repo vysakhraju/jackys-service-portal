@@ -3,6 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 const TABS: { label: string; path: string }[] = [
   { label: 'Workshop', path: '/workshop-inventory/workshop' },
   { label: 'Inventory & Stock', path: '/workshop-inventory/inventory' },
+  { label: 'Need Spare Requests', path: '/workshop-inventory/need-spare' },
 ];
 
 export function WorkshopInventoryLayout() {
@@ -16,7 +17,8 @@ export function WorkshopInventoryLayout() {
         <p className="mt-1 max-w-3xl text-sm text-slate-500">
           "Workshop" is the per-Job-Card console (assign a technician, start WIP, request
           spares, mark complete). "Inventory & Stock" is where GRN, stock lookups, and idle
-          reservation review/return happen - shared across every job.
+          reservation review/return happen - shared across every job. "Need Spare Requests"
+          is field technicians' mobile-app requests waiting for a decision.
         </p>
         <nav className="mt-4 -mb-px flex flex-wrap gap-1 overflow-x-auto">
           {TABS.map((tab) => (
