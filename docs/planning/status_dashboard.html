@@ -1519,6 +1519,41 @@
       <span class="resolved-tag" style="background:var(--success);">Found via live testing, fixed, unit-tested</span>
     </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Independent <span class="mono">test-master</span> QA pass on the orphan-reservation fix (2026-09-07): one gap found and closed</h3>
+      <p>
+        Same-session-author blind spot check on the fix above (commit
+        <span class="mono">bdd4602</span>), run at request rather than
+        automatically. Verified against real TypeORM source
+        (<span class="mono">node_modules/typeorm/entity-manager/EntityManager.js</span>),
+        not just the mocked test suite: a criteria object like
+        <span class="mono">{ id, status: 'PENDING_REVIEW' }</span> passed as
+        <span class="mono">manager.update()</span>'s second argument genuinely compiles to
+        <span class="mono">WHERE id = ? AND status = ?</span> — every one of the criteria
+        object's own keys becomes part of the WHERE clause, not just the primary key — so
+        the race-safety guarantee the fix depends on is real, not an artifact of how the
+        mock was written. Also confirmed no cross-contamination with the existing
+        shortfall-blocking logic (it only ever iterates <span class="mono">
+        activeReservations</span>, never the new <span class="mono">
+        pendingReviewReservations</span> read) and that
+        <span class="mono">job-cards.controller.ts</span>'s <span class="mono">qcApprove</span>
+        — the one real caller — is unaffected.
+      </p>
+      <p>
+        <b>One genuine coverage gap found and closed:</b> no test confirmed that a
+        <i>blocked</i> QC approval (a shortfall on another part, or the Job Card not being
+        <span class="mono">READY_FOR_QC</span>) correctly leaves a still-
+        <span class="mono">PENDING_REVIEW</span> reservation on that job completely
+        untouched — every existing test only exercised the successful-approval path. Two
+        new tests close it, asserting <span class="mono">manager.update</span> is never
+        called when the method throws before reaching the auto-reject step.
+      </p>
+      <p>
+        <b>651/651 backend tests passing</b> (649 + 2 new), <span class="mono">tsc -b</span>
+        clean.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Independent QA pass — 1 gap found and closed this session</span>
+    </div>
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Holistic mobile QA pass (2026-09-07): four real coverage gaps found and fixed across all 5 phases</h3>
       <p>
         An independent <span class="mono">test-master</span> pass across the whole mobile app,

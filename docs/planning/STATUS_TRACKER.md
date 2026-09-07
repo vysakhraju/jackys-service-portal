@@ -3699,6 +3699,26 @@ update (a genuine race already resolved by a human) doesn't error. **649/649 bac
 tests passing (642 + 7 new), `tsc -b` clean**, confirmed in the isolated cloud sandbox and
 cross-checked on your actual machine.
 
+**Independent `test-master` QA pass (2026-09-07)**, same reasoning as every other QA pass
+this build has run: coverage gaps are easy for the same session that wrote a fix to miss.
+Verified against TypeORM's actual `EntityManager.update()` source (not just assumed): a
+criteria object like `{ id, status: PENDING_REVIEW }` genuinely compiles to a `WHERE id =
+? AND status = ?` clause via `QueryBuilder.where()`, not just the primary key - the
+race-safety guarantee the fix depends on is real, not a mocked-test illusion. Also
+confirmed no cross-contamination between `pendingReviewReservations` and the existing
+`latestByPart`/shortfall-blocking computation (which still only ever iterates
+`activeReservations`), and that `job-cards.controller.ts`'s `qcApprove` - the one real
+caller - only reads `result.status`/`result.qcApprovedByUserId` from the return value,
+both unaffected.
+
+**One real gap found and closed:** none of the 7 original tests confirmed that a
+*blocked* approval (a stock shortfall, or a Job Card not `READY_FOR_QC`) leaves a
+still-`PENDING_REVIEW` reservation completely untouched - the auto-reject loop runs after
+those blocking checks in the code, but nothing asserted the ordering. Added 2 tests:
+a shortfall on an unrelated part correctly blocks the whole approval AND leaves the
+pending request untouched (`manager.update` never called); the "not READY_FOR_QC" guard
+does the same. **651/651 backend tests passing (649 + 2 new), `tsc -b` clean.**
+
 ---
 
 ## Open items / blockers (from planning docs, still unresolved)

@@ -446,6 +446,34 @@ describe('InventoryService', () => {
       expect(manager.save).not.toHaveBeenCalled();
     });
 
+    // independent test-master QA pass (2026-09-07): confirms the orphan fix's auto-reject
+    // loop only ever runs AFTER every existing blocking check (status guard, shortfall
+    // gate) has already passed - a blocked approval must never prematurely auto-reject a
+    // Need Spare request that's still genuinely awaiting Team Leader review, since the job
+    // hasn't actually reached QC_PASSED at all in that case.
+    it('a shortfall block on a DIFFERENT part leaves a still-PENDING_REVIEW reservation completely untouched', async () => {
+      const jc = readyJobCard();
+      wireManager(jc, { 'part-short:MAIN_STORE': stock({ sparePartId: 'part-short', quantityOnHand: 10, quantityReserved: 2 }) });
+      wireReservations(
+        [reservation({ id: 'res-short', sparePartId: 'part-short', status: ReservationStatus.PARTIALLY_RESERVED, quantityRequested: 5, quantityReserved: 2 })],
+        [reservation({ id: 'res-pending', sparePartId: 'part-pending', status: ReservationStatus.PENDING_REVIEW })],
+      );
+
+      await expect(service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW)).rejects.toThrow(ConflictException);
+
+      expect(manager.update).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('a Job Card not READY_FOR_QC never touches a PENDING_REVIEW reservation on it either', async () => {
+      wireManager(readyJobCard({ status: JobCardStatus.IN_PROGRESS }), {});
+      wireReservations([], [reservation({ id: 'res-pending', sparePartId: 'part-1', status: ReservationStatus.PENDING_REVIEW })]);
+
+      await expect(service.consumeReservationsOnQcApproval('jc-1', 'qc-officer-1', NOW)).rejects.toThrow(BadRequestException);
+
+      expect(manager.update).not.toHaveBeenCalled();
+    });
+
     it('throws NotFoundException when the Job Card does not exist', async () => {
       wireManager(null, {});
 
