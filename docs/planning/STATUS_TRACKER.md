@@ -3830,6 +3830,96 @@ Committed as `a2a2428`.
 
 ---
 
+## Mobile Phase 5 live-verify follow-up: "forgotten request" bug + Team Leader review screen + live pop-up (2026-09-07)
+
+Live-verifying Mobile Phases 3-4 on a real device surfaced a genuine bug distinct from
+the orphaned-reservation gap above: after requesting a spare part on-site, navigating
+away from the appointment (back to Schedule) and back into it made the request look like
+it had never been sent - the "Spare part requested - waiting for a Team Leader to
+review it" message was gone and the form was back, even though the real `PENDING_REVIEW`
+reservation was still sitting on the server untouched. Separately, there was genuinely no
+web screen anywhere to review a Need Spare request - not even a listing endpoint in
+Swagger (`GET /inventory/reservations/stale` explicitly excludes `PENDING_REVIEW`) - so
+the only way to act on one was a raw SQL lookup plus the review endpoint directly. You
+chose to fix all three in one pass: the mobile bug, a Team Leader review screen, and a
+live pop-up notification.
+
+**Root cause (mobile):** `AppointmentDetailScreen` tracked "requested this session" as
+local React state (`needSpareSentThisSession` / `needSpareMutation.isSuccess`) that a
+screen remount always resets to false/idle - it was never reading anything from the
+server about whether a request actually existed.
+
+**Backend groundwork:** `TechnicianService.getOwnJobCard()` now returns
+`{ jobCard, spareRequest }` instead of a bare `JobCard | null` -
+`InventoryService.findLatestNeedSpareRequestForJobCard()` (new) finds the latest
+Need-Spare-originated reservation for the Job Card, scoped via
+`idempotencyKey: Not(IsNull())` (only ever set by mobile Need Spare requests, never by
+staff's own `reserve()` calls) rather than a dedicated boolean/type column. Also added
+`InventoryService.getPendingNeedSpareRequests()` (all `PENDING_REVIEW` rows, oldest
+first, with `sparePart`/`jobCard`/`requestedBy` loaded) behind a new
+`GET /inventory/reservations/pending-need-spare` endpoint - the listing that never
+existed.
+
+**Mobile fix:** the detail screen now derives its Need Spare state from
+`spareRequest.status` on every poll instead of local state - `PENDING_REVIEW` shows
+"waiting for review", `HELD`/`PARTIALLY_RESERVED` shows "approved" (partial callout when
+only some of the quantity was available), `REJECTED` shows a "wasn't approved - request
+again if still needed" note while still offering the form. The 15s Job Card poll now also
+keeps running while a request is `PENDING_REVIEW` (it used to stop the moment the Job
+Card itself was ready), so a Team Leader's decision shows up on its own without the
+technician leaving and re-opening the screen. The offline-queue path is untouched -
+`queuedNeedSpare` (backed by the already-persisted offline queue, not ephemeral state)
+was already correctly surviving remounts; only the online "just requested" state had the
+bug.
+
+**Frontend (web):** a new "Need Spare Requests" tab under Workshop & Inventory
+(`NeedSpareReviewPage.tsx`, third tab alongside Workshop / Inventory & Stock - grouped
+there rather than as a new top-level nav item, since it's another reservation-review flow
+like the existing tab) lists every pending request with Approve/Reject buttons calling the
+Need Spare review endpoint that already existed. Visible to
+`TECHNICAL_TEAM_LEADER`/`SERVICE_HEAD`/`SUPER_ADMIN`, same role list the backend enforces.
+
+**Live pop-up:** a new `InventoryGateway` (namespace `/inventory`, poll-and-diff every
+5s, same hand-rolled JWT-handshake-auth pattern as the existing `ReportsGateway` - this
+codebase has no precedent for a service pushing directly into a gateway, so the
+established simplification was reused rather than inventing a new push path) broadcasts
+the full pending-list on any change. A new from-scratch toast primitive
+(`lib/toast.tsx` - no toast/notification library existed anywhere in this frontend) is
+mounted once in `AppLayout`, and a new `NeedSpareNotifier` component (also mounted once,
+renders nothing) turns each newly-arrived request into a toast with an action button that
+jumps straight to the review tab, wherever the reviewer currently is in the app - plus
+invalidates the review page's query so it refreshes on its own if already open. The
+"new since last snapshot" diffing (skip the very first snapshot after connect so
+pre-existing requests don't toast-spam on load) mirrors `useReportsSocket`'s own pattern.
+
+**Tests:** backend - 4 new/replaced `getOwnJobCard` tests plus 4 new
+`InventoryService` tests (`getPendingNeedSpareRequests`,
+`findLatestNeedSpareRequestForJobCard`), and the existing `reports-gateway-cors.spec.ts`
+CORS-fallback-drift regression guard was generalized to cover the new gateway too.
+**658/658 backend tests passing**, `tsc -b` clean. Frontend - 43 new tests across
+`inventoryApi.test.ts` (2), `useNeedSpareSocket.test.ts` (9), `toast.test.tsx` (11),
+`NeedSpareReviewPage.test.tsx` (11), `NeedSpareNotifier.test.tsx` (10).
+**418/418 frontend tests passing** (one unrelated `DeliveriesPage.test.tsx` canvas/jsdom
+failure confirmed flaky - passes in isolation, untouched this session, same class of
+flake noted in Frontend Phase 15 above). Mobile - the fixture/test-mock wrapper for
+`getOwnJobCard`'s new `{jobCard, spareRequest}` shape was updated across every call site,
+plus a new dedicated describe block proving the actual fix: rendering the screen fresh
+(no mutation ever called in-test) with the server already reporting a `PENDING_REVIEW`/
+`HELD`/`PARTIALLY_RESERVED`/`REJECTED` request, confirming the state is genuinely
+server-derived rather than surviving only within one mutation's lifetime.
+**125/125 mobile tests passing**, `tsc --noEmit` clean. All three suites confirmed in the
+isolated cloud sandbox; on-device verification hit two known environment limits instead
+(frontend: a Rolldown native-binding/node_modules mismatch inside the on-device Linux VM;
+mobile: `npx jest` timing out on-device, the same "device-shell-speed limitation" noted
+for mobile jest earlier in this build) - neither is a code issue, and the cloud-sandbox
+runs are the reliable signal per this build's established pattern.
+
+**Committed as `bf9be4f`** (21 files, 1337 insertions), on top of `da35706` (the
+Need-Spare-review backend groundwork commit referenced above). `main`/`master` synced.
+Not yet pushed to the remote - push both branches yourself when ready.
+
+---
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
