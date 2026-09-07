@@ -975,6 +975,34 @@
       </p>
       <span class="resolved-tag">Live-verified this phase</span>
     </div>
+    <div class="alert" style="border-color:var(--critical); background:var(--critical-wash); margin-top:14px;">
+      <h3 style="color:var(--critical);">The manual WebSocket check found a real bug (2026-09-07) — found, fixed, re-tested</h3>
+      <p>
+        The one check <span class="mono">verify-phase12.ps1</span> couldn't automate
+        surfaced a genuine bug on the first try: the connection pill sat on
+        <b>"Offline — live updates paused"</b> against your real running server, even
+        though the page loaded fine and every REST call worked. <b>Root cause:</b> the
+        same class of mistake as the GL Ledger boot crash, just quieter —
+        <span class="mono">ReportsGateway</span>'s
+        <span class="mono">@WebSocketGateway({ cors: { origin: process.env.CORS_ORIGIN
+        ... } })</span> decorator argument is evaluated the instant the file is imported,
+        at Node's static module-resolution time — well before
+        <span class="mono">ConfigModule.forRoot()</span> ever loads <span class="mono">
+        .env</span> into <span class="mono">process.env</span>. So the hardcoded fallback
+        array is the one actually enforced, and unlike <span class="mono">main.ts</span>'s
+        own <span class="mono">cors()</span> call, this one was never updated to include
+        the Vite dev server's port (<span class="mono">5173</span>) — every real WebSocket
+        handshake was silently CORS-rejected while Swagger/curl testing, which never
+        touches this code path, stayed green. <b>Fix:</b> added
+        <span class="mono">5173</span> to the fallback array, plus a new regression test
+        (<span class="mono">reports-gateway-cors.spec.ts</span>) that checks the gateway's
+        fallback list is always a superset of <span class="mono">main.ts</span>'s, so the
+        two can't silently drift apart again. <b>642/642</b> backend tests passing,
+        <span class="mono">tsc -b</span> clean. Restart your backend and re-check the pill
+        — it should now go <span class="mono">Live</span>.
+      </p>
+      <span class="resolved-tag" style="background:var(--success);">Found, fixed, and unit-tested — awaiting your re-test</span>
+    </div>
     <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
       <h3 style="color:var(--success);">Backend Phase 12: Warranty Claims — built, unit-tested, live-verified (70/70)</h3>
       <p>
@@ -1417,7 +1445,9 @@
         cloud sandbox and cross-checked on your actual machine (on-device
         <span class="mono">jest</span> times out per the known device-shell-speed
         limitation — the cloud sandbox's clean pass is definitive, same as every prior
-        phase).
+        phase). Committed as <span class="mono">78b729e</span> (34 files, on both
+        <span class="mono">main</span> and <span class="mono">master</span>) — not yet
+        pushed to the remote, that step stays manual.
       </p>
       <p>
         <b>Confirmed — live-verified end-to-end against a real running server

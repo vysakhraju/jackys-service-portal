@@ -41,7 +41,22 @@ const VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER'];
 @WebSocketGateway({
   namespace: '/reports',
   cors: {
-    origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
+    // Same class of bug as the GlLedgerModule boot-crash (2026-09-03): decorator metadata
+    // is evaluated the instant this file is imported, at Node's static module-resolution
+    // time - well before NestFactory.create() ever instantiates ConfigModule.forRoot() and
+    // actually populates process.env from .env. So process.env.CORS_ORIGIN is reliably
+    // undefined right here, and this array is ALWAYS the one actually in effect for the
+    // WebSocket handshake's CORS check, regardless of what .env says. main.ts's own
+    // app.use(cors(...)) call doesn't have this problem (it runs at request time, long
+    // after bootstrap has finished), which is exactly why REST calls worked fine while the
+    // live Kanban socket sat stuck on "Offline" - its handshake was silently rejected by a
+    // fallback list that had never been updated to include the Vite dev server's real port.
+    // Keep this array in sync with main.ts's cors() fallback by hand.
+    origin: process.env.CORS_ORIGIN?.split(',') || [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:5173', // Vite dev server - the one the frontend actually runs on
+    ],
     credentials: true,
   },
 })

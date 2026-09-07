@@ -2871,6 +2871,46 @@ already-stable backend API, in the same order the backend itself was built in:
 manual WebSocket spot-check noted above, and any of the deferred follow-ups below if you
 want them at some point.
 
+## Frontend Phase 12's manual WebSocket check found a real bug (2026-09-07)
+
+The one thing `verify-phase12.ps1` couldn't automate - opening `/reports` and confirming
+the connection pill goes `Live` - surfaced a genuine production bug on the first try: the
+pill sat on **`Offline - live updates paused`** against your real running server, even
+though the page itself loaded fine and every REST call worked.
+
+**Root cause:** the exact same class of mistake as the 2026-09-03 `GlLedgerModule` boot
+crash, just quieter this time - a stale fallback instead of a hard crash.
+`ReportsGateway`'s `@WebSocketGateway({ cors: { origin: process.env.CORS_ORIGIN?.split(',')
+|| [...] } })` decorator argument is evaluated the instant `reports.gateway.ts` is first
+imported - Node's static module-resolution time, which happens while `main.ts`'s own
+`import { AppModule } from './app.module'` line is still being resolved, well before
+`NestFactory.create(AppModule)` ever instantiates `ConfigModule.forRoot()` and actually
+loads `.env` into `process.env`. So `process.env.CORS_ORIGIN` is reliably `undefined` at
+that exact line, and the hardcoded fallback array is the one *actually* enforced for the
+WebSocket handshake's CORS check - regardless of what `.env` says. `main.ts`'s own
+`app.use(cors(...))` call doesn't have this problem (it runs at request time, long after
+bootstrap finishes), and its fallback array was correctly updated to include the Vite dev
+server's port (`http://localhost:5173`) when the frontend was scaffolded. The gateway's
+fallback array was never updated to match - it only had `3000`/`3001` - so every real
+WebSocket handshake from the actual running frontend was silently CORS-rejected at the
+transport level (5 consecutive `connect_error` events, which is exactly what flips the
+pill to `Offline` per `useReportsSocket.ts`'s own design), while Swagger/curl-based REST
+testing never exercises this code path at all and stayed green the whole time.
+
+**Fix:** added `'http://localhost:5173'` to `ReportsGateway`'s fallback CORS origin array,
+matching `main.ts`, with a comment explaining the decorator-evaluation-timing trap so it
+doesn't regress the same way twice. **New regression test**
+(`src/reports/reports-gateway-cors.spec.ts`, 3 new tests): rather than just hardcoding a
+duplicate origin list that could drift out of sync with `main.ts` a second time, it reads
+both files' source and asserts the gateway's fallback list is always a superset of
+`main.ts`'s fallback list - so any future port change to one and not the other fails the
+build instead of silently breaking the live dashboard again.
+
+**Verified:** 642/642 backend tests passing (639 + 3 new), `tsc -b` clean, confirmed in
+the isolated cloud sandbox and cross-checked on your actual machine. Not yet re-verified
+against your real running server - restart the backend to pick up the fix, then repeat
+the `/reports` pill check; this should now go `Live` within a couple seconds.
+
 Known, explicitly-deferred follow-ups, unrelated to the frontend build, if you want them
 at some point instead:
 
@@ -3596,6 +3636,12 @@ the job that requested them), or the stale-reservation view
 (`GET /inventory/reservations/stale`) should be extended to also surface
 `PENDING_REVIEW` requests, not just `HELD`/`PARTIALLY_RESERVED` ones, so a Team Leader
 has some way to notice this class of orphan at all.
+
+**Committed (2026-09-07):** all of the above - Phase 5 backend + mobile client,
+the holistic test-master QA pass, and this live-verification writeup - landed in
+one commit, `78b729e`, on both `main` and `master` (34 files, 2699 insertions).
+Not yet pushed to the remote - that step is manual by design (no git push
+credentials live in this session); push both branches yourself when ready.
 
 ---
 
