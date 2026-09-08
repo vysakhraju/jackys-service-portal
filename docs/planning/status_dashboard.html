@@ -1997,6 +1997,37 @@
   </div>
 
   <div class="section">
+    <h3 style="color:var(--success);">Appointment auto-completes the instant its Job Card is created (2026-09-08)</h3>
+    <p>
+      Natural complement to the cancellation guard above: per the "an appointment only ever
+      has 3 real stages" model, the appointment is now marked COMPLETED automatically the
+      instant a Job Card is created for it, instead of requiring a staff member to
+      separately click Complete. Closes a real gap that only hit workshop-routed jobs -
+      on-site repairs already auto-completed via the field technician's own mobile
+      "Complete Visit" action, but nothing ever did that for workshop jobs, which is
+      exactly why staff have been clicking Complete by hand on the Schedule page.
+    </p>
+    <p>
+      Implemented as its own lenient completion path (never throws, so it can never take a
+      successfully-created Job Card down with it) plus making the existing manual/mobile
+      completion call idempotent once the appointment is already COMPLETED. No frontend or
+      mobile changes needed - every screen already derives its UI from
+      <span class="mono">appointment.status</span> reactively.
+    </p>
+    <p style="margin-top:10px; font-size:14px; color:var(--ink-faint);">
+      Worth knowing, not hidden: Job Card creation happens mid-visit, so the appointment
+      now shows COMPLETED on the technician's own mobile screen while they're still
+      actively on-site working the job - the Job Card's own status is still the accurate
+      source of truth for where the repair actually stands.
+    </p>
+    <div class="verified">
+      <span>737/737 backend tests</span>
+      <span>tsc clean</span>
+    </div>
+    <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+  </div>
+
+  <div class="section">
     <div class="next">
       <div>
         <h3>Only the Gantt-style technician assignment board is left from the Redtra360 review</h3>
@@ -2029,7 +2060,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 6426926 — awaiting push from your machine</span>
+    <span>master + main synced locally at 8fe8be7 — awaiting push from your machine</span>
   </footer>
 
 </div>

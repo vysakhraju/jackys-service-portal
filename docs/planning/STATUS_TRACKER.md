@@ -4230,6 +4230,53 @@ fix won't pick it up until you stop and restart it.
 **Committed as `6426926`**, on top of `5d92f1a`. `main`/`master` synced. Not yet pushed
 to the remote - push both branches yourself when ready.
 
+## Appointment auto-completes the instant its Job Card is created (2026-09-08)
+
+Requested follow-up to the cancellation guard above, and its natural complement: per the
+"an appointment only ever has 3 real stages - scheduled, completed, or cancelled" model,
+the appointment is now marked COMPLETED automatically the instant a Job Card is created
+for it, instead of requiring a staff member to separately click Complete afterwards.
+
+This closes a real gap that only affected workshop-routed jobs specifically: on-site
+repairs already got completed automatically (the field technician's own mobile "Complete
+Visit" action calls this), but nothing ever did that for workshop jobs - which is exactly
+why staff have been manually clicking Complete on the Schedule page.
+
+- `AppointmentsService.completeFromJobCardCreation(id, userId)`: transitions any
+  non-terminal, non-AMC appointment straight to COMPLETED. Deliberately its own lenient
+  method rather than reusing `completeAppointment()` - it must never itself fail and take
+  a successfully-created Job Card down with it, so every case `completeAppointment()`
+  would reject on (already terminal, AMC type) is a silent no-op here instead of a thrown
+  exception.
+- `JobCardsService.create()` calls it right after saving the new Job Card, wrapped in
+  try/catch (logged as a warning, never rethrown) for the same reason - a Job Card that
+  was successfully created always stays created even if the auto-complete side effect
+  hiccups.
+- `completeAppointment()` itself (still used by the web's manual Complete button and the
+  mobile technician's own on-site completion call) is now idempotent when the appointment
+  is already COMPLETED, instead of throwing "Can only complete on-site appointments" -
+  needed because by the time either of those runs, the appointment is very often already
+  auto-completed.
+
+No frontend or mobile code changes were needed - every screen already derives its UI from
+`appointment.status` reactively (the Complete/Cancel buttons, the "Job Card ->" link, the
+dashboard counts), so they all just reflect the earlier completion automatically.
+
+**One real trade-off worth knowing, not hidden**: Job Card creation happens mid-visit (as
+soon as the technician's serial number/fault-symptom capture and staff's Job Card creation
+are done), not at the end of the on-site work - so the appointment now shows COMPLETED on
+the technician's own mobile screen while they're still actively on-site working the job.
+Worth watching for whether that reads as confusing in practice; the Job Card's own status
+(OPEN → SN_VALIDATED → SECTION_ASSIGNED → ... → DELIVERED) is still the accurate source of
+truth for where the actual repair stands.
+
+8 new backend tests (auto-complete on creation, the failure-doesn't-break-creation case,
+completeAppointment's new idempotency, completeFromJobCardCreation's own guards).
+**737/737 backend tests passing**, `tsc --noEmit` clean.
+
+**Committed as `8fe8be7`**, on top of `613d20a`. `main`/`master` synced. Not yet pushed
+to the remote - push both branches yourself when ready.
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
