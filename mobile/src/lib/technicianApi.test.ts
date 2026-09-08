@@ -9,8 +9,11 @@ import {
   completeVisit,
   getMySchedule,
   getOwnJobCard,
+  getTaskPauses,
   getVisit,
+  pauseTask,
   requestNeedSpare,
+  resumeTask,
   startVisit,
 } from './technicianApi';
 
@@ -116,5 +119,25 @@ describe('completeVisit', () => {
   it('calls POST /technician/visits/:id/complete with undefined notes when none are given', async () => {
     await completeVisit('appt-1', {});
     expect(mockedPost).toHaveBeenCalledWith('/technician/visits/appt-1/complete', {});
+  });
+});
+
+describe('task timer pause/resume - lives on /job-cards, not /technician (job-cards.controller.ts)', () => {
+  it('pauseTask calls POST /job-cards/:id/pause with the reason and optional notes', async () => {
+    await pauseTask('jc-1', { reason: 'CUSTOMER_UNAVAILABLE', notes: 'Not home, will return' });
+    expect(mockedPost).toHaveBeenCalledWith('/job-cards/jc-1/pause', {
+      reason: 'CUSTOMER_UNAVAILABLE',
+      notes: 'Not home, will return',
+    });
+  });
+
+  it('resumeTask calls POST /job-cards/:id/resume with no body', async () => {
+    await resumeTask('jc-1');
+    expect(mockedPost).toHaveBeenCalledWith('/job-cards/jc-1/resume');
+  });
+
+  it('getTaskPauses calls GET /job-cards/:id/pauses', async () => {
+    await getTaskPauses('jc-1');
+    expect(mockedGet).toHaveBeenCalledWith('/job-cards/jc-1/pauses');
   });
 });

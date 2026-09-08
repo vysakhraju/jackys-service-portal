@@ -10,6 +10,7 @@ import { QualityReportsController } from './quality-reports.controller';
 import { OperationalReportsService } from './operational-reports.service';
 import { OperationalReportsController } from './operational-reports.controller';
 import { JobCard } from '../job-cards/entities/job-card.entity';
+import { JobCardTaskPause } from '../job-cards/entities/job-card-task-pause.entity';
 import { Delivery } from '../delivery/entities/delivery.entity';
 import { Estimate } from '../estimates/entities/estimate.entity';
 import { TechnicianVisit } from '../technician/entities/technician-visit.entity';
@@ -39,6 +40,7 @@ import { SparePart } from '../master-data/entities/spare-part.entity';
   imports: [
     TypeOrmModule.forFeature([
       JobCard,
+      JobCardTaskPause,
       Delivery,
       Estimate,
       TechnicianVisit,

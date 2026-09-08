@@ -9,7 +9,7 @@ vi.mock('./api', () => ({
 }));
 
 import { api } from './api';
-import { qcApprove, qcReject } from './jobCardsApi';
+import { getTaskPauses, pauseTask, qcApprove, qcReject, resumeTask } from './jobCardsApi';
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
@@ -27,5 +27,25 @@ describe('jobCardsApi - QC (Frontend Phase 7)', () => {
     (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'jc-1', status: 'IN_PROGRESS' } });
     await qcReject('jc-1', { reason: 'Drum still noisy after reassembly' });
     expect(api.post).toHaveBeenCalledWith('/job-cards/jc-1/qc/reject', { reason: 'Drum still noisy after reassembly' });
+  });
+});
+
+describe('jobCardsApi - task timer pause/resume', () => {
+  it('pauseTask posts to /job-cards/:id/pause with the reason and optional notes', async () => {
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'pause-1', reason: 'MATERIAL_SHORTAGE' } });
+    await pauseTask('jc-1', { reason: 'MATERIAL_SHORTAGE', notes: 'Waiting on compressor' });
+    expect(api.post).toHaveBeenCalledWith('/job-cards/jc-1/pause', { reason: 'MATERIAL_SHORTAGE', notes: 'Waiting on compressor' });
+  });
+
+  it('resumeTask posts to /job-cards/:id/resume with no body', async () => {
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'pause-1', resumedAt: '2026-09-08T10:00:00.000Z' } });
+    await resumeTask('jc-1');
+    expect(api.post).toHaveBeenCalledWith('/job-cards/jc-1/resume');
+  });
+
+  it('getTaskPauses gets /job-cards/:id/pauses', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await getTaskPauses('jc-1');
+    expect(api.get).toHaveBeenCalledWith('/job-cards/jc-1/pauses');
   });
 });

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
+import { JobCardTaskPause, TaskPauseReason } from '../job-cards/entities/job-card-task-pause.entity';
 import { TechnicianVisit } from '../technician/entities/technician-visit.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { User } from '../auth/entities/user.entity';
@@ -13,13 +14,16 @@ const COMPLETED_STATUSES = [JobCardStatus.QC_PASSED, JobCardStatus.DELIVERED];
 const DEFAULT_SLA_HOURS = 48; // BRD 18.4's own literal example ("e.g., 48-hour completion") - no stored per-job SLA field exists.
 
 /**
- * BRD 18.4 Operational Reports. Two documented gaps, both following the same
+ * BRD 18.4 Operational Reports. One remaining documented gap, following the same
  * omit-what-doesn't-exist pattern as Finance/Quality:
  * - "Customer rating" (Technician Productivity) is omitted entirely, not null - the BRD's
  *   own "(if captured)" already hedges it, and nothing anywhere captures it.
- * - "Reason codes" (SLA Breach Report) is replaced by the actual hoursOverThreshold figure
- *   - nothing in this app records WHY a job took long, so a fabricated reason category
- *     would be worse than just showing how far over the job actually ran.
+ * "Reason codes" for the SLA Breach Report used to be an undocumented gap too - task-timer
+ * pause reasons (JobCardTaskPause) now fill it for the one reason that's SLA-exempt
+ * (MATERIAL_SHORTAGE - see SLA_EXEMPT_PAUSE_REASONS): getSlaBreach() below excludes that
+ * paused time from the elapsed-hours calculation and reports how much it excluded per job.
+ * Every other pause reason is tracked (visible via GET /job-cards/:id/pauses) but still
+ * counts against SLA, since it reflects the service centre's own time, not the warehouse's.
  */
 
 export interface TechnicianProductivityRow {
@@ -45,6 +49,10 @@ export interface SlaBreachItem {
   qcApprovedAt: Date;
   hoursElapsed: number;
   hoursOverThreshold: number;
+  // Hours excluded from hoursElapsed because the job had one or more MATERIAL_SHORTAGE
+  // task pauses (waiting on the warehouse, not the service centre) - see the class doc
+  // comment above. 0 when the job never had one.
+  materialShortageHoursExcluded: number;
 }
 
 export interface SlaBreachReport {
@@ -52,6 +60,23 @@ export interface SlaBreachReport {
   thresholdHours: number;
   breachedCount: number;
   items: SlaBreachItem[];
+}
+
+export interface TimeWaitingOnPartsRow {
+  jobCardId: string;
+  jobCardNumber: string;
+  totalHoursWaiting: number;
+  pauseCount: number;
+  // True if this job currently has an open (unresumed) MATERIAL_SHORTAGE pause.
+  stillWaiting: boolean;
+}
+
+export interface TimeWaitingOnPartsReport {
+  asOf: Date;
+  periodStart: string | null;
+  periodEnd: string | null;
+  totalHoursWaiting: number;
+  rows: TimeWaitingOnPartsRow[];
 }
 
 export interface SpareConsumptionEntry {
@@ -118,6 +143,7 @@ export class OperationalReportsService {
     @InjectRepository(InventoryReservation) private reservationRepo: Repository<InventoryReservation>,
     @InjectRepository(SparePart) private sparePartRepo: Repository<SparePart>,
     @InjectRepository(FaultSymptom) private faultSymptomRepo: Repository<FaultSymptom>,
+    @InjectRepository(JobCardTaskPause) private taskPauseRepo: Repository<JobCardTaskPause>,
   ) {}
 
   private round(n: number): number {
@@ -285,7 +311,12 @@ export class OperationalReportsService {
     };
   }
 
-  /** BRD 18.4 SLA Breach Report - JobCard.createdAt -> qcApprovedAt, default 48h threshold. */
+  /**
+   * BRD 18.4 SLA Breach Report - JobCard.createdAt -> qcApprovedAt, default 48h threshold.
+   * MATERIAL_SHORTAGE task-pause time is excluded from the elapsed-hours calculation (see
+   * the class doc comment) - a job that was genuinely being worked but sat waiting on the
+   * warehouse for 30 of its 60 elapsed hours only counts as 30 hours against SLA.
+   */
   async getSlaBreach(thresholdHours: number = DEFAULT_SLA_HOURS): Promise<SlaBreachReport> {
     // TypeORM's find() has no "IS NOT NULL" shorthand, so this uses a query builder.
     const rows = await this.jobCardRepo
@@ -293,9 +324,39 @@ export class OperationalReportsService {
       .where('"jc"."qcApprovedAt" IS NOT NULL')
       .getMany();
 
+    const jobCardIds = rows.map((jc) => jc.id);
+    const materialShortagePauses = jobCardIds.length
+      ? await this.taskPauseRepo.find({
+          where: { jobCardId: In(jobCardIds), reason: TaskPauseReason.MATERIAL_SHORTAGE },
+        })
+      : [];
+    const pausesByJobCard = new Map<string, JobCardTaskPause[]>();
+    for (const pause of materialShortagePauses) {
+      const list = pausesByJobCard.get(pause.jobCardId) ?? [];
+      list.push(pause);
+      pausesByJobCard.set(pause.jobCardId, list);
+    }
+
     const items: SlaBreachItem[] = [];
     for (const jc of rows) {
-      const hoursElapsed = (jc.qcApprovedAt!.getTime() - jc.createdAt.getTime()) / 3_600_000;
+      const hoursElapsedRaw = (jc.qcApprovedAt!.getTime() - jc.createdAt.getTime()) / 3_600_000;
+
+      // Bounded to [createdAt, qcApprovedAt] - a pause a technician forgot to resume
+      // before QC approval (an edge case; the auto-opened SPARE_PENDING pause is always
+      // auto-closed before a job can reach READY_FOR_QC, see resumeFromSparePending/
+      // completeWorkshop) must never let excluded time exceed the job's own elapsed time.
+      let materialShortageHoursExcluded = 0;
+      for (const pause of pausesByJobCard.get(jc.id) ?? []) {
+        const start = Math.max(pause.pausedAt.getTime(), jc.createdAt.getTime());
+        const endRaw = pause.resumedAt ? pause.resumedAt.getTime() : jc.qcApprovedAt!.getTime();
+        const end = Math.min(endRaw, jc.qcApprovedAt!.getTime());
+        if (end > start) {
+          materialShortageHoursExcluded += (end - start) / 3_600_000;
+        }
+      }
+      materialShortageHoursExcluded = this.round(materialShortageHoursExcluded);
+
+      const hoursElapsed = Math.max(0, hoursElapsedRaw - materialShortageHoursExcluded);
       if (hoursElapsed > thresholdHours) {
         items.push({
           jobCardId: jc.id,
@@ -304,6 +365,7 @@ export class OperationalReportsService {
           qcApprovedAt: jc.qcApprovedAt!,
           hoursElapsed: this.round(hoursElapsed),
           hoursOverThreshold: this.round(hoursElapsed - thresholdHours),
+          materialShortageHoursExcluded,
         });
       }
     }
@@ -314,6 +376,66 @@ export class OperationalReportsService {
       thresholdHours,
       breachedCount: items.length,
       items,
+    };
+  }
+
+  /**
+   * New report filling the gap the SLA Breach report's own doc comment used to flag and
+   * the REDTRA360 review call's own ask ("a report metric on how long a job sits in a
+   * 'waiting for part' status"). Aggregates MATERIAL_SHORTAGE task-pause time per Job
+   * Card - both system-auto-opened (from a Need Spare shortfall, see
+   * JobCardsService.setSparePending) and any manual MATERIAL_SHORTAGE pauses a technician
+   * logged themselves before a formal Need Spare request existed. periodStart/periodEnd
+   * filter by when each pause itself started (pausedAt) - a pause that started in-period
+   * but is still open (or resumed after the period end) is still counted in full, same
+   * "count the whole thing if it started in-period" convention as getSpareConsumption's
+   * consumedAt filter elsewhere in this file.
+   */
+  async getTimeWaitingOnParts(periodStart?: string, periodEnd?: string): Promise<TimeWaitingOnPartsReport> {
+    let qb = this.taskPauseRepo
+      .createQueryBuilder('p')
+      .innerJoin(JobCard, 'jc', '"jc"."id" = "p"."jobCardId"')
+      .select('"p"."jobCardId"', 'jobCardId')
+      .addSelect('"jc"."jobCardNumber"', 'jobCardNumber')
+      .addSelect('"p"."pausedAt"', 'pausedAt')
+      .addSelect('"p"."resumedAt"', 'resumedAt')
+      .where('"p"."reason" = :reason', { reason: TaskPauseReason.MATERIAL_SHORTAGE });
+
+    if (periodStart) qb = qb.andWhere('"p"."pausedAt" >= :periodStart', { periodStart });
+    if (periodEnd) qb = qb.andWhere('"p"."pausedAt" <= :periodEnd', { periodEnd: `${periodEnd} 23:59:59.999` });
+
+    const rawRows = await qb.getRawMany();
+
+    const now = new Date();
+    const agg = new Map<string, { jobCardNumber: string; totalHours: number; count: number; stillWaiting: boolean }>();
+    for (const r of rawRows) {
+      const a = agg.get(r.jobCardId) ?? { jobCardNumber: r.jobCardNumber, totalHours: 0, count: 0, stillWaiting: false };
+      const end = r.resumedAt ? new Date(r.resumedAt).getTime() : now.getTime();
+      const hours = (end - new Date(r.pausedAt).getTime()) / 3_600_000;
+      if (Number.isFinite(hours) && hours > 0) {
+        a.totalHours += hours;
+      }
+      a.count += 1;
+      if (!r.resumedAt) a.stillWaiting = true;
+      agg.set(r.jobCardId, a);
+    }
+
+    const rows: TimeWaitingOnPartsRow[] = [...agg.entries()]
+      .map(([jobCardId, a]) => ({
+        jobCardId,
+        jobCardNumber: a.jobCardNumber,
+        totalHoursWaiting: this.round(a.totalHours),
+        pauseCount: a.count,
+        stillWaiting: a.stillWaiting,
+      }))
+      .sort((a, b) => b.totalHoursWaiting - a.totalHoursWaiting);
+
+    return {
+      asOf: now,
+      periodStart: periodStart ?? null,
+      periodEnd: periodEnd ?? null,
+      totalHoursWaiting: this.round(rows.reduce((sum, r) => sum + r.totalHoursWaiting, 0)),
+      rows,
     };
   }
 

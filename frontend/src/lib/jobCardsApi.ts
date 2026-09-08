@@ -13,6 +13,8 @@ import type {
   CancelJobCardInput,
   CreateJobCardInput,
   JobCard,
+  JobCardTaskPause,
+  PauseTaskInput,
   QcRejectInput,
   ValidateSnInput,
   WarrantyOverrideInput,
@@ -53,3 +55,14 @@ export const qcApprove = (id: string) => api.post<JobCard>(`${BASE}/${id}/qc/app
 // grant gate as approve.
 export const qcReject = (id: string, data: QcRejectInput) =>
   api.post<JobCard>(`${BASE}/${id}/qc/reject`, data).then((r) => r.data);
+
+// Task-timer pause/resume (SLA-safe pausing). Gated server-side to the assigned technician
+// (workshop or field) or a JOB_CARD_ROLES office role - see JobCardsService.pauseTask.
+export const pauseTask = (id: string, data: PauseTaskInput) =>
+  api.post<JobCardTaskPause>(`${BASE}/${id}/pause`, data).then((r) => r.data);
+
+export const resumeTask = (id: string) =>
+  api.post<JobCardTaskPause>(`${BASE}/${id}/resume`).then((r) => r.data);
+
+export const getTaskPauses = (id: string) =>
+  api.get<JobCardTaskPause[]>(`${BASE}/${id}/pauses`).then((r) => r.data);

@@ -14,10 +14,20 @@ import {
   cancelJobCard,
   createJobCard,
   getJobCardByAppointment,
+  getTaskPauses,
+  pauseTask,
+  resumeTask,
   validateSn,
   warrantyOverride,
 } from '../../lib/jobCardsApi';
-import type { JobCard, JobCardSectionValue, JobCardLaneValue, JobCardStatusValue } from '../../lib/jobCardsTypes';
+import type {
+  JobCard,
+  JobCardSectionValue,
+  JobCardLaneValue,
+  JobCardStatusValue,
+  TaskPauseReasonValue,
+} from '../../lib/jobCardsTypes';
+import { TASK_PAUSE_REASONS } from '../../lib/jobCardsTypes';
 
 // Same "one Technical Team Leader (or above)" list as the backend's WARRANTY_OVERRIDE_ROLES
 // in job-cards.controller.ts - shown here so the button only appears for someone who could
@@ -37,6 +47,20 @@ const WORKSHOP_LINKED_STATUSES: JobCard['status'][] = [
   'SPARE_PENDING',
   'READY_FOR_QC',
 ];
+
+// Task timer pause/resume (SLA-safe pausing). Mirrors PAUSABLE_STATUSES in the backend's
+// job-cards.service.ts exactly - SECTION_ASSIGNED covers the only "work under way" status
+// an on-site job ever reaches (it has no separate IN_PROGRESS at all), alongside the
+// workshop sub-machine's own three statuses.
+const PAUSABLE_STATUSES: JobCardStatusValue[] = ['SECTION_ASSIGNED', 'WORKSHOP_ASSIGNED', 'IN_PROGRESS', 'SPARE_PENDING'];
+
+const TASK_PAUSE_REASON_LABELS: Record<TaskPauseReasonValue, string> = {
+  MATERIAL_SHORTAGE: 'Material shortage (SLA-exempt)',
+  AWAITING_CUSTOMER_APPROVAL: 'Awaiting customer approval',
+  CUSTOMER_UNAVAILABLE: 'Customer unavailable',
+  BREAK: 'Break',
+  OTHER: 'Other',
+};
 
 // Lane badge - see backend job-card-progress.util.ts for the derivation this mirrors.
 // Purely a display label; nothing here gates any action.
@@ -416,6 +440,8 @@ function JobCardDetail({
         </p>
       )}
 
+      <TaskPauseCard jobCard={jobCard} />
+
       {canValidateSn && (
         <ActionCard title="Step 1 · Validate serial number against the physical invoice">
           <ErrorNotice error={validateSnMutation.error} />
@@ -479,6 +505,114 @@ function JobCardDetail({
 
       {canCancel && <CancelCard mutation={cancelMutation} />}
     </div>
+  );
+}
+
+// Task timer pause/resume. "Currently paused" is never a stored flag - it's derived
+// client-side by finding the pause row (if any) with resumedAt === null, mirroring how
+// the backend itself derives it (JobCardsService's "computed, never stored" pattern).
+// Returns null (renders nothing) once the job's status is past every pausable status AND
+// it never had any pause history worth showing - most jobs never touch this feature.
+function TaskPauseCard({ jobCard }: { jobCard: JobCard }) {
+  const queryClient = useQueryClient();
+  const pausesQueryKey = ['job-card', jobCard.id, 'pauses'];
+  const pausesQuery = useQuery({
+    queryKey: pausesQueryKey,
+    queryFn: () => getTaskPauses(jobCard.id),
+  });
+  const invalidatePauses = () => queryClient.invalidateQueries({ queryKey: pausesQueryKey });
+
+  const pauseMutation = useMutation({
+    mutationFn: (input: { reason: TaskPauseReasonValue; notes: string }) =>
+      pauseTask(jobCard.id, { reason: input.reason, notes: input.notes || undefined }),
+    onSuccess: invalidatePauses,
+  });
+  const resumeMutation = useMutation({
+    mutationFn: () => resumeTask(jobCard.id),
+    onSuccess: invalidatePauses,
+  });
+
+  const { register, handleSubmit, reset } = useForm<{ reason: TaskPauseReasonValue; notes: string }>({
+    defaultValues: { reason: 'MATERIAL_SHORTAGE', notes: '' },
+  });
+
+  const pauses = pausesQuery.data ?? [];
+  const openPause = pauses.find((p) => p.resumedAt === null);
+  const isPausableStatus = PAUSABLE_STATUSES.includes(jobCard.status);
+  const canPause = isPausableStatus && !openPause;
+  const canResume = !!openPause;
+
+  if (!isPausableStatus && pauses.length === 0) {
+    return null;
+  }
+
+  return (
+    <ActionCard title="Task timer">
+      {openPause && (
+        <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <span className="font-medium">Paused</span> — {TASK_PAUSE_REASON_LABELS[openPause.reason]}
+          {openPause.autoCreated && ' (opened automatically - a spare part request came back short of stock)'}
+          {openPause.notes && ` — "${openPause.notes}"`}
+          <span className="ml-1 text-amber-600">since {new Date(openPause.pausedAt).toLocaleString()}</span>
+        </div>
+      )}
+
+      <ErrorNotice error={pauseMutation.error ?? resumeMutation.error} />
+
+      {canResume && (
+        <button
+          onClick={() => resumeMutation.mutate()}
+          disabled={resumeMutation.isPending}
+          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          Resume
+        </button>
+      )}
+
+      {canPause && (
+        <form
+          onSubmit={handleSubmit((values) => {
+            pauseMutation.mutate(values, { onSuccess: () => reset({ reason: 'MATERIAL_SHORTAGE', notes: '' }) });
+          })}
+          className="space-y-2"
+        >
+          <Field label="Pause reason">
+            <select className={inputClass} {...register('reason')}>
+              {TASK_PAUSE_REASONS.map((reason) => (
+                <option key={reason} value={reason}>
+                  {TASK_PAUSE_REASON_LABELS[reason]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Notes (optional)">
+            <input className={inputClass} {...register('notes')} placeholder="e.g. which part, or why the customer is unavailable" />
+          </Field>
+          <button
+            type="submit"
+            disabled={pauseMutation.isPending}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Pause
+          </button>
+        </form>
+      )}
+
+      {pauses.length > 0 && (
+        <details className="mt-3 text-xs text-slate-500">
+          <summary className="cursor-pointer font-medium text-slate-600">Pause history ({pauses.length})</summary>
+          <ul className="mt-2 space-y-1">
+            {pauses.map((p) => (
+              <li key={p.id}>
+                {TASK_PAUSE_REASON_LABELS[p.reason]}
+                {p.autoCreated ? ' (auto)' : ''} — {new Date(p.pausedAt).toLocaleString()}
+                {p.resumedAt ? ` → ${new Date(p.resumedAt).toLocaleString()}` : ' (still open)'}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </ActionCard>
   );
 }
 

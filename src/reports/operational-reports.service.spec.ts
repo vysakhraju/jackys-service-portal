@@ -1,5 +1,6 @@
 import { OperationalReportsService } from './operational-reports.service';
 import { ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
+import { TaskPauseReason } from '../job-cards/entities/job-card-task-pause.entity';
 
 function makeQb(result: any = []) {
   const qb: any = {};
@@ -19,6 +20,7 @@ describe('OperationalReportsService', () => {
   let reservationRepo: any;
   let sparePartRepo: any;
   let faultSymptomRepo: any;
+  let taskPauseRepo: any;
 
   beforeEach(() => {
     jobCardRepo = { createQueryBuilder: jest.fn(() => makeQb([])) };
@@ -28,6 +30,7 @@ describe('OperationalReportsService', () => {
     reservationRepo = { createQueryBuilder: jest.fn(() => makeQb([])) };
     sparePartRepo = { find: jest.fn().mockResolvedValue([]) };
     faultSymptomRepo = { find: jest.fn().mockResolvedValue([]) };
+    taskPauseRepo = { find: jest.fn().mockResolvedValue([]), createQueryBuilder: jest.fn(() => makeQb([])) };
 
     service = new OperationalReportsService(
       jobCardRepo,
@@ -37,6 +40,7 @@ describe('OperationalReportsService', () => {
       reservationRepo,
       sparePartRepo,
       faultSymptomRepo,
+      taskPauseRepo,
     );
   });
 
@@ -225,6 +229,169 @@ describe('OperationalReportsService', () => {
       const report = await service.getSlaBreach(8);
       expect(report.thresholdHours).toBe(8);
       expect(report.breachedCount).toBe(1);
+    });
+
+    it('materialShortageHoursExcluded is 0 for a job with no MATERIAL_SHORTAGE pauses', async () => {
+      const createdAt = new Date('2026-08-01T00:00:00.000Z');
+      const qcApprovedAt = new Date(createdAt.getTime() + 50 * 3_600_000);
+      jobCardRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([jc(createdAt, qcApprovedAt)]),
+      }));
+      taskPauseRepo.find.mockResolvedValue([]);
+
+      const report = await service.getSlaBreach();
+      expect(report.items[0].materialShortageHoursExcluded).toBe(0);
+      expect(report.items[0].hoursElapsed).toBe(50);
+    });
+
+    it('excludes MATERIAL_SHORTAGE paused hours from hoursElapsed while still breaching', async () => {
+      const createdAt = new Date('2026-08-01T00:00:00.000Z');
+      const qcApprovedAt = new Date(createdAt.getTime() + 65 * 3_600_000); // 65h elapsed
+      jobCardRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([jc(createdAt, qcApprovedAt)]),
+      }));
+      // 10 of those 65 hours were spent waiting on a spare part, resumed well before qcApprovedAt.
+      taskPauseRepo.find.mockResolvedValue([
+        {
+          jobCardId: 'jc-1',
+          pausedAt: new Date(createdAt.getTime() + 5 * 3_600_000),
+          resumedAt: new Date(createdAt.getTime() + 15 * 3_600_000),
+        },
+      ]);
+
+      const report = await service.getSlaBreach();
+      expect(report.items[0].materialShortageHoursExcluded).toBe(10);
+      expect(report.items[0].hoursElapsed).toBe(55); // 65 - 10, still over the 48h threshold
+      expect(report.breachedCount).toBe(1);
+    });
+
+    it('pulls a job back under the threshold entirely once its MATERIAL_SHORTAGE time is excluded', async () => {
+      const createdAt = new Date('2026-08-01T00:00:00.000Z');
+      const qcApprovedAt = new Date(createdAt.getTime() + 50 * 3_600_000); // 50h elapsed, breaches default 48h on its own
+      jobCardRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([jc(createdAt, qcApprovedAt)]),
+      }));
+      taskPauseRepo.find.mockResolvedValue([
+        {
+          jobCardId: 'jc-1',
+          pausedAt: new Date(createdAt.getTime() + 5 * 3_600_000),
+          resumedAt: new Date(createdAt.getTime() + 15 * 3_600_000), // 10h excluded -> 40h net
+        },
+      ]);
+
+      const report = await service.getSlaBreach();
+      expect(report.breachedCount).toBe(0); // 40 <= 48, no longer a breach
+      expect(report.items).toHaveLength(0);
+    });
+
+    it('sums multiple MATERIAL_SHORTAGE pauses on the same job', async () => {
+      const createdAt = new Date('2026-08-01T00:00:00.000Z');
+      const qcApprovedAt = new Date(createdAt.getTime() + 70 * 3_600_000); // 70h elapsed
+      jobCardRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([jc(createdAt, qcApprovedAt)]),
+      }));
+      taskPauseRepo.find.mockResolvedValue([
+        { jobCardId: 'jc-1', pausedAt: new Date(createdAt.getTime() + 1 * 3_600_000), resumedAt: new Date(createdAt.getTime() + 6 * 3_600_000) }, // 5h
+        { jobCardId: 'jc-1', pausedAt: new Date(createdAt.getTime() + 20 * 3_600_000), resumedAt: new Date(createdAt.getTime() + 27 * 3_600_000) }, // 7h
+      ]);
+
+      const report = await service.getSlaBreach();
+      // 70h elapsed, 12h excluded -> 58h net, still over the default 48h threshold.
+      expect(report.items[0].materialShortageHoursExcluded).toBe(12);
+      expect(report.items[0].hoursElapsed).toBe(58);
+    });
+
+    it('caps an unresumed (still-open) MATERIAL_SHORTAGE pause at qcApprovedAt, not the current time', async () => {
+      const createdAt = new Date('2026-08-01T00:00:00.000Z');
+      const qcApprovedAt = new Date(createdAt.getTime() + 60 * 3_600_000);
+      jobCardRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([jc(createdAt, qcApprovedAt)]),
+      }));
+      // A technician forgot to resume this pause before completing the job - it's still
+      // open at report time (long after qcApprovedAt), but must be capped there.
+      taskPauseRepo.find.mockResolvedValue([
+        { jobCardId: 'jc-1', pausedAt: new Date(createdAt.getTime() + 10 * 3_600_000), resumedAt: null },
+      ]);
+
+      // Use a low custom threshold (5h) so the still-breaching 10h net elapsed shows up in
+      // items - the point under test is the exclusion cap, not the breach boundary itself.
+      const report = await service.getSlaBreach(5);
+      // Excluded = qcApprovedAt (60h mark) - pausedAt (10h mark) = 50h, never more than that.
+      expect(report.items[0].materialShortageHoursExcluded).toBe(50);
+      expect(report.items[0].hoursElapsed).toBe(10);
+    });
+  });
+
+  describe('getTimeWaitingOnParts', () => {
+    it('sums MATERIAL_SHORTAGE pause hours per job, using "now" for a still-open pause', async () => {
+      const now = new Date();
+      const pausedAt = new Date(now.getTime() - 5 * 3_600_000);
+      taskPauseRepo.createQueryBuilder = jest.fn(() =>
+        makeQb([{ jobCardId: 'jc-1', jobCardNumber: 'JC-0001', pausedAt, resumedAt: null }]),
+      );
+
+      const report = await service.getTimeWaitingOnParts();
+
+      expect(report.rows).toHaveLength(1);
+      expect(report.rows[0].jobCardId).toBe('jc-1');
+      expect(report.rows[0].totalHoursWaiting).toBeCloseTo(5, 1);
+      expect(report.rows[0].stillWaiting).toBe(true);
+      expect(report.rows[0].pauseCount).toBe(1);
+    });
+
+    it('aggregates multiple pauses on the same job and marks stillWaiting false once every pause is resumed', async () => {
+      const base = new Date('2026-08-01T00:00:00.000Z');
+      taskPauseRepo.createQueryBuilder = jest.fn(() =>
+        makeQb([
+          { jobCardId: 'jc-1', jobCardNumber: 'JC-0001', pausedAt: base, resumedAt: new Date(base.getTime() + 3 * 3_600_000) },
+          {
+            jobCardId: 'jc-1',
+            jobCardNumber: 'JC-0001',
+            pausedAt: new Date(base.getTime() + 10 * 3_600_000),
+            resumedAt: new Date(base.getTime() + 14 * 3_600_000),
+          },
+        ]),
+      );
+
+      const report = await service.getTimeWaitingOnParts();
+
+      expect(report.rows[0].totalHoursWaiting).toBe(7);
+      expect(report.rows[0].pauseCount).toBe(2);
+      expect(report.rows[0].stillWaiting).toBe(false);
+      expect(report.totalHoursWaiting).toBe(7);
+    });
+
+    it('only queries MATERIAL_SHORTAGE-reason pauses', async () => {
+      const qb = makeQb([]);
+      taskPauseRepo.createQueryBuilder = jest.fn(() => qb);
+
+      await service.getTimeWaitingOnParts();
+
+      expect(qb.where).toHaveBeenCalledWith('"p"."reason" = :reason', { reason: TaskPauseReason.MATERIAL_SHORTAGE });
+    });
+
+    it('applies periodStart/periodEnd filters against pausedAt', async () => {
+      const qb = makeQb([]);
+      taskPauseRepo.createQueryBuilder = jest.fn(() => qb);
+
+      await service.getTimeWaitingOnParts('2026-08-01', '2026-08-31');
+
+      expect(qb.andWhere).toHaveBeenCalledWith('"p"."pausedAt" >= :periodStart', { periodStart: '2026-08-01' });
+      expect(qb.andWhere).toHaveBeenCalledWith('"p"."pausedAt" <= :periodEnd', { periodEnd: '2026-08-31 23:59:59.999' });
+    });
+
+    it('returns an empty report when nothing is waiting on parts', async () => {
+      taskPauseRepo.createQueryBuilder = jest.fn(() => makeQb([]));
+
+      const report = await service.getTimeWaitingOnParts();
+
+      expect(report.rows).toHaveLength(0);
+      expect(report.totalHoursWaiting).toBe(0);
     });
   });
 

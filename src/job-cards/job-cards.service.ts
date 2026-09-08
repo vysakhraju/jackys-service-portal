@@ -1,8 +1,9 @@
 import { randomBytes } from 'crypto';
-import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.entity';
+import { JobCardTaskPause, TaskPauseReason } from './entities/job-card-task-pause.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { getJobCardProgressFields, JobCardProgressFields } from './job-card-progress.util';
 import { AppointmentsService } from '../appointments/appointments.service';
@@ -12,12 +13,28 @@ import { ValidateSnDto } from './dto/validate-sn.dto';
 import { AssignSectionDto } from './dto/assign-section.dto';
 import { WarrantyOverrideDto } from './dto/warranty-override.dto';
 import { ApproveCustomerDto } from './dto/approve-customer.dto';
+import { PauseTaskDto } from './dto/pause-task.dto';
+
+// Statuses a task timer can be manually paused from. Deliberately includes
+// SECTION_ASSIGNED (the only "work under way" status an ON_SITE_REPAIR job ever reaches -
+// see the JobCardStatus enum's doc comment: on-site repair has no separate IN_PROGRESS at
+// all, it skips straight to READY_FOR_QC) alongside the WORKSHOP sub-machine's own three
+// statuses. Not READY_FOR_QC/QC_PASSED/DELIVERED/etc - work there is already done or the
+// job hasn't started yet.
+const PAUSABLE_STATUSES: ReadonlySet<JobCardStatus> = new Set([
+  JobCardStatus.SECTION_ASSIGNED,
+  JobCardStatus.WORKSHOP_ASSIGNED,
+  JobCardStatus.IN_PROGRESS,
+  JobCardStatus.SPARE_PENDING,
+]);
 
 @Injectable()
 export class JobCardsService {
   constructor(
     @InjectRepository(JobCard)
     private jobCardRepository: Repository<JobCard>,
+    @InjectRepository(JobCardTaskPause)
+    private taskPauseRepository: Repository<JobCardTaskPause>,
     private appointmentsService: AppointmentsService,
     private technicianService: TechnicianService,
   ) {}
@@ -355,7 +372,13 @@ export class JobCardsService {
     return this.jobCardRepository.save(jobCard);
   }
 
-  /** Called by WorkshopService when a spare request comes back short of stock. */
+  /**
+   * Called by WorkshopService when a spare request comes back short of stock. Also
+   * auto-opens a MATERIAL_SHORTAGE task pause (unless one is already open, from either an
+   * earlier auto-open or an unrelated manual pause - never stack a second concurrent
+   * pause, see pauseTask()'s own "one open pause at a time" invariant) so the SLA Breach
+   * report can finally exclude genuine wait-on-parts time.
+   */
   async setSparePending(id: string): Promise<JobCard> {
     const jobCard = await this.findEntityById(id);
 
@@ -363,11 +386,24 @@ export class JobCardsService {
       throw new BadRequestException(`Cannot mark SPARE_PENDING from status ${jobCard.status} (expected IN_PROGRESS).`);
     }
 
+    const wasAlreadyPending = jobCard.status === JobCardStatus.SPARE_PENDING;
     jobCard.status = JobCardStatus.SPARE_PENDING;
-    return this.jobCardRepository.save(jobCard);
+    const saved = await this.jobCardRepository.save(jobCard);
+
+    if (!wasAlreadyPending) {
+      await this.autoOpenMaterialShortagePause(id);
+    }
+    return saved;
   }
 
-  /** Called by WorkshopService when a top-up request on a SPARE_PENDING job fully fills. */
+  /**
+   * Called by WorkshopService when a top-up request on a SPARE_PENDING job fully fills.
+   * Mirrors setSparePending() above by auto-closing a system-opened MATERIAL_SHORTAGE
+   * pause. Deliberately only closes an autoCreated one - a technician's own manual
+   * MATERIAL_SHORTAGE pause (e.g. logged before a formal Need Spare request even existed)
+   * is left for them to resume explicitly, so this never silently ends a pause the system
+   * didn't itself open.
+   */
   async resumeFromSparePending(id: string): Promise<JobCard> {
     const jobCard = await this.findEntityById(id);
 
@@ -376,7 +412,108 @@ export class JobCardsService {
     }
 
     jobCard.status = JobCardStatus.IN_PROGRESS;
-    return this.jobCardRepository.save(jobCard);
+    const saved = await this.jobCardRepository.save(jobCard);
+    await this.autoCloseMaterialShortagePause(id);
+    return saved;
+  }
+
+  private async autoOpenMaterialShortagePause(jobCardId: string): Promise<void> {
+    const open = await this.taskPauseRepository.findOne({ where: { jobCardId, resumedAt: IsNull() } });
+    if (open) {
+      return;
+    }
+    const pause = this.taskPauseRepository.create({
+      jobCardId,
+      reason: TaskPauseReason.MATERIAL_SHORTAGE,
+      notes: null,
+      pausedByUserId: null,
+      autoCreated: true,
+    });
+    await this.taskPauseRepository.save(pause);
+  }
+
+  private async autoCloseMaterialShortagePause(jobCardId: string): Promise<void> {
+    const open = await this.taskPauseRepository.findOne({
+      where: { jobCardId, resumedAt: IsNull(), reason: TaskPauseReason.MATERIAL_SHORTAGE, autoCreated: true },
+    });
+    if (!open) {
+      return;
+    }
+    open.resumedAt = new Date();
+    await this.taskPauseRepository.save(open);
+  }
+
+  // --- Task timer pause/resume (SLA-safe pausing) ------------------------------------
+  // Ownership mirrors WorkshopService.assertOwnership(), extended to also allow the
+  // appointment's assigned field technician - on-site repair jobs never get an
+  // assignedWorkshopTechnicianId at all (see the JobCardStatus enum's doc comment), so
+  // without this, an on-site job's own technician could never pause their own task.
+
+  private async assertTaskPauseOwnership(jobCard: JobCard, callerId: string, isPrivilegedRole: boolean): Promise<void> {
+    if (isPrivilegedRole) {
+      return;
+    }
+    if (jobCard.assignedWorkshopTechnicianId === callerId) {
+      return;
+    }
+    const appointment = await this.appointmentsService.findById(jobCard.appointmentId);
+    if (appointment.technicianId === callerId) {
+      return;
+    }
+    throw new ForbiddenException('You are not the technician assigned to this Job Card.');
+  }
+
+  /**
+   * Manual pause. Blocked while another pause is already open on this job (409) - "one
+   * open pause at a time" is a hard invariant, whether the existing one is manual or
+   * system-auto-opened (see autoOpenMaterialShortagePause above).
+   */
+  async pauseTask(jobCardId: string, dto: PauseTaskDto, callerId: string, isPrivilegedRole: boolean): Promise<JobCardTaskPause> {
+    const jobCard = await this.findEntityById(jobCardId);
+    await this.assertTaskPauseOwnership(jobCard, callerId, isPrivilegedRole);
+
+    if (!PAUSABLE_STATUSES.has(jobCard.status)) {
+      throw new BadRequestException(
+        `Cannot pause: Job Card is ${jobCard.status} (expected SECTION_ASSIGNED, WORKSHOP_ASSIGNED, IN_PROGRESS, or SPARE_PENDING).`,
+      );
+    }
+
+    const open = await this.taskPauseRepository.findOne({ where: { jobCardId, resumedAt: IsNull() } });
+    if (open) {
+      throw new ConflictException(
+        `This Job Card already has an open pause (reason ${open.reason}, started ${open.pausedAt.toISOString()}) - resume it first.`,
+      );
+    }
+
+    const pause = this.taskPauseRepository.create({
+      jobCardId,
+      reason: dto.reason,
+      notes: dto.notes ?? null,
+      pausedByUserId: callerId,
+      autoCreated: false,
+    });
+    return this.taskPauseRepository.save(pause);
+  }
+
+  /** Manual resume of whatever pause is currently open (manual or system-auto-opened). */
+  async resumeTask(jobCardId: string, callerId: string, isPrivilegedRole: boolean): Promise<JobCardTaskPause> {
+    const jobCard = await this.findEntityById(jobCardId);
+    await this.assertTaskPauseOwnership(jobCard, callerId, isPrivilegedRole);
+
+    const open = await this.taskPauseRepository.findOne({ where: { jobCardId, resumedAt: IsNull() } });
+    if (!open) {
+      throw new ConflictException('This Job Card has no open pause to resume.');
+    }
+
+    open.resumedAt = new Date();
+    open.resumedByUserId = callerId;
+    return this.taskPauseRepository.save(open);
+  }
+
+  /** Full pause history for a job, oldest first. No ownership gate - same as every other GET. */
+  async getTaskPauses(jobCardId: string): Promise<JobCardTaskPause[]> {
+    await this.findEntityById(jobCardId); // 404 if the Job Card itself doesn't exist
+    return this.taskPauseRepository.find({ where: { jobCardId }, order: { pausedAt: 'ASC' } });
   }
 
   async completeWorkshop(id: string): Promise<JobCard> {

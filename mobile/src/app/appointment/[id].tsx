@@ -17,11 +17,15 @@ import {
   captureSerialNumber,
   completeVisit,
   getOwnJobCard,
+  getTaskPauses,
   getVisit,
+  pauseTask,
   requestNeedSpare,
+  resumeTask,
   startVisit,
 } from '../../lib/technicianApi';
-import type { FaultSymptom, ScheduledAppointment, SparePart } from '../../lib/types';
+import { TASK_PAUSE_REASONS } from '../../lib/types';
+import type { FaultSymptom, ScheduledAppointment, SparePart, TaskPauseReasonValue } from '../../lib/types';
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -35,6 +39,16 @@ function formatDateTime(iso: string): string {
 const STARTABLE_STATUSES = new Set(['SCHEDULED', 'CONFIRMED', 'TECHNICIAN_ASSIGNED']);
 
 const WARRANTY_LABELS: Record<string, string> = { IW: 'In Warranty', OOW: 'Out of Warranty' };
+
+// Task timer pause/resume - short labels for the mobile chip row. Mirrors the backend's
+// TaskPauseReason enum and the web app's own label set (jobCardsTypes.ts).
+const TASK_PAUSE_REASON_LABELS: Record<TaskPauseReasonValue, string> = {
+  MATERIAL_SHORTAGE: 'Material shortage',
+  AWAITING_CUSTOMER_APPROVAL: 'Awaiting approval',
+  CUSTOMER_UNAVAILABLE: 'Customer unavailable',
+  BREAK: 'Break',
+  OTHER: 'Other',
+};
 
 function extractErrorMessage(err: unknown, fallback: string): string {
   if (isAxiosError(err)) {
@@ -307,6 +321,42 @@ export default function AppointmentDetailScreen() {
     }
     completeMutation.mutate();
   }
+
+  // --- Task timer pause/resume (SLA-safe pausing) ---
+  // Only reachable while the on-site job is actually being worked (jobCardReady below) -
+  // this app never shows a workshop job's own pause state (its auto-opened
+  // MATERIAL_SHORTAGE pause from a Need Spare shortfall is a Workshop-screen concern).
+  // Deliberately not offline-queueable like the mutations above - pause/resume timing is
+  // the whole point of this feature, so a queued-and-replayed-later pause would record the
+  // wrong timestamp; this requires connectivity like getVisit/getOwnJobCard's polling does.
+  const [selectedPauseReason, setSelectedPauseReason] = useState<TaskPauseReasonValue | null>(null);
+  const [pauseNotesInput, setPauseNotesInput] = useState('');
+
+  const {
+    data: taskPauses,
+  } = useQuery({
+    queryKey: ['job-card-pauses', jobCard?.id],
+    queryFn: () => getTaskPauses(jobCard!.id),
+    enabled: Boolean(jobCard?.id) && jobCardReady,
+  });
+  const openPause = taskPauses?.find((p) => p.resumedAt === null) ?? null;
+
+  function invalidateTaskPauses() {
+    queryClient.invalidateQueries({ queryKey: ['job-card-pauses', jobCard?.id] });
+  }
+
+  const pauseMutation = useMutation({
+    mutationFn: () => pauseTask(jobCard!.id, { reason: selectedPauseReason!, notes: pauseNotesInput.trim() || undefined }),
+    onSuccess: () => {
+      invalidateTaskPauses();
+      setSelectedPauseReason(null);
+      setPauseNotesInput('');
+    },
+  });
+  const resumeMutation = useMutation({
+    mutationFn: () => resumeTask(jobCard!.id),
+    onSuccess: invalidateTaskPauses,
+  });
 
   if (!appointment) {
     return (
@@ -605,6 +655,86 @@ export default function AppointmentDetailScreen() {
                   </Text>
                 )}
 
+                {/* Task timer pause/resume */}
+                <View style={styles.taskPauseBox} testID="task-pause-section">
+                  {openPause ? (
+                    <View>
+                      <Text style={styles.pausedText} testID="task-pause-active">
+                        Paused - {TASK_PAUSE_REASON_LABELS[openPause.reason]}
+                        {openPause.notes ? ` — "${openPause.notes}"` : ''}
+                      </Text>
+                      {resumeMutation.isError && (
+                        <Text style={styles.errorBoxText} testID="task-resume-error">
+                          {extractErrorMessage(resumeMutation.error, 'Could not resume. Try again.')}
+                        </Text>
+                      )}
+                      <Pressable
+                        style={[styles.secondaryButton, resumeMutation.isPending && styles.buttonDisabled]}
+                        onPress={() => resumeMutation.mutate()}
+                        disabled={resumeMutation.isPending}
+                        testID="resume-task-button"
+                      >
+                        {resumeMutation.isPending ? (
+                          <ActivityIndicator />
+                        ) : (
+                          <Text style={styles.secondaryButtonText}>Resume</Text>
+                        )}
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <View>
+                      <Text style={styles.taskPauseLabel}>Pause the task timer</Text>
+                      {pauseMutation.isError && (
+                        <Text style={styles.errorBoxText} testID="task-pause-error">
+                          {extractErrorMessage(pauseMutation.error, 'Could not pause. Try again.')}
+                        </Text>
+                      )}
+                      <View style={styles.reasonRow}>
+                        {TASK_PAUSE_REASONS.map((reason) => (
+                          <Pressable
+                            key={reason}
+                            style={[styles.reasonChip, selectedPauseReason === reason && styles.reasonChipSelected]}
+                            onPress={() => setSelectedPauseReason(reason)}
+                            testID={`pause-reason-${reason}`}
+                          >
+                            <Text
+                              style={[
+                                styles.reasonChipText,
+                                selectedPauseReason === reason && styles.reasonChipTextSelected,
+                              ]}
+                            >
+                              {TASK_PAUSE_REASON_LABELS[reason]}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                      {selectedPauseReason && (
+                        <>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Notes (optional)"
+                            value={pauseNotesInput}
+                            onChangeText={setPauseNotesInput}
+                            testID="pause-notes-input"
+                          />
+                          <Pressable
+                            style={[styles.secondaryButton, pauseMutation.isPending && styles.buttonDisabled]}
+                            onPress={() => pauseMutation.mutate()}
+                            disabled={pauseMutation.isPending}
+                            testID="pause-task-button"
+                          >
+                            {pauseMutation.isPending ? (
+                              <ActivityIndicator />
+                            ) : (
+                              <Text style={styles.secondaryButtonText}>Pause</Text>
+                            )}
+                          </Pressable>
+                        </>
+                      )}
+                    </View>
+                  )}
+                </View>
+
                 {/* Need Spare */}
                 {queuedNeedSpare ? (
                   <Text style={styles.meta} testID="need-spare-queued">
@@ -808,4 +938,26 @@ const styles = StyleSheet.create({
   capturedValue: { fontSize: 15, fontWeight: '600', color: '#0f172a' },
   completeSectionSpacing: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
   nextStepText: { fontSize: 13, color: '#475569', marginBottom: 10 },
+  taskPauseBox: {
+    backgroundColor: '#fffbeb',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    padding: 10,
+    marginBottom: 12,
+  },
+  taskPauseLabel: { fontSize: 12, fontWeight: '600', color: '#92400e', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 },
+  pausedText: { fontSize: 14, fontWeight: '600', color: '#92400e', marginBottom: 8 },
+  reasonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
+  reasonChip: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#ffffff',
+  },
+  reasonChipSelected: { backgroundColor: '#0f172a', borderColor: '#0f172a' },
+  reasonChipText: { fontSize: 12, fontWeight: '500', color: '#334155' },
+  reasonChipTextSelected: { color: '#ffffff' },
 });

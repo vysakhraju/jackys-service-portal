@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards, UseInterceptors, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards, UseInterceptors, ParseUUIDPipe, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { JobCardsService } from './job-cards.service';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
@@ -8,6 +8,7 @@ import { WarrantyOverrideDto } from './dto/warranty-override.dto';
 import { ApproveCustomerDto } from './dto/approve-customer.dto';
 import { CancelJobCardDto } from './dto/cancel-job-card.dto';
 import { QcRejectDto } from './dto/qc-reject.dto';
+import { PauseTaskDto } from './dto/pause-task.dto';
 import { JobCard } from './entities/job-card.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -36,6 +37,12 @@ const WARRANTY_OVERRIDE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_
 // below, which is what makes this "each and every activity ... assigned to role based if
 // needed" per the user's own requirement.
 const QC_GATE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE', 'QC_OFFICER'];
+// Task-timer pause/resume: office roles plus whichever technician is actually doing the
+// work (field or workshop) - ownership is then enforced inside the service itself
+// (assertTaskPauseOwnership), same "@Roles is only the floor" pattern as
+// WorkshopController's ACTION_ROLES/PRIVILEGED_ROLES.
+const TASK_PAUSE_ROLES = [...JOB_CARD_ROLES, 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP'];
+const TASK_PAUSE_PRIVILEGED_ROLES = JOB_CARD_ROLES;
 
 @ApiTags('job-cards')
 @Controller('job-cards')
@@ -203,6 +210,55 @@ export class JobCardsController {
   async qcRejectJobCard(@Param('id', ParseUUIDPipe) id: string, @Body() dto: QcRejectDto, @CurrentUser() user: User) {
     await this.permissionsService.requireActiveGrant(user.id, PermissionType.QC_APPROVAL);
     return this.jobCardsService.qcReject(id, dto.reason);
+  }
+
+  // --- Task timer pause/resume (SLA-safe pausing) -------------------------------------
+
+  @Post(':id/pause')
+  @Roles(...TASK_PAUSE_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params?.id,
+    getNewValues: (result) => ({ reason: result?.reason, pausedAt: result?.pausedAt }),
+  })
+  @ApiOperation({ summary: 'Pause the task timer with a reason - MATERIAL_SHORTAGE is SLA-exempt, every other reason is tracked but still counts against SLA' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 201 })
+  @ApiResponse({ status: 400, description: 'Job Card is not in a pausable status' })
+  @ApiResponse({ status: 403, description: 'Caller is not the technician assigned to this Job Card' })
+  @ApiResponse({ status: 409, description: 'A pause is already open on this Job Card' })
+  async pauseTask(@Param('id', ParseUUIDPipe) id: string, @Body() dto: PauseTaskDto, @CurrentUser() user: User, @Request() req: any) {
+    const isPrivileged = TASK_PAUSE_PRIVILEGED_ROLES.includes(req.user.role?.name);
+    return this.jobCardsService.pauseTask(id, dto, user.id, isPrivileged);
+  }
+
+  @Post(':id/resume')
+  @Roles(...TASK_PAUSE_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params?.id,
+    getNewValues: (result) => ({ resumedAt: result?.resumedAt }),
+  })
+  @ApiOperation({ summary: 'Resume the task timer, closing whichever pause is currently open' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 201 })
+  @ApiResponse({ status: 403, description: 'Caller is not the technician assigned to this Job Card' })
+  @ApiResponse({ status: 409, description: 'No pause is currently open on this Job Card' })
+  async resumeTask(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User, @Request() req: any) {
+    const isPrivileged = TASK_PAUSE_PRIVILEGED_ROLES.includes(req.user.role?.name);
+    return this.jobCardsService.resumeTask(id, user.id, isPrivileged);
+  }
+
+  @Get(':id/pauses')
+  @ApiOperation({ summary: 'Full pause history for a Job Card, oldest first' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  async getTaskPauses(@Param('id', ParseUUIDPipe) id: string) {
+    return this.jobCardsService.getTaskPauses(id);
   }
 
   @Get(':id')

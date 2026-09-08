@@ -109,6 +109,40 @@ export interface QcRejectInput {
   reason: string;
 }
 
+// Task-timer pause/resume (SLA-safe pausing). Mirrors the backend's TaskPauseReason enum
+// (src/job-cards/entities/job-card-task-pause.entity.ts) - MATERIAL_SHORTAGE is the only
+// reason excluded from the SLA Breach report's elapsed-hours calculation; every other
+// reason is still tracked (this list) but still counts against SLA.
+export const TASK_PAUSE_REASONS = [
+  'MATERIAL_SHORTAGE',
+  'AWAITING_CUSTOMER_APPROVAL',
+  'CUSTOMER_UNAVAILABLE',
+  'BREAK',
+  'OTHER',
+] as const;
+export type TaskPauseReasonValue = (typeof TASK_PAUSE_REASONS)[number];
+
+// One row per pause - "is this job currently paused" is never a stored flag, it's derived
+// by finding the row (if any) with resumedAt === null, same as the backend.
+export interface JobCardTaskPause {
+  id: string;
+  jobCardId: string;
+  reason: TaskPauseReasonValue;
+  notes: string | null;
+  pausedByUserId: string | null;
+  pausedAt: string;
+  resumedByUserId: string | null;
+  resumedAt: string | null;
+  // True for a MATERIAL_SHORTAGE pause the system opened itself (from a Need Spare
+  // shortfall) rather than one a technician started manually.
+  autoCreated: boolean;
+}
+
+export interface PauseTaskInput {
+  reason: TaskPauseReasonValue;
+  notes?: string;
+}
+
 // The shape ConflictException({ message, blockers }) serializes to on a QC-approve stock
 // shortfall - see InventoryService.consumeReservationsOnQcApproval(). Not exported from
 // jobCardsApi.ts's qcApprove() itself (axios throws, it doesn't return this) - callers

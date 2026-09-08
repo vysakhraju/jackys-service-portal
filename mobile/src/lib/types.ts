@@ -202,3 +202,36 @@ export interface OwnJobCardResult {
 export interface CompleteVisitInput {
   notes?: string;
 }
+
+// --- Task timer pause/resume (SLA-safe pausing) --------------------------------------
+// Mirrors the backend's TaskPauseReason enum (src/job-cards/entities/job-card-task-pause.
+// entity.ts) and the web app's src/lib/jobCardsTypes.ts#TASK_PAUSE_REASONS. Only relevant
+// to on-site jobs on this app - a workshop job's own pause state (including the
+// auto-opened MATERIAL_SHORTAGE pause from a Need Spare shortfall) is a Workshop-screen
+// concern, and this app never shows a workshop job's Need Spare/Complete UI at all (see
+// jobCardInWorkshop in appointment/[id].tsx).
+export const TASK_PAUSE_REASONS = [
+  'MATERIAL_SHORTAGE',
+  'AWAITING_CUSTOMER_APPROVAL',
+  'CUSTOMER_UNAVAILABLE',
+  'BREAK',
+  'OTHER',
+] as const;
+export type TaskPauseReasonValue = (typeof TASK_PAUSE_REASONS)[number];
+
+// GET /job-cards/:id/pauses response shape, trimmed to what this screen shows.
+// "Currently paused" is never a stored flag - derived by finding the row (if any) with
+// resumedAt === null, same as the backend and the web app.
+export interface JobCardTaskPause {
+  id: string;
+  reason: TaskPauseReasonValue;
+  notes: string | null;
+  pausedAt: string;
+  resumedAt: string | null;
+  autoCreated: boolean;
+}
+
+export interface PauseTaskInput {
+  reason: TaskPauseReasonValue;
+  notes?: string;
+}

@@ -6,15 +6,22 @@ import type {
   CaptureSerialNumberInput,
   CompleteVisitInput,
   JobCardSummary,
+  JobCardTaskPause,
   NeedSpareInput,
   NeedSpareReservation,
   OwnJobCardResult,
+  PauseTaskInput,
   ScheduledAppointment,
   StartVisitInput,
   TechnicianVisit,
 } from './types';
 
 const TECH_BASE = '/technician';
+// Task timer pause/resume lives on the general Job Cards controller, not the /technician
+// namespace - see src/job-cards/job-cards.controller.ts. Ownership there is enforced
+// server-side (the caller must be the appointment's assigned field technician, or a
+// JOB_CARD_ROLES office role), same as every other job-cards.controller.ts endpoint.
+const JOB_CARDS_BASE = '/job-cards';
 
 export const getMySchedule = (date?: string) =>
   api.get<ScheduledAppointment[]>(`${TECH_BASE}/schedule`, { params: date ? { date } : {} }).then((r) => r.data);
@@ -60,3 +67,14 @@ export const requestNeedSpare = (appointmentId: string, data: NeedSpareInput) =>
 // own Gate 1), so there's no diagnostic data this could be missing.
 export const completeVisit = (appointmentId: string, data: CompleteVisitInput) =>
   api.post<JobCardSummary>(`${TECH_BASE}/visits/${appointmentId}/complete`, data).then((r) => r.data);
+
+// --- Task timer pause/resume (SLA-safe pausing) --------------------------------------
+
+export const pauseTask = (jobCardId: string, data: PauseTaskInput) =>
+  api.post<JobCardTaskPause>(`${JOB_CARDS_BASE}/${jobCardId}/pause`, data).then((r) => r.data);
+
+export const resumeTask = (jobCardId: string) =>
+  api.post<JobCardTaskPause>(`${JOB_CARDS_BASE}/${jobCardId}/resume`).then((r) => r.data);
+
+export const getTaskPauses = (jobCardId: string) =>
+  api.get<JobCardTaskPause[]>(`${JOB_CARDS_BASE}/${jobCardId}/pauses`).then((r) => r.data);

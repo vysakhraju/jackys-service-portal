@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { JobCardsService } from './job-cards.service';
 import { JobCardsController } from './job-cards.controller';
 import { JobCard } from './entities/job-card.entity';
+import { JobCardTaskPause } from './entities/job-card-task-pause.entity';
 import { AppointmentsModule } from '../appointments/appointments.module';
 import { TechnicianModule } from '../technician/technician.module';
 import { AuthModule } from '../auth/auth.module';
@@ -11,7 +12,7 @@ import { PermissionsModule } from '../permissions/permissions.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([JobCard]),
+    TypeOrmModule.forFeature([JobCard, JobCardTaskPause]),
     AppointmentsModule,
     TechnicianModule,
     // Needed because JobCardsController's @UseInterceptors(AuditInterceptor) resolves

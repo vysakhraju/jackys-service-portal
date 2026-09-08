@@ -26,9 +26,17 @@ export class OperationalReportsController {
 
   @Get('sla-breach')
   @ApiQuery({ name: 'thresholdHours', required: false, example: 48 })
-  @ApiOperation({ summary: 'BRD 18.4 SLA Breach Report - JobCard.createdAt -> qcApprovedAt vs a threshold (default 48h, the BRD\'s own example). Reason codes are not tracked - hoursOverThreshold is shown instead.' })
+  @ApiOperation({ summary: 'BRD 18.4 SLA Breach Report - JobCard.createdAt -> qcApprovedAt vs a threshold (default 48h, the BRD\'s own example), excluding MATERIAL_SHORTAGE task-pause time (materialShortageHoursExcluded per item).' })
   getSlaBreach(@Query('thresholdHours') thresholdHours?: string) {
     return this.operationalReportsService.getSlaBreach(thresholdHours ? Number(thresholdHours) : undefined);
+  }
+
+  @Get('time-waiting-on-parts')
+  @ApiQuery({ name: 'periodStart', required: false })
+  @ApiQuery({ name: 'periodEnd', required: false })
+  @ApiOperation({ summary: 'How long each Job Card has spent in a MATERIAL_SHORTAGE task pause - both auto-opened (Need Spare shortfall) and manually logged.' })
+  getTimeWaitingOnParts(@Query('periodStart') periodStart?: string, @Query('periodEnd') periodEnd?: string) {
+    return this.operationalReportsService.getTimeWaitingOnParts(periodStart, periodEnd);
   }
 
   @Get('technician-efficiency')

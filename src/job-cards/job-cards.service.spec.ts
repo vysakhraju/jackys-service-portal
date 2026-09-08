@@ -1,12 +1,14 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { JobCardsService } from './job-cards.service';
 import { JobCardStatus, JobCardSection } from './entities/job-card.entity';
+import { TaskPauseReason } from './entities/job-card-task-pause.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { IsNull } from 'typeorm';
 
 describe('JobCardsService', () => {
   let service: JobCardsService;
   let jobCardRepository: any;
+  let taskPauseRepository: any;
   let appointmentsService: any;
   let technicianService: any;
   let queryBuilder: any;
@@ -71,6 +73,12 @@ describe('JobCardsService', () => {
       save: jest.fn((data: any) => Promise.resolve({ ...data, id: data.id || 'jc-1' })),
       createQueryBuilder: jest.fn(() => queryBuilder),
     };
+    taskPauseRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      find: jest.fn(),
+      create: jest.fn((data: any) => ({ id: 'pause-1', pausedAt: new Date(), resumedAt: null, ...data })),
+      save: jest.fn((data: any) => Promise.resolve({ id: data.id || 'pause-1', pausedAt: data.pausedAt || new Date(), ...data })),
+    };
     appointmentsService = {
       findById: jest.fn(),
     };
@@ -78,7 +86,7 @@ describe('JobCardsService', () => {
       getVisit: jest.fn(),
     };
 
-    service = new JobCardsService(jobCardRepository, appointmentsService, technicianService);
+    service = new JobCardsService(jobCardRepository, taskPauseRepository, appointmentsService, technicianService);
   });
 
   describe('create', () => {
@@ -508,6 +516,84 @@ describe('JobCardsService', () => {
 
       expect(result.status).toBe(JobCardStatus.IN_PROGRESS);
       expect(jobCardRepository.save).not.toHaveBeenCalled();
+      expect(taskPauseRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setSparePending / resumeFromSparePending - MATERIAL_SHORTAGE auto-pause hooks', () => {
+    it('setSparePending auto-opens a system MATERIAL_SHORTAGE pause when none is open', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+      taskPauseRepository.findOne.mockResolvedValue(null);
+
+      await service.setSparePending('jc-1');
+
+      expect(taskPauseRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobCardId: 'jc-1',
+          reason: TaskPauseReason.MATERIAL_SHORTAGE,
+          pausedByUserId: null,
+          autoCreated: true,
+        }),
+      );
+      expect(taskPauseRepository.save).toHaveBeenCalled();
+    });
+
+    it('setSparePending does not stack a second pause if one is already open (e.g. a manual BREAK pause)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+      taskPauseRepository.findOne.mockResolvedValue({
+        id: 'pause-existing',
+        jobCardId: 'jc-1',
+        reason: TaskPauseReason.BREAK,
+        resumedAt: null,
+        autoCreated: false,
+      });
+
+      await service.setSparePending('jc-1');
+
+      expect(taskPauseRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('setSparePending does not re-open a pause when the job was already SPARE_PENDING', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SPARE_PENDING }));
+
+      await service.setSparePending('jc-1');
+
+      expect(taskPauseRepository.findOne).not.toHaveBeenCalled();
+      expect(taskPauseRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('resumeFromSparePending auto-closes the open, auto-created MATERIAL_SHORTAGE pause', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SPARE_PENDING }));
+      const openPause = {
+        id: 'pause-auto',
+        jobCardId: 'jc-1',
+        reason: TaskPauseReason.MATERIAL_SHORTAGE,
+        resumedAt: null,
+        autoCreated: true,
+      };
+      taskPauseRepository.findOne.mockResolvedValue(openPause);
+
+      await service.resumeFromSparePending('jc-1');
+
+      expect(taskPauseRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pause-auto', resumedAt: expect.any(Date) }),
+      );
+    });
+
+    it('resumeFromSparePending leaves a manual MATERIAL_SHORTAGE pause open (only auto-created ones are auto-closed)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SPARE_PENDING }));
+      // The query itself filters on autoCreated: true, so a manual pause never matches -
+      // simulate that by resolving null (nothing found).
+      taskPauseRepository.findOne.mockResolvedValue(null);
+
+      await service.resumeFromSparePending('jc-1');
+
+      expect(taskPauseRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ reason: TaskPauseReason.MATERIAL_SHORTAGE, autoCreated: true }),
+        }),
+      );
+      expect(taskPauseRepository.save).not.toHaveBeenCalled();
     });
 
     it('completeWorkshop moves IN_PROGRESS -> READY_FOR_QC', async () => {
@@ -593,6 +679,129 @@ describe('JobCardsService', () => {
       jobCardRepository.findOne.mockResolvedValue(null);
 
       await expect(service.qcReject('missing', 'irrelevant')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('pauseTask / resumeTask / getTaskPauses', () => {
+    it('a privileged role (JOB_CARD_ROLES) can pause any job regardless of assignment', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'someone-else' }),
+      );
+
+      const result = await service.pauseTask('jc-1', { reason: TaskPauseReason.BREAK }, 'tl-1', true);
+
+      expect(result.reason).toBe(TaskPauseReason.BREAK);
+      expect(appointmentsService.findById).not.toHaveBeenCalled();
+    });
+
+    it('the assigned workshop technician can pause their own job', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-workshop-1' }),
+      );
+
+      const result = await service.pauseTask(
+        'jc-1',
+        { reason: TaskPauseReason.OTHER, notes: 'Waiting on a callback' },
+        'tech-workshop-1',
+        false,
+      );
+
+      expect(result.pausedByUserId).toBe('tech-workshop-1');
+      expect(result.notes).toBe('Waiting on a callback');
+    });
+
+    it('the appointment\'s assigned field technician can pause an on-site job (no assignedWorkshopTechnicianId exists for those)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ status: JobCardStatus.SECTION_ASSIGNED, section: JobCardSection.ON_SITE_REPAIR, assignedWorkshopTechnicianId: null }),
+      );
+      appointmentsService.findById.mockResolvedValue({ id: 'apt-1', technicianId: 'tech-field-1' });
+
+      const result = await service.pauseTask('jc-1', { reason: TaskPauseReason.CUSTOMER_UNAVAILABLE }, 'tech-field-1', false);
+
+      expect(result.reason).toBe(TaskPauseReason.CUSTOMER_UNAVAILABLE);
+      expect(appointmentsService.findById).toHaveBeenCalledWith('apt-1');
+    });
+
+    it('rejects a caller who is neither privileged nor the assigned technician (403)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-workshop-1' }),
+      );
+      appointmentsService.findById.mockResolvedValue({ id: 'apt-1', technicianId: 'tech-field-1' });
+
+      await expect(
+        service.pauseTask('jc-1', { reason: TaskPauseReason.BREAK }, 'random-user', false),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('rejects pausing from a non-pausable status (e.g. READY_FOR_QC)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC }));
+
+      await expect(
+        service.pauseTask('jc-1', { reason: TaskPauseReason.BREAK }, 'tl-1', true),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects pausing when a pause is already open (409 - one open pause at a time)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+      taskPauseRepository.findOne.mockResolvedValue({
+        id: 'pause-existing',
+        reason: TaskPauseReason.MATERIAL_SHORTAGE,
+        resumedAt: null,
+        pausedAt: new Date(),
+      });
+
+      await expect(
+        service.pauseTask('jc-1', { reason: TaskPauseReason.BREAK }, 'tl-1', true),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('resumeTask closes the open pause and records who resumed it', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-workshop-1' }),
+      );
+      taskPauseRepository.findOne.mockResolvedValue({
+        id: 'pause-1',
+        reason: TaskPauseReason.BREAK,
+        resumedAt: null,
+      });
+
+      const result = await service.resumeTask('jc-1', 'tech-workshop-1', false);
+
+      expect(result.resumedAt).toBeInstanceOf(Date);
+      expect(result.resumedByUserId).toBe('tech-workshop-1');
+    });
+
+    it('resumeTask rejects when there is no open pause (409)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+      taskPauseRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.resumeTask('jc-1', 'tl-1', true)).rejects.toThrow(ConflictException);
+    });
+
+    it('resumeTask enforces the same ownership check as pauseTask (403)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-workshop-1' }),
+      );
+      appointmentsService.findById.mockResolvedValue({ id: 'apt-1', technicianId: 'tech-field-1' });
+
+      await expect(service.resumeTask('jc-1', 'random-user', false)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('getTaskPauses returns the full history, oldest first, with no ownership gate', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+      const rows = [{ id: 'p1' }, { id: 'p2' }];
+      taskPauseRepository.find.mockResolvedValue(rows);
+
+      const result = await service.getTaskPauses('jc-1');
+
+      expect(taskPauseRepository.find).toHaveBeenCalledWith({ where: { jobCardId: 'jc-1' }, order: { pausedAt: 'ASC' } });
+      expect(result).toBe(rows);
+    });
+
+    it('getTaskPauses throws NotFoundException for an unknown Job Card', async () => {
+      jobCardRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.getTaskPauses('missing')).rejects.toThrow(NotFoundException);
     });
   });
 

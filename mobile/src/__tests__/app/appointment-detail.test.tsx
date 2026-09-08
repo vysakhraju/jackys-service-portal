@@ -8,11 +8,21 @@ import {
   captureSerialNumber,
   completeVisit,
   getOwnJobCard,
+  getTaskPauses,
   getVisit,
+  pauseTask,
   requestNeedSpare,
+  resumeTask,
   startVisit,
 } from '../../lib/technicianApi';
-import type { FaultSymptom, JobCardSummary, NeedSpareReservation, ScheduledAppointment, SparePart } from '../../lib/types';
+import type {
+  FaultSymptom,
+  JobCardSummary,
+  JobCardTaskPause,
+  NeedSpareReservation,
+  ScheduledAppointment,
+  SparePart,
+} from '../../lib/types';
 
 const mockBack = jest.fn();
 let mockParams: { id: string; appt?: string } = { id: 'appt-1' };
@@ -30,6 +40,9 @@ jest.mock('../../lib/technicianApi', () => ({
   getOwnJobCard: jest.fn(),
   requestNeedSpare: jest.fn(),
   completeVisit: jest.fn(),
+  getTaskPauses: jest.fn(),
+  pauseTask: jest.fn(),
+  resumeTask: jest.fn(),
 }));
 jest.mock('../../lib/masterDataApi', () => ({ listFaultSymptoms: jest.fn(), listSpareParts: jest.fn() }));
 
@@ -54,6 +67,9 @@ const mockedCaptureFaultSymptom = captureFaultSymptom as jest.Mock;
 const mockedGetOwnJobCard = getOwnJobCard as jest.Mock;
 const mockedRequestNeedSpare = requestNeedSpare as jest.Mock;
 const mockedCompleteVisit = completeVisit as jest.Mock;
+const mockedGetTaskPauses = getTaskPauses as jest.Mock;
+const mockedPauseTask = pauseTask as jest.Mock;
+const mockedResumeTask = resumeTask as jest.Mock;
 const mockedListFaultSymptoms = listFaultSymptoms as jest.Mock;
 const mockedListSpareParts = listSpareParts as jest.Mock;
 const mockedUseOfflineQueue = useOfflineQueue as jest.Mock;
@@ -178,6 +194,18 @@ function sparePartFixture(overrides: Partial<SparePart> = {}): SparePart {
   };
 }
 
+function taskPauseFixture(overrides: Partial<JobCardTaskPause> = {}): JobCardTaskPause {
+  return {
+    id: 'pause-1',
+    reason: 'CUSTOMER_UNAVAILABLE',
+    notes: null,
+    pausedAt: '2026-09-07T11:00:00.000Z',
+    resumedAt: null,
+    autoCreated: false,
+    ...overrides,
+  };
+}
+
 function queuedAction(overrides: Record<string, unknown> = {}) {
   return {
     id: 'queue-1',
@@ -209,6 +237,9 @@ beforeEach(() => {
   // an unhandled rejection from an un-mocked getOwnJobCard() call.
   mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture(null));
   mockedListSpareParts.mockResolvedValue([]);
+  // Sane default for the task-pause poll (no pause history) so every pre-existing test -
+  // none of which know about task pauses - doesn't hit an un-mocked getTaskPauses() call.
+  mockedGetTaskPauses.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -1047,5 +1078,133 @@ describe('AppointmentDetailScreen - offline queue', () => {
         'Could not sync completing this visit - see the sync status above to retry or discard.',
       ),
     );
+  });
+});
+
+describe('AppointmentDetailScreen - Task timer pause/resume', () => {
+  it('shows a reason chip row (no open pause) once the on-site job is ready', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
+    mockedGetTaskPauses.mockResolvedValue([]);
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('task-pause-section')).toBeOnTheScreen());
+    expect(screen.getByTestId('pause-reason-CUSTOMER_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.queryByTestId('task-pause-active')).not.toBeOnTheScreen();
+    // Notes input/Pause button only appear once a reason chip is picked.
+    expect(screen.queryByTestId('pause-task-button')).not.toBeOnTheScreen();
+  });
+
+  it('picks a reason, enters notes, and pauses the task', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
+    const savedPause = taskPauseFixture({ reason: 'MATERIAL_SHORTAGE', notes: 'At the store' });
+    mockedGetTaskPauses.mockResolvedValueOnce([]).mockResolvedValueOnce([savedPause]);
+    mockedPauseTask.mockResolvedValue(savedPause);
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('pause-reason-MATERIAL_SHORTAGE')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('pause-reason-MATERIAL_SHORTAGE'));
+    await fireEvent.changeText(screen.getByTestId('pause-notes-input'), 'At the store');
+    await fireEvent.press(screen.getByTestId('pause-task-button'));
+
+    await waitFor(() =>
+      expect(mockedPauseTask).toHaveBeenCalledWith('job-card-1', { reason: 'MATERIAL_SHORTAGE', notes: 'At the store' }),
+    );
+    // jest-native's toHaveTextContent matches the full normalized text, not a substring.
+    await waitFor(() =>
+      expect(screen.getByTestId('task-pause-active')).toHaveTextContent('Paused - Material shortage — "At the store"'),
+    );
+  });
+
+  it('shows the open pause and a Resume button, with no reason chips, when a pause is already open', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
+    mockedGetTaskPauses.mockResolvedValue([taskPauseFixture({ reason: 'BREAK' })]);
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('task-pause-active')).toHaveTextContent('Paused - Break'));
+    expect(screen.getByTestId('resume-task-button')).toBeOnTheScreen();
+    expect(screen.queryByTestId('pause-reason-BREAK')).not.toBeOnTheScreen();
+  });
+
+  it('resumes the task, clearing the paused state once the poll refetches', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
+    mockedGetTaskPauses
+      .mockResolvedValueOnce([taskPauseFixture()])
+      .mockResolvedValueOnce([taskPauseFixture({ resumedAt: '2026-09-07T12:00:00.000Z' })]);
+    mockedResumeTask.mockResolvedValue(taskPauseFixture({ resumedAt: '2026-09-07T12:00:00.000Z' }));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('resume-task-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('resume-task-button'));
+
+    await waitFor(() => expect(mockedResumeTask).toHaveBeenCalledWith('job-card-1'));
+    await waitFor(() => expect(screen.getByTestId('pause-reason-BREAK')).toBeOnTheScreen());
+    expect(screen.queryByTestId('task-pause-active')).not.toBeOnTheScreen();
+  });
+
+  it('shows an error message when pausing fails', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
+    mockedGetTaskPauses.mockResolvedValue([]);
+    mockedPauseTask.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { message: 'This Job Card already has an open pause - resume it first.' } },
+    });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('pause-reason-OTHER')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('pause-reason-OTHER'));
+    await fireEvent.press(screen.getByTestId('pause-task-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('task-pause-error')).toHaveTextContent(
+        'This Job Card already has an open pause - resume it first.',
+      ),
+    );
+  });
+
+  it('shows an error message when resuming fails', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
+    mockedGetTaskPauses.mockResolvedValue([taskPauseFixture()]);
+    mockedResumeTask.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { message: 'This Job Card has no open pause to resume.' } },
+    });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('resume-task-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('resume-task-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('task-resume-error')).toHaveTextContent('This Job Card has no open pause to resume.'),
+    );
+  });
+
+  it('does not show the task-pause section for a workshop job (Need Spare/Complete are on-site only)', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture({ section: 'WORKSHOP', status: 'IN_PROGRESS' }));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('job-card-workshop')).toBeOnTheScreen());
+    expect(screen.queryByTestId('task-pause-section')).not.toBeOnTheScreen();
+    expect(mockedGetTaskPauses).not.toHaveBeenCalled();
+  });
+
+  it('does not show the task-pause section once the visit has been completed', async () => {
+    mockedGetVisit.mockResolvedValue(visitFixture());
+    mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture());
+    mockedGetTaskPauses.mockResolvedValue([]);
+    mockedCompleteVisit.mockResolvedValue(jobCardFixture({ status: 'READY_FOR_QC' }));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('complete-visit-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('complete-visit-button'));
+
+    await waitFor(() => expect(screen.getByTestId('job-card-finished')).toBeOnTheScreen());
+    expect(screen.queryByTestId('task-pause-section')).not.toBeOnTheScreen();
   });
 });
