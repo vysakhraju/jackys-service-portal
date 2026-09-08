@@ -592,6 +592,56 @@ describe('AppointmentsService', () => {
       await expect(service.completeAppointment('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
       expect(appointmentRepository.save).not.toHaveBeenCalled();
     });
+
+    // 2026-09-08: JobCardsService.create() now auto-completes the appointment the moment
+    // its Job Card exists, so by the time a technician's own on-site completion call (or a
+    // staff member's manual Complete click) reaches here, it's often already COMPLETED.
+    it('completeAppointment is a no-op (not an error) when the appointment is already COMPLETED', async () => {
+      const already = appointment({ status: AppointmentStatus.COMPLETED });
+      appointmentRepository.findOne.mockResolvedValue(already);
+
+      const result = await service.completeAppointment('apt-1', 'user-1');
+
+      expect(result).toEqual(already);
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('completeFromJobCardCreation', () => {
+    it('completes a non-terminal appointment and stamps actualEndAt', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.ON_SITE }));
+
+      await service.completeFromJobCardCreation('apt-1', 'user-1');
+
+      expect(appointmentRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: AppointmentStatus.COMPLETED, actualEndAt: expect.any(Date) }),
+      );
+    });
+
+    it('is a silent no-op for an appointment that is already COMPLETED', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.COMPLETED }));
+
+      await service.completeFromJobCardCreation('apt-1', 'user-1');
+
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('is a silent no-op for an appointment that is already CANCELLED', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.CANCELLED }));
+
+      await service.completeFromJobCardCreation('apt-1', 'user-1');
+
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('is a silent no-op for an AMC-type appointment, never throwing', async () => {
+      appointmentRepository.findOne.mockResolvedValue(
+        appointment({ status: AppointmentStatus.ON_SITE, type: AppointmentType.AMC }),
+      );
+
+      await expect(service.completeFromJobCardCreation('apt-1', 'user-1')).resolves.toBeUndefined();
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('getTechnicianSchedule / getServiceCentreSchedule', () => {

@@ -545,6 +545,16 @@ export class AppointmentsService {
   async completeAppointment(id: string, userId: string, req?: any): Promise<Appointment> {
     const appointment = await this.findById(id);
 
+    // Idempotent: since 2026-09-08, JobCardsService.create() auto-completes the appointment
+    // the instant its Job Card exists (see completeFromJobCardCreation below) - so by the
+    // time this endpoint runs, either from a technician's own on-site completion call or a
+    // staff member manually clicking Complete, the appointment is very often already
+    // COMPLETED. Treat that as success rather than an error, so neither caller needs its own
+    // special-case handling for a race that's now the common case, not the exception.
+    if (appointment.status === AppointmentStatus.COMPLETED) {
+      return appointment;
+    }
+
     if (appointment.status !== AppointmentStatus.ON_SITE) {
       throw new BadRequestException(`Can only complete on-site appointments`);
     }
@@ -576,6 +586,50 @@ export class AppointmentsService {
     );
 
     return this.findById(id);
+  }
+
+  /**
+   * Business rule (2026-09-08): an appointment is only ever scheduled, completed, or
+   * cancelled (see cancel()'s doc comment for the mirror-image rule). The moment a Job Card
+   * exists for it, its job as a "schedule" is done - so JobCardsService.create() calls this
+   * right after saving the new Job Card, instead of requiring a human to separately click
+   * Complete. Deliberately its OWN lenient method rather than a call to completeAppointment()
+   * above: this must never itself fail and take a successfully-created Job Card down with it
+   * (no transaction wraps the two calls), so every case completeAppointment() would reject on
+   * is a silent no-op here instead of a thrown exception - callers that still want the strict
+   * on-site-only/AMC-blocked behavior should keep using completeAppointment() directly.
+   */
+  async completeFromJobCardCreation(id: string, userId: string): Promise<void> {
+    const appointment = await this.findById(id);
+
+    // Already fulfilled (most calls to this land here, in fact - the appointment usually
+    // isn't ON_SITE by name for long before a Job Card follows) or somehow already
+    // cancelled (shouldn't be reachable given cancel()'s own Job-Card-existence guard, but
+    // never worth throwing over here regardless) - either way, nothing to do.
+    if ([AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED].includes(appointment.status)) {
+      return;
+    }
+
+    // AMC PM visits complete via their own checklist/signature/extra-charge flow
+    // (AmcService.completeVisit()), never via a Job Card - Job Cards aren't part of that
+    // flow at all in practice, but skip rather than throw if one somehow gets created here.
+    if (appointment.type === AppointmentType.AMC) {
+      return;
+    }
+
+    const previousStatus = appointment.status;
+    appointment.status = AppointmentStatus.COMPLETED;
+    appointment.actualEndAt = new Date();
+    const saved = await this.appointmentRepository.save(appointment);
+
+    await this.logAudit(
+      userId,
+      AuditAction.UPDATE,
+      'Appointment',
+      id,
+      { status: previousStatus, actualEndAt: appointment.actualEndAt },
+      { status: AppointmentStatus.COMPLETED, actualEndAt: saved.actualEndAt, note: 'Auto-completed: Job Card created' },
+    );
   }
 
   async getDashboardStats(serviceCentreId?: string): Promise<{

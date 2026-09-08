@@ -81,6 +81,7 @@ describe('JobCardsService', () => {
     };
     appointmentsService = {
       findById: jest.fn(),
+      completeFromJobCardCreation: jest.fn().mockResolvedValue(undefined),
     };
     technicianService = {
       getVisit: jest.fn(),
@@ -172,6 +173,29 @@ describe('JobCardsService', () => {
 
       await expect(service.create(dto, 'user-1')).rejects.toThrow(ConflictException);
       expect(technicianService.getVisit).not.toHaveBeenCalled();
+    });
+
+    // 2026-09-08: "an appointment is fulfilled the instant a Job Card exists for it" - see
+    // AppointmentsService.completeFromJobCardCreation()'s doc comment.
+    it('auto-completes the appointment right after the Job Card is created', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(null);
+      technicianService.getVisit.mockResolvedValue(visit());
+
+      await service.create(dto, 'user-1');
+
+      expect(appointmentsService.completeFromJobCardCreation).toHaveBeenCalledWith('apt-1', 'user-1');
+    });
+
+    it('still returns the created Job Card even if auto-completing the appointment fails', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(null);
+      technicianService.getVisit.mockResolvedValue(visit());
+      appointmentsService.completeFromJobCardCreation.mockRejectedValue(new Error('DB hiccup'));
+
+      const result = await service.create(dto, 'user-1');
+
+      expect(result).toEqual(expect.objectContaining({ jobCardNumber: 'JC-0001' }));
     });
   });
 

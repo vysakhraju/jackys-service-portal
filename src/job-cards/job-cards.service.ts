@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto';
-import { Injectable, BadRequestException, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.entity';
@@ -30,6 +30,8 @@ const PAUSABLE_STATUSES: ReadonlySet<JobCardStatus> = new Set([
 
 @Injectable()
 export class JobCardsService {
+  private readonly logger = new Logger(JobCardsService.name);
+
   constructor(
     @InjectRepository(JobCard)
     private jobCardRepository: Repository<JobCard>,
@@ -197,7 +199,24 @@ export class JobCardsService {
       publicTokenExpiresAt: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000),
     });
 
-    return this.jobCardRepository.save(jobCard);
+    const saved = await this.jobCardRepository.save(jobCard);
+
+    // Business rule (2026-09-08): the appointment is fulfilled the instant a Job Card
+    // exists for it - see AppointmentsService.completeFromJobCardCreation()'s doc comment
+    // (and cancel()'s guard, the mirror-image rule this complements). Deliberately outside
+    // any transaction and swallowed rather than awaited-and-thrown: a hiccup completing the
+    // appointment must never take down a Job Card that was already successfully created and
+    // already returned 201 in spirit - staff can still complete the appointment by hand via
+    // the existing endpoint if this ever silently fails.
+    try {
+      await this.appointmentsService.completeFromJobCardCreation(dto.appointmentId, userId);
+    } catch (err) {
+      this.logger.warn(
+        `Job Card ${saved.jobCardNumber} was created but auto-completing appointment ${dto.appointmentId} failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
+    return saved;
   }
 
   /**
