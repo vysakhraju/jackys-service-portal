@@ -1942,6 +1942,35 @@
   </div>
 
   <div class="section">
+    <h3 style="color:var(--success);">Appointment-cancellation guard - live bug found and fixed (2026-09-08)</h3>
+    <p>
+      Found while live-testing: cancelling a real appointment left the frontend showing it
+      as still awaiting technician assignment instead of reflecting the cancellation.
+      Digging in surfaced a genuine logic gap, not just a stale display -
+      <span class="mono">AppointmentsService.cancel()</span> only ever checked that the
+      appointment's own status wasn't already Completed/Cancelled - it never checked
+      whether a Job Card already existed for it. An appointment really only has 3
+      meaningful stages: scheduled, completed, or cancelled, and cancellation is only ever
+      valid while it's still purely a schedule. The moment any Job Card exists for it
+      (on-site or workshop, created for any reason), the appointment is fulfilled and
+      control passes to the Job Card's own lifecycle - it must never be cancelled after
+      that point.
+    </p>
+    <p>
+      Backend now looks up the Job Card by <span class="mono">appointmentId</span> before
+      cancelling and returns a 409 naming it if one exists. Frontend mirrors the same
+      guard client-side (the Schedule list now partially loads the linked Job Card so the
+      Cancel button doesn't even render once one exists), same pattern this page already
+      uses for the AMC PM-visit routing guard.
+    </p>
+    <div class="verified">
+      <span>727/727 backend tests</span>
+      <span>tsc clean (backend + frontend)</span>
+    </div>
+    <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+  </div>
+
+  <div class="section">
     <div class="next">
       <div>
         <h3>Only the Gantt-style technician assignment board is left from the Redtra360 review</h3>
@@ -1974,7 +2003,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 6614811 — awaiting push from your machine</span>
+    <span>master + main synced locally at 4d76f64 — awaiting push from your machine</span>
   </footer>
 
 </div>

@@ -4159,6 +4159,46 @@ review is the Gantt-style technician assignment board.
 **Committed as `6614811`**, on top of `8310549`. `main`/`master` synced. Not yet pushed
 to the remote - push both branches yourself when ready.
 
+## Appointment-cancellation guard fix - live bug found and fixed (2026-09-08)
+
+**Live-testing bug report**: cancelling real appointment `744d2c03-ebed-48a7-84f0-518de03c8816`
+left the frontend showing it as still awaiting technician assignment instead of reflecting
+the cancellation. Investigation found a genuine logic gap, not just a display issue:
+`AppointmentsService.cancel()` only ever guarded against the appointment's OWN status
+already being `COMPLETED`/`CANCELLED` - it never checked whether a Job Card already existed
+for that appointment before cancelling it out from under an in-progress or completed repair.
+
+**Business rule now enforced**: an appointment ("schedule") has 3 meaningful stages -
+scheduled (in flight), completed, or cancelled. Cancellation is only ever valid while it's
+still purely a schedule. The moment ANY Job Card exists for it (created by a technician
+on-site or by CCE for a workshop repair, for whatever reason), the appointment is
+considered fulfilled and control passes to the Job Card's own lifecycle - it must never be
+cancelled after that point.
+
+- Backend: `cancel()` now looks up `JobCard` by `appointmentId` (reusing the
+  `jobCardRepository` already injected into `AppointmentsService` for the reassignment
+  guard in `update()`) and throws `ConflictException` (409) before touching the
+  appointment's status if one is found. 2 new backend tests plus a query-builder mock fix
+  needed for the related frontend-supporting change below. **727/727 backend tests
+  passing**, `tsc --noEmit` clean.
+- Frontend: `GET /appointments` now partially selects the linked Job Card (id +
+  jobCardNumber only) so the Schedule list can mirror this guard client-side -
+  `canCancel` is now false once a Job Card exists, so the row's Cancel button doesn't
+  even render for an appointment the backend would just 409 on (same pattern this page
+  already uses for the AMC PM-visit completion routing guard). 2 new frontend tests.
+  `tsc --noEmit` clean.
+
+**On the specific reported appointment**: with no DB access to that live record, the most
+likely explanation is that the cancel attempt did not actually persist at the time (a
+silently-swallowed error, or a request that never completed) rather than the appointment
+having been cancelled and then reverted - nothing in the code ever reverts a CANCELLED
+appointment back to an earlier status. Re-test this exact appointment now that the guard
+is live: if a Job Card already exists for it, cancelling will now fail clearly with a 409
+naming the Job Card; if not, cancelling should now succeed and stick.
+
+**Committed as `4d76f64`**, on top of `de27510`. `main`/`master` synced. Not yet pushed
+to the remote - push both branches yourself when ready.
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
