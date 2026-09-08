@@ -1971,6 +1971,32 @@
   </div>
 
   <div class="section">
+    <h3 style="color:var(--success);">Blank page on View: decimal columns returning as strings - fixed (2026-09-08)</h3>
+    <p>
+      Found live-testing right after the cancellation-guard fix above: clicking "View" on
+      an appointment with an already-started technician visit blanked the whole page. A
+      classic node-postgres gotcha, not a display bug - Postgres <span class="mono">NUMERIC</span>/
+      <span class="mono">DECIMAL</span> columns come back as JS <b>strings</b> by default,
+      but every entity here declares its decimal columns as TS <span class="mono">number</span>
+      (GPS lat/lng, every money field - 34 columns across 17 entities) and the frontend
+      calls real number methods on them. With no error boundary anywhere, one
+      <span class="mono">.toFixed()</span> on a string blanked the entire page, not just
+      the widget that broke.
+    </p>
+    <p>
+      Fixed with a global <span class="mono">pg</span> NUMERIC type parser registered
+      before TypeORM's first connection, so every decimal column comes back as a real
+      number app-wide - fixes the bug everywhere it could occur, not just this one screen.
+      <b>Requires restarting the backend dev server to take effect.</b>
+    </p>
+    <div class="verified">
+      <span>730/730 backend tests</span>
+      <span>tsc clean (backend + frontend)</span>
+    </div>
+    <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+  </div>
+
+  <div class="section">
     <div class="next">
       <div>
         <h3>Only the Gantt-style technician assignment board is left from the Redtra360 review</h3>
@@ -2003,7 +2029,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 4d76f64 — awaiting push from your machine</span>
+    <span>master + main synced locally at 6426926 — awaiting push from your machine</span>
   </footer>
 
 </div>

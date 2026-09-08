@@ -4199,6 +4199,37 @@ naming the Job Card; if not, cancelling should now succeed and stick.
 **Committed as `4d76f64`**, on top of `de27510`. `main`/`master` synced. Not yet pushed
 to the remote - push both branches yourself when ready.
 
+## Blank page on View: decimal columns returning as strings - fixed (2026-09-08)
+
+**Live-testing bug report**: clicking "View" on an appointment with an already-started
+technician visit blanked the whole page.
+
+Root cause: a classic node-postgres gotcha, not a display bug. Postgres `NUMERIC`/
+`DECIMAL` columns come back from the `pg` driver as JS **strings** by default (to avoid
+silent float precision loss), but every entity in this app declares its `decimal` columns
+as TS `number` (`TechnicianVisit.startGpsLat`/`Lng`, every money field across invoicing/
+estimates/AMC/dismantling/etc. - 34 decimal columns across 17 entities) and the frontend
+calls real number methods on them (`.toFixed()`, arithmetic). `ViewAppointmentModal`'s
+`visit.startGpsLat.toFixed(4)` threw a `TypeError` the moment a visit with real GPS data
+existed - and with no error boundary anywhere in the frontend, that unmounts the *whole*
+React tree, not just the modal, hence a fully blank page rather than a broken widget.
+
+**Fix**: a global `pg` NUMERIC type parser (`src/database-type-parsers.ts`, called from
+`main.ts` before TypeORM opens its first connection) makes every decimal column come back
+as a real number app-wide, matching what every entity already claims at the type level -
+this fixes the bug everywhere it could occur, not just on this one screen. Split into its
+own testable module rather than a bootstrap-only side effect; 3 new unit tests. Needed
+`@types/pg` as a new dev dependency for the import to typecheck (`npm install` picks it up
+automatically). Also hardened `ViewAppointmentModal`'s GPS display with `Number(...)` as
+defense-in-depth, independent of the backend fix.
+
+**Important: this needs the backend dev server restarted to take effect** - the type
+parser registers once at process boot, so a server that's still running from before this
+fix won't pick it up until you stop and restart it.
+
+**Committed as `6426926`**, on top of `5d92f1a`. `main`/`master` synced. Not yet pushed
+to the remote - push both branches yourself when ready.
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
