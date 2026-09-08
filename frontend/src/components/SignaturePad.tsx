@@ -60,6 +60,19 @@ export function SignaturePad({
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
+  // setPointerCapture means this canvas keeps receiving pointermove/pointerup for this
+  // pointer even once the cursor moves outside the canvas's (small, 112px-tall) box - the
+  // whole reason to use it. There is deliberately no onPointerLeave handler ending the
+  // stroke: a 2026-09-08 live test found that wiring one up (an earlier draft of this
+  // component had it) broke drawing with a real mouse almost immediately - any ordinary
+  // hand movement easily dips outside a box this short mid-signature, which fired
+  // pointerleave and ended the stroke right there. If that happened before
+  // MIN_DRAWN_DISTANCE was reached, finishStroke() silently discarded it (never called
+  // onChange), so the pad looked like it "wasn't saving anything" even though pixels were
+  // genuinely being painted - and since drawingRef.current was now false, later captured
+  // pointermove events (while still held down, cursor back over the canvas) were ignored
+  // until the next pointerdown. The stroke should only end on the actual release
+  // (pointerup) or a lost/interrupted capture (pointercancel), wherever either happens.
   function handlePointerDown(e: ReactPointerEvent<HTMLCanvasElement>) {
     canvasRef.current?.setPointerCapture(e.pointerId);
     drawingRef.current = true;
@@ -119,7 +132,7 @@ export function SignaturePad({
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={finishStroke}
-          onPointerLeave={finishStroke}
+          onPointerCancel={finishStroke}
         />
         {!hasSignature && (
           <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-slate-300">

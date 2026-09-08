@@ -221,8 +221,17 @@ export default function AppointmentDetailScreen() {
   // Deriving it from the poll instead means it survives remounts, app restarts, and even
   // reflects a Team Leader's decision made in the meantime.
   const spareRequest = ownJobCard?.spareRequest ?? null;
+  // 2026-09-08 fix: this used to only special-case a workshop job at the exact instant
+  // it was SECTION_ASSIGNED, so a workshop job that moved on (WORKSHOP_ASSIGNED,
+  // IN_PROGRESS, QC_PASSED, DELIVERED, ...) fell through to jobCardFinished below and
+  // showed "sent to QC" - wrong, since this app never sent it to QC at all, staff/the
+  // workshop did. Now any WORKSHOP-section job shows its own ongoing-status message
+  // (using the server-derived nextStepText, see job-card-progress.util.ts) for its
+  // entire lifecycle on this app, and jobCardFinished is scoped to on-site jobs only.
+  const jobCardInWorkshop = jobCard?.section === 'WORKSHOP';
   const jobCardReady = jobCard?.status === 'SECTION_ASSIGNED' && jobCard.section === 'ON_SITE_REPAIR';
-  const jobCardFinished = Boolean(jobCard) && !jobCardReady && jobCard!.status !== 'SECTION_ASSIGNED';
+  const jobCardFinished =
+    Boolean(jobCard) && jobCard!.section === 'ON_SITE_REPAIR' && !jobCardReady && jobCard!.status !== 'SECTION_ASSIGNED';
 
   function invalidateJobCard() {
     queryClient.invalidateQueries({ queryKey: ['technician-job-card', params.id] });
@@ -564,11 +573,18 @@ export default function AppointmentDetailScreen() {
               </Text>
             )}
 
-            {!jobCardLoading && jobCard && jobCard.section !== 'ON_SITE_REPAIR' && jobCard.status === 'SECTION_ASSIGNED' && (
-              <Text style={styles.meta} testID="job-card-workshop">
-                This job card ({jobCard.jobCardNumber}) is assigned to the workshop, not
-                on-site repair - nothing to do here on this app.
-              </Text>
+            {!jobCardLoading && jobCard && jobCardInWorkshop && (
+              <View testID="job-card-workshop">
+                <Text style={styles.meta} testID="job-card-workshop-status">
+                  {jobCard.jobCardNumber} is a workshop job - nothing to do here on this
+                  app. Status: {jobCard.status.replace(/_/g, ' ')}.
+                </Text>
+                {jobCard.nextStepText && (
+                  <Text style={styles.nextStepText} testID="job-card-workshop-next-step">
+                    Next: {jobCard.nextStepText}
+                  </Text>
+                )}
+              </View>
             )}
 
             {!jobCardLoading && (jobCardFinished || completeMutation.isSuccess) && (

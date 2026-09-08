@@ -483,6 +483,30 @@ describe('AppointmentDetailScreen - Need Spare & Complete', () => {
     expect(screen.queryByTestId('complete-visit-button')).toBeNull();
   });
 
+  // 2026-09-08 regression: a workshop job used to only get the "workshop, nothing to do
+  // here" message while it sat at exactly SECTION_ASSIGNED - the instant it moved on
+  // (workshop technician assigned, WIP, QC, delivered, ...) it fell through to the
+  // on-site "sent to QC ✓" message instead, which is wrong (this app never sent a
+  // workshop job to QC - staff/the workshop did). It should keep showing the workshop
+  // message, with the job's actual current status, for its whole lifecycle here.
+  it.each(['WORKSHOP_ASSIGNED', 'IN_PROGRESS', 'READY_FOR_QC', 'QC_PASSED', 'DELIVERED'])(
+    'keeps showing the workshop message (not "sent to QC") once a workshop job reaches %s',
+    async (status) => {
+      mockedGetVisit.mockResolvedValue(visitFixture());
+      mockedGetOwnJobCard.mockResolvedValue(
+        ownJobCardFixture({ section: 'WORKSHOP', status, nextStepText: 'Awaiting QC approval' }),
+      );
+      await renderScreen(appt());
+
+      await waitFor(() => expect(screen.getByTestId('job-card-workshop')).toBeOnTheScreen());
+      expect(screen.getByTestId('job-card-workshop-status')).toHaveTextContent(
+        `JC-0001 is a workshop job - nothing to do here on this app. Status: ${status.replace(/_/g, ' ')}.`,
+      );
+      expect(screen.getByTestId('job-card-workshop-next-step')).toHaveTextContent('Next: Awaiting QC approval');
+      expect(screen.queryByTestId('job-card-finished')).toBeNull();
+    },
+  );
+
   it('shows the finished state when the Job Card has already moved past SECTION_ASSIGNED', async () => {
     mockedGetVisit.mockResolvedValue(visitFixture());
     mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture({ status: 'READY_FOR_QC' }));

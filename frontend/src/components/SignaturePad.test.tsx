@@ -103,6 +103,41 @@ describe('SignaturePad - dirty-check for accidental taps (the-fool finding)', ()
   });
 });
 
+describe('SignaturePad - drawing that dips outside the canvas mid-stroke (2026-09-08 regression)', () => {
+  it('keeps the stroke going (and still calls onChange) after the pointer briefly leaves the canvas bounds without releasing', () => {
+    const onChange = vi.fn();
+    render(<SignaturePad onChange={onChange} />);
+    const canvas = screen.getByRole('img', { name: 'Signature pad, empty' });
+
+    // Mouse down inside, move to the very edge, "leave" the 300x112 box (still held down -
+    // no pointerup yet), then re-enter and keep drawing before finally releasing. With
+    // pointer capture this whole sequence is one continuous stroke; there must be no
+    // onPointerLeave handler ending it early or this whole test would see totalDistance
+    // reset partway through and onChange never called.
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 40, clientY: 40, pointerId: 1 });
+    fireEvent.pointerLeave(canvas, { clientX: -5, clientY: 40, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 60, clientY: 60, pointerId: 1 }); // captured move while "outside"
+    fireEvent.pointerUp(canvas, { clientX: 60, clientY: 60, pointerId: 1 });
+
+    expect(onChange).toHaveBeenCalledWith('data:image/png;base64,FAKE_SIGNATURE');
+    expect(screen.getByText('Signature captured')).toBeInTheDocument();
+    expect(screen.queryByText('Sign here')).not.toBeInTheDocument();
+  });
+
+  it('ends the stroke on pointercancel (lost capture) rather than leaving it stuck open', () => {
+    const onChange = vi.fn();
+    render(<SignaturePad onChange={onChange} />);
+    const canvas = screen.getByRole('img', { name: 'Signature pad, empty' });
+
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 60, clientY: 60, pointerId: 1 });
+    fireEvent.pointerCancel(canvas, { pointerId: 1 });
+
+    expect(onChange).toHaveBeenCalledWith('data:image/png;base64,FAKE_SIGNATURE');
+  });
+});
+
 describe('SignaturePad - Clear', () => {
   it('resets to empty, calls onChange(undefined), and re-clears the canvas', () => {
     const onChange = vi.fn();
