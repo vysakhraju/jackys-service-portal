@@ -74,6 +74,13 @@ export interface Appointment {
   technicianId: string | null;
   createdBy?: UserRef | null;
   createdById: string | null;
+  // Partial (id + jobCardNumber only) - present once ANY Job Card has been created for
+  // this appointment (on-site or workshop, whatever the reason), which per
+  // AppointmentsService.cancel() means the appointment is fulfilled and can no longer be
+  // cancelled - control has moved to the Job Card's own lifecycle. Undefined on rows this
+  // type is also (ab)used for before the backend attaches it; null once the query ran and
+  // found none.
+  jobCard?: { id: string; jobCardNumber: string } | null;
   amcContractId: string | null;
   createdAt: string;
   updatedAt: string;

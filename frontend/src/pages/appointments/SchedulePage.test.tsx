@@ -138,6 +138,53 @@ describe('SchedulePage - AMC PM visit completion routing', () => {
   });
 });
 
+// 2026-09-08: once a Job Card exists for an appointment, AppointmentsService.cancel() now
+// 409s - this mirrors that guard client-side so the row doesn't even offer a Cancel button
+// the backend would just reject (same pattern as the AMC-routing block above).
+describe('SchedulePage - appointment cancellation guard (Job Card already exists)', () => {
+  it('hides the Cancel action once a Job Card exists for the appointment', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-has-jc',
+          appointmentNumber: 'APT-0200',
+          status: 'TECHNICIAN_ASSIGNED',
+          jobCard: { id: 'jc-1', jobCardNumber: 'JC-0001' },
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+
+    await screen.findByText('APT-0200');
+    const row = screen.getByText('APT-0200').closest('tr')!;
+    expect(within(row).queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+
+  it('still shows the Cancel action for a non-terminal appointment with no Job Card yet', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-no-jc',
+          appointmentNumber: 'APT-0201',
+          status: 'CONFIRMED',
+          jobCard: null,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+
+    await screen.findByText('APT-0201');
+    const row = screen.getByText('APT-0201').closest('tr')!;
+    expect(within(row).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+});
+
 // Service Desk channel gap from REDTRA360_REVIEW.md - this list IS the "dedicated list
 // view" the review calls for, so channel needs to show up as both a column and a filter
 // here, and the create form needs to actually submit it (defaulting to PHONE rather than

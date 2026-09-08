@@ -115,7 +115,7 @@ function parseOptionalNumber(raw: string): number | undefined {
 // appointments.service.ts's own guard), and this button is replaced with a link into the
 // AMC module's own completion flow for AMC rows, so a technician never hits that 400 in
 // the first place.
-function availableActions(status: AppointmentStatusValue, type: string) {
+function availableActions(status: AppointmentStatusValue, type: string, hasJobCard: boolean) {
   const isAmc = type === 'AMC';
   return {
     canAssign: status === 'SCHEDULED' || status === 'CONFIRMED',
@@ -123,7 +123,10 @@ function availableActions(status: AppointmentStatusValue, type: string) {
     canMarkOnSite: status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED',
     canComplete: status === 'ON_SITE' && !isAmc,
     canCompleteAmcVisit: status === 'ON_SITE' && isAmc,
-    canCancel: status !== 'COMPLETED' && status !== 'CANCELLED',
+    // Once a Job Card exists the appointment is fulfilled - see
+    // AppointmentsService.cancel()'s guard, which this mirrors so we don't render a
+    // button the backend will just 409 on.
+    canCancel: status !== 'COMPLETED' && status !== 'CANCELLED' && !hasJobCard,
   };
 }
 
@@ -389,7 +392,7 @@ export function SchedulePage() {
         error={error}
         emptyMessage="No appointments match these filters yet."
         rowActions={(row) => {
-          const a = availableActions(row.status, row.type);
+          const a = availableActions(row.status, row.type, !!row.jobCard);
           return (
             <div className="flex flex-wrap justify-end gap-2">
               <button onClick={() => setViewTarget(row)} className="text-xs font-medium text-slate-600 hover:text-slate-900">

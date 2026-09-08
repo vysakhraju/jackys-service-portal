@@ -154,6 +154,11 @@ export class AppointmentsService {
       .leftJoinAndSelect('apt.serviceCentre', 'sc')
       .leftJoinAndSelect('apt.technician', 'tech')
       .leftJoinAndSelect('apt.createdBy', 'createdBy')
+      // Partial select (id + jobCardNumber only, not the full Job Card) so the schedule
+      // list can know whether an appointment is already "fulfilled" - see cancel()'s
+      // guard - without hydrating the whole nested Job Card into every list row.
+      .leftJoin('apt.jobCard', 'jc')
+      .addSelect(['jc.id', 'jc.jobCardNumber'])
       .orderBy('apt.scheduledAt', 'ASC')
       .addOrderBy('apt.createdAt', 'DESC');
 
@@ -301,6 +306,23 @@ export class AppointmentsService {
 
     if ([AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED].includes(appointment.status)) {
       throw new BadRequestException(`Cannot cancel appointment with status ${appointment.status}`);
+    }
+
+    // Business rule (2026-09-08): an appointment is really only ever in one of 3
+    // meaningful stages - scheduled (in flight), completed, or cancelled - and
+    // cancellation is only valid while it's still purely a "schedule". The moment ANY
+    // Job Card exists for it (created by a technician on-site or by CCE for a workshop
+    // repair, for whatever reason), the appointment is considered fulfilled and control
+    // has passed to the Job Card's own lifecycle - the appointment must never be
+    // cancelled out from under an in-progress or completed repair. Entity-only import of
+    // JobCard (not JobCardsModule) - see this file's import comment on why; reuses the
+    // same jobCardRepository already injected for update()'s reassignment guard above.
+    const existingJobCard = await this.jobCardRepository.findOne({ where: { appointmentId: id } });
+    if (existingJobCard) {
+      throw new ConflictException(
+        `Cannot cancel this appointment: Job Card ${existingJobCard.jobCardNumber} already exists for it. ` +
+          `Once a Job Card is created the appointment is fulfilled - cancel or manage the repair through the Job Card instead.`,
+      );
     }
 
     appointment.status = AppointmentStatus.CANCELLED;

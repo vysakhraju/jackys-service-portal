@@ -18,6 +18,8 @@ describe('AppointmentsService', () => {
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     leftJoinAndSelect: jest.fn().mockReturnThis(),
+    leftJoin: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
     addOrderBy: jest.fn().mockReturnThis(),
     skip: jest.fn().mockReturnThis(),
@@ -370,6 +372,29 @@ describe('AppointmentsService', () => {
       appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.CANCELLED }));
 
       await expect(service.cancel('apt-1', 'reason', 'user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    // 2026-09-08 fix: once a Job Card exists for an appointment (created for any reason -
+    // on-site or workshop), the appointment is fulfilled and cancellation must move to the
+    // Job Card's own lifecycle instead. See appointments.service.ts#cancel's doc comment.
+    it('throws ConflictException when a Job Card already exists for the appointment', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue({ id: 'jc-1', jobCardNumber: 'JC-0001', appointmentId: 'apt-1' });
+
+      await expect(service.cancel('apt-1', 'reason', 'user-1')).rejects.toThrow(ConflictException);
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('looks up the Job Card by this appointment id before allowing cancellation', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(null);
+
+      await service.cancel('apt-1', 'reason', 'user-1');
+
+      expect(jobCardRepository.findOne).toHaveBeenCalledWith({ where: { appointmentId: 'apt-1' } });
+      expect(appointmentRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: AppointmentStatus.CANCELLED }),
+      );
     });
   });
 
