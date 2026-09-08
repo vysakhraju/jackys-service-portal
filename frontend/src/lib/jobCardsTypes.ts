@@ -21,6 +21,13 @@ export type JobCardStatusValue = (typeof JOB_CARD_STATUSES)[number];
 export const JOB_CARD_SECTIONS = ['ON_SITE_REPAIR', 'WORKSHOP'] as const;
 export type JobCardSectionValue = (typeof JOB_CARD_SECTIONS)[number];
 
+// Lane: A = on-site repair + in warranty, B = on-site repair + out of warranty,
+// C = workshop + in warranty, D = workshop + out of warranty. Derived server-side from
+// section + warrantyStatus (see backend job-card-progress.util.ts) - null until a
+// section has been assigned, since warranty status alone doesn't place a job in a lane.
+export const JOB_CARD_LANES = ['A', 'B', 'C', 'D'] as const;
+export type JobCardLaneValue = (typeof JOB_CARD_LANES)[number];
+
 export interface JobCard {
   id: string;
   jobCardNumber: string;
@@ -62,6 +69,11 @@ export interface JobCard {
   createdById: string;
   createdAt: string;
   updatedAt: string;
+  // Computed, not stored - present on GET /job-cards/:id and GET
+  // /job-cards/by-appointment/:appointmentId. Optional so any older cached response
+  // shape (or a mock in a test) that predates this field keeps typechecking.
+  lane?: JobCardLaneValue | null;
+  nextStepText?: string;
 }
 
 // Matches CreateJobCardDto exactly.

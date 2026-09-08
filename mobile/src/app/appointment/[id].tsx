@@ -579,7 +579,15 @@ export default function AppointmentDetailScreen() {
 
             {!jobCardLoading && jobCard && jobCardReady && !completeMutation.isSuccess && (
               <View>
-                <Text style={styles.meta}>{jobCard.jobCardNumber}</Text>
+                <View style={styles.capturedRow}>
+                  <Text style={styles.meta}>{jobCard.jobCardNumber}</Text>
+                  {jobCard.lane && <StatusPill status={`LANE_${jobCard.lane}`} label={`Lane ${jobCard.lane}`} />}
+                </View>
+                {jobCard.nextStepText && (
+                  <Text style={styles.nextStepText} testID="job-card-next-step">
+                    Next: {jobCard.nextStepText}
+                  </Text>
+                )}
 
                 {/* Need Spare */}
                 {queuedNeedSpare ? (
@@ -783,4 +791,5 @@ const styles = StyleSheet.create({
   capturedRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   capturedValue: { fontSize: 15, fontWeight: '600', color: '#0f172a' },
   completeSectionSpacing: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
+  nextStepText: { fontSize: 13, color: '#475569', marginBottom: 10 },
 });

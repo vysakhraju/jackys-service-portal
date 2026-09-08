@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
+import { getJobCardProgressFields, JobCardProgressFields } from './job-card-progress.util';
 import { AppointmentsService } from '../appointments/appointments.service';
 import { TechnicianService } from '../technician/technician.service';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
@@ -36,7 +37,12 @@ export class JobCardsService {
     return `${prefix}${sequence.toString().padStart(4, '0')}`;
   }
 
-  async findById(id: string): Promise<JobCard> {
+  // Return type carries the derived lane/nextStepText alongside the real entity fields -
+  // see job-card-progress.util.ts for why these are attached here (plain-object spread)
+  // rather than as entity getters. Purely additive: every existing consumer of this
+  // response shape (web JobCardsPage, the public tracking view via findByPublicToken
+  // below, etc.) keeps working unchanged since it just ignores the two new keys.
+  async findById(id: string): Promise<JobCard & JobCardProgressFields> {
     const jobCard = await this.jobCardRepository.findOne({
       where: { id },
       relations: { appointment: true, createdBy: true, warrantyOverrideByUser: true },
@@ -44,7 +50,13 @@ export class JobCardsService {
     if (!jobCard) {
       throw new NotFoundException(`Job Card ${id} not found`);
     }
-    return jobCard;
+    // Object.assign mutates the real JobCard instance in place (own-enumerable props,
+    // so JSON.stringify picks them up) rather than spreading into a plain object -
+    // several other services (e.g. DeliveryService) pass this exact return value into
+    // manager.save(jobCard) later, and TypeORM's single-arg save() infers the target
+    // entity from the object's constructor/prototype. A plain-object spread here would
+    // silently lose that prototype and break those saves.
+    return Object.assign(jobCard, getJobCardProgressFields(jobCard));
   }
 
   /**
@@ -87,12 +99,13 @@ export class JobCardsService {
     return jobCard;
   }
 
-  async findByAppointmentId(appointmentId: string): Promise<JobCard> {
+  async findByAppointmentId(appointmentId: string): Promise<JobCard & JobCardProgressFields> {
     const jobCard = await this.jobCardRepository.findOne({ where: { appointmentId } });
     if (!jobCard) {
       throw new NotFoundException(`No Job Card exists for appointment ${appointmentId}`);
     }
-    return jobCard;
+    // See findById() above for why this mutates in place instead of spreading.
+    return Object.assign(jobCard, getJobCardProgressFields(jobCard));
   }
 
   // --- Phase 7: Delivery lookups --------------------------------------------------

@@ -17,7 +17,7 @@ import {
   validateSn,
   warrantyOverride,
 } from '../../lib/jobCardsApi';
-import type { JobCard, JobCardSectionValue } from '../../lib/jobCardsTypes';
+import type { JobCard, JobCardSectionValue, JobCardLaneValue, JobCardStatusValue } from '../../lib/jobCardsTypes';
 
 // Same "one Technical Team Leader (or above)" list as the backend's WARRANTY_OVERRIDE_ROLES
 // in job-cards.controller.ts - shown here so the button only appears for someone who could
@@ -37,6 +37,135 @@ const WORKSHOP_LINKED_STATUSES: JobCard['status'][] = [
   'SPARE_PENDING',
   'READY_FOR_QC',
 ];
+
+// Lane badge - see backend job-card-progress.util.ts for the derivation this mirrors.
+// Purely a display label; nothing here gates any action.
+const LANE_META: Record<JobCardLaneValue, { title: string; className: string }> = {
+  A: { title: 'On-site repair · In warranty', className: 'bg-emerald-50 text-emerald-700' },
+  B: { title: 'On-site repair · Out of warranty', className: 'bg-amber-50 text-amber-700' },
+  C: { title: 'Workshop · In warranty', className: 'bg-sky-50 text-sky-700' },
+  D: { title: 'Workshop · Out of warranty', className: 'bg-violet-50 text-violet-700' },
+};
+
+function LaneBadge({ lane }: { lane: JobCardLaneValue }) {
+  const meta = LANE_META[lane];
+  return (
+    <span
+      title={meta.title}
+      className={`rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}
+    >
+      Lane {lane}
+    </span>
+  );
+}
+
+// --- Job Card progress stepper -------------------------------------------------------
+// Bullet-point, single-screen progress indicator (per the user's request to mirror the
+// step-by-step flow seen in the Redtra360 competitor review). Purely presentational -
+// derived entirely from status + section, both already on the JobCard response, so this
+// needs no backend change and can never disagree with the real gating logic elsewhere on
+// this page (canValidateSn/canAssignSection/etc. below stay the actual source of truth
+// for what actions are allowed).
+type StepDef = { status: JobCardStatusValue; label: string };
+type StepDisplayState = 'done' | 'current' | 'upcoming';
+type ProgressStep = StepDef & { state: StepDisplayState; note?: string };
+
+const COMMON_STEPS: StepDef[] = [
+  { status: 'OPEN', label: 'Open' },
+  { status: 'SN_VALIDATED', label: 'S/N validated' },
+  { status: 'SECTION_ASSIGNED', label: 'Section assigned' },
+];
+const ON_SITE_ONLY_STEPS: StepDef[] = [
+  { status: 'READY_FOR_QC', label: 'Ready for QC' },
+  { status: 'QC_PASSED', label: 'QC passed' },
+  { status: 'DELIVERED', label: 'Delivered' },
+];
+const WORKSHOP_ONLY_STEPS: StepDef[] = [
+  { status: 'WORKSHOP_ASSIGNED', label: 'Workshop technician assigned' },
+  { status: 'IN_PROGRESS', label: 'In progress' },
+  { status: 'READY_FOR_QC', label: 'Ready for QC' },
+  { status: 'QC_PASSED', label: 'QC passed' },
+  { status: 'DELIVERED', label: 'Delivered' },
+];
+
+function buildProgressSteps(jobCard: Pick<JobCard, 'status' | 'section'>): ProgressStep[] {
+  const sequence: StepDef[] =
+    jobCard.section === 'WORKSHOP'
+      ? [...COMMON_STEPS, ...WORKSHOP_ONLY_STEPS]
+      : jobCard.section === 'ON_SITE_REPAIR'
+        ? [...COMMON_STEPS, ...ON_SITE_ONLY_STEPS]
+        : // Section not assigned yet - the on-site vs. workshop path isn't known, so only
+          // show the steps common to both.
+          COMMON_STEPS;
+
+  // RWR loops back to SN_VALIDATED (a revised estimate is needed before re-proceeding);
+  // SPARE_PENDING is a hold off IN_PROGRESS. Neither is its own numbered step - each is
+  // shown as a note on the step it effectively sits at.
+  const effectiveStatus: JobCardStatusValue =
+    jobCard.status === 'RWR'
+      ? 'SN_VALIDATED'
+      : jobCard.status === 'SPARE_PENDING'
+        ? 'IN_PROGRESS'
+        : jobCard.status;
+
+  const currentIndex = sequence.findIndex((s) => s.status === effectiveStatus);
+
+  return sequence.map((step, i) => {
+    const state: StepDisplayState = currentIndex < 0 ? 'upcoming' : i < currentIndex ? 'done' : i === currentIndex ? 'current' : 'upcoming';
+    let note: string | undefined;
+    if (i === currentIndex && jobCard.status === 'RWR') note = 'Blocked - revised estimate required (RWR)';
+    if (i === currentIndex && jobCard.status === 'SPARE_PENDING') note = 'Waiting on spare part stock';
+    return { ...step, state, note };
+  });
+}
+
+function JobCardProgressStepper({ jobCard }: { jobCard: Pick<JobCard, 'status' | 'section'> }) {
+  if (jobCard.status === 'CANCELLED') {
+    return (
+      <div className="border-t border-slate-100 pt-4">
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Progress</p>
+        <p className="text-sm text-red-600">This Job Card was cancelled - see the reason below.</p>
+      </div>
+    );
+  }
+
+  const steps = buildProgressSteps(jobCard);
+
+  return (
+    <div className="border-t border-slate-100 pt-4">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Progress</p>
+      <ol className="space-y-2">
+        {steps.map((step) => (
+          <li key={step.status} className="flex items-start gap-2">
+            <span
+              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
+                step.state === 'done'
+                  ? 'bg-emerald-600 text-white'
+                  : step.state === 'current'
+                    ? 'border-2 border-slate-900'
+                    : 'border border-slate-300'
+              }`}
+            >
+              {step.state === 'done' ? '✓' : ''}
+            </span>
+            <span
+              className={`text-sm ${
+                step.state === 'current'
+                  ? 'font-medium text-slate-900'
+                  : step.state === 'done'
+                    ? 'text-slate-500'
+                    : 'text-slate-400'
+              }`}
+            >
+              {step.label}
+              {step.note && <span className="ml-2 text-xs font-normal text-amber-700">({step.note})</span>}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
 
 export function JobCardsPage() {
   const [searchParams] = useSearchParams();
@@ -211,8 +340,20 @@ function JobCardDetail({
             {jobCard.brand ?? 'Unknown brand'} · S/N {jobCard.serialNumber}
           </p>
         </div>
-        <StatusBadge status={jobCard.status} />
+        <div className="flex items-center gap-2">
+          {jobCard.lane && <LaneBadge lane={jobCard.lane} />}
+          <StatusBadge status={jobCard.status} />
+        </div>
       </div>
+
+      {jobCard.nextStepText && (
+        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <span className="font-medium text-slate-700">Next: </span>
+          {jobCard.nextStepText}
+        </p>
+      )}
+
+      <JobCardProgressStepper jobCard={jobCard} />
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
         <DetailRow label="Section">{jobCard.section?.replaceAll('_', ' ') ?? '—'}</DetailRow>

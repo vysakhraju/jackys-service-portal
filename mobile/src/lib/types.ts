@@ -159,6 +159,12 @@ export interface JobCardSummary {
   status: string;
   section: 'ON_SITE_REPAIR' | 'WORKSHOP' | null;
   onSiteCompletionNotes: string | null;
+  // Computed server-side (backend job-card-progress.util.ts), not stored - null until a
+  // section is assigned. 'A'/'B' = on-site repair (in/out of warranty),
+  // 'C'/'D' = workshop (in/out of warranty). Optional so any older cached response shape
+  // (or a mock in a test) that predates this field keeps typechecking.
+  lane?: 'A' | 'B' | 'C' | 'D' | null;
+  nextStepText?: string;
 }
 
 export interface NeedSpareInput {

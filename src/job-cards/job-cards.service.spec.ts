@@ -410,6 +410,41 @@ describe('JobCardsService', () => {
 
       await expect(service.findByAppointmentId('apt-missing')).rejects.toThrow(NotFoundException);
     });
+
+    // Lane/nextStepText - see job-card-progress.util.spec.ts for exhaustive coverage of the
+    // derivation itself; these confirm the two read endpoints actually attach it.
+    it('attaches lane and nextStepText to the findById response', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY, status: JobCardStatus.IN_PROGRESS }),
+      );
+
+      const result = await service.findById('jc-1');
+
+      expect(result.lane).toBe('D');
+      expect(result.nextStepText).toBe('Technician to complete the repair (or request a spare part)');
+    });
+
+    it('attaches lane and nextStepText to the findByAppointmentId response, and preserves the JobCard prototype', async () => {
+      const entity = jobCard({ section: JobCardSection.ON_SITE_REPAIR, warrantyStatus: WarrantyStatus.IN_WARRANTY });
+      jobCardRepository.findOne.mockResolvedValue(entity);
+
+      const result = await service.findByAppointmentId('apt-1');
+
+      expect(result.lane).toBe('A');
+      // Regression guard: DeliveryService and others pass this exact return value into
+      // manager.save(jobCard) elsewhere, which infers the target entity from the
+      // object's own reference/prototype - the fix must mutate in place, never spread
+      // into a new plain object that loses it.
+      expect(result).toBe(entity);
+    });
+
+    it('lane is null before a section has been assigned', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ section: null }));
+
+      const result = await service.findById('jc-1');
+
+      expect(result.lane).toBeNull();
+    });
   });
 
   describe('assignWorkshopTechnician', () => {

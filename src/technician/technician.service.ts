@@ -14,6 +14,7 @@ import { CaptureFaultSymptomDto } from './dto/capture-fault-symptom.dto';
 import { NeedSpareDto } from './dto/need-spare.dto';
 import { CompleteVisitDto } from './dto/complete-visit.dto';
 import { User } from '../auth/entities/user.entity';
+import { getJobCardProgressFields, JobCardProgressFields } from '../job-cards/job-card-progress.util';
 
 const SELF_SERVICE_ONLY_ROLE = 'TECHNICIAN_FIELD';
 
@@ -26,7 +27,7 @@ const SELF_SERVICE_ONLY_ROLE = 'TECHNICIAN_FIELD';
  * from the server instead of a local mutation-success flag that a screen remount wipes.
  */
 export interface OwnJobCardResult {
-  jobCard: JobCard | null;
+  jobCard: (JobCard & JobCardProgressFields) | null;
   spareRequest: InventoryReservation | null;
 }
 
@@ -229,7 +230,12 @@ export class TechnicianService {
     const spareRequest = jobCard
       ? await this.inventoryService.findLatestNeedSpareRequestForJobCard(jobCard.id)
       : null;
-    return { jobCard, spareRequest };
+    // See job-cards.service.ts findById() for why this mutates in place (Object.assign)
+    // rather than spreading into a plain object.
+    if (jobCard) {
+      Object.assign(jobCard, getJobCardProgressFields(jobCard));
+    }
+    return { jobCard: jobCard as (JobCard & JobCardProgressFields) | null, spareRequest };
   }
 
   /**

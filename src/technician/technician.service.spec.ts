@@ -47,6 +47,8 @@ describe('TechnicianService', () => {
     appointmentId: 'apt-1',
     status: JobCardStatus.SECTION_ASSIGNED,
     section: JobCardSection.ON_SITE_REPAIR,
+    warrantyStatus: WarrantyStatus.IN_WARRANTY,
+    customerApproved: false,
     ...overrides,
   });
 
@@ -330,7 +332,12 @@ describe('TechnicianService', () => {
       const result = await service.getOwnJobCard('apt-1', fieldTech());
 
       expect(inventoryService.findLatestNeedSpareRequestForJobCard).toHaveBeenCalledWith(jobCard().id);
-      expect(result).toEqual({ jobCard: jobCard(), spareRequest: { id: 'res-1', status: 'PENDING_REVIEW' } });
+      // Mobile Phase 5.1: getOwnJobCard() now also attaches lane/nextStepText (derived
+      // from section/warrantyStatus/status) - see job-card-progress.util.ts.
+      expect(result).toEqual({
+        jobCard: { ...jobCard(), lane: 'A', nextStepText: 'Technician to complete the on-site repair' },
+        spareRequest: { id: 'res-1', status: 'PENDING_REVIEW' },
+      });
     });
 
     it('returns spareRequest: null when this Job Card has never had a Need Spare request', async () => {
@@ -340,7 +347,22 @@ describe('TechnicianService', () => {
 
       const result = await service.getOwnJobCard('apt-1', fieldTech());
 
-      expect(result).toEqual({ jobCard: jobCard(), spareRequest: null });
+      expect(result).toEqual({
+        jobCard: { ...jobCard(), lane: 'A', nextStepText: 'Technician to complete the on-site repair' },
+        spareRequest: null,
+      });
+    });
+
+    it('attaches lane/nextStepText without losing the JobCard entity reference (regression guard)', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      const entity = jobCard({ section: JobCardSection.WORKSHOP, warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY });
+      jobCardRepository.findOne.mockResolvedValue(entity);
+      inventoryService.findLatestNeedSpareRequestForJobCard.mockResolvedValue(null);
+
+      const result = await service.getOwnJobCard('apt-1', fieldTech());
+
+      expect(result.jobCard).toBe(entity);
+      expect(result.jobCard?.lane).toBe('D');
     });
 
     it('returns {jobCard: null, spareRequest: null} (not an error) when no Job Card exists yet', async () => {

@@ -15,6 +15,13 @@ const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
   // uses for IW/OOW.
   IW: { bg: '#dcfce7', fg: '#166534' },
   OOW: { bg: '#fef9c3', fg: '#854d0e' },
+  // Job Card lane badge (mirrors the web app's JobCardsPage LANE_META) - prefixed
+  // LANE_ so these synthetic keys can never collide with a real backend status/enum
+  // value passed to this same lookup.
+  LANE_A: { bg: '#dcfce7', fg: '#166534' },
+  LANE_B: { bg: '#fef9c3', fg: '#854d0e' },
+  LANE_C: { bg: '#e0f2fe', fg: '#0369a1' },
+  LANE_D: { bg: '#ede9fe', fg: '#6d28d9' },
 };
 
 // `label` overrides the auto-generated "STATUS_LIKE_THIS" text (e.g. "In Warranty"
