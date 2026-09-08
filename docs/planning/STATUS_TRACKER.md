@@ -3937,8 +3937,8 @@ in priority order: ~~Fault Codes Standard Repair Time + Technician Efficiency re
 (done, see below), Lane label + contextual "Next" text bundling `JobCardSection`+
 ~~`warrantyStatus`~~ (done, see below), ~~Service Desk `channel` field on `Appointment`~~
 (done, see below), ~~Google Maps short-link -> lat/long~~ (done, see below), then bigger
-items: timer pause-reasons/SLA-safe pausing, and a Gantt-style technician assignment
-board with conflict detection.
+items: ~~timer pause-reasons/SLA-safe pausing~~ (done, see below), and a Gantt-style
+technician assignment board with conflict detection - the last one left.
 
 ## Fault Codes SRT + Technician Efficiency report - done (2026-09-08)
 
@@ -4098,6 +4098,65 @@ list from the review), picked up right after parking the signature-pad follow-up
   right now), `tsc -b` clean.
 
 **Committed as `5ef38e2`**, on top of `a07ccb6`. `main`/`master` synced. Not yet pushed
+to the remote - push both branches yourself when ready.
+
+## Task timer pause-reasons / SLA-safe pausing - done (2026-09-08)
+
+Next item off the Redtra360 gap list (priority #8) - the only item now left from that
+review is the Gantt-style technician assignment board.
+
+- **`JobCardTaskPause` entity** (`src/job-cards/entities/job-card-task-pause.entity.ts`) -
+  one row per pause, `TaskPauseReason` enum (`MATERIAL_SHORTAGE`,
+  `AWAITING_CUSTOMER_APPROVAL`, `CUSTOMER_UNAVAILABLE`, `BREAK`, `OTHER`).
+  `MATERIAL_SHORTAGE` is the only SLA-exempt reason - every other reason is tracked (so
+  the SLA Breach report finally gets real reason codes, not a fabricated category) but
+  still counts against SLA, since it reflects the service centre's own time. Deliberately
+  never a stored boolean/flag on `JobCard` - "currently paused" is always derived by
+  querying for the row (if any) on that job with `resumedAt IS NULL`, this codebase's
+  established computed-not-stored convention (same as Lane/`nextStepText`).
+- **Manual pause/resume**: `POST /job-cards/:id/pause` (body: `reason` + optional
+  `notes`), `POST /job-cards/:id/resume`, `GET /job-cards/:id/pauses` (full history).
+  Gated to the assigned technician (workshop *or* field - on-site jobs never get an
+  `assignedWorkshopTechnicianId` at all, so ownership falls back to the appointment's own
+  `technicianId`) or a `JOB_CARD_ROLES` office role, mirroring
+  `WorkshopService.assertOwnership()`'s pattern. Only pausable from
+  `SECTION_ASSIGNED`/`WORKSHOP_ASSIGNED`/`IN_PROGRESS`/`SPARE_PENDING`; only one open
+  pause at a time (409 on a double-pause or a resume with nothing open).
+- **Auto-pause/resume on Need Spare shortfalls** - the transcript's own example scenario
+  ("item is not there, send a material request") needs zero extra technician action:
+  `JobCardsService.setSparePending()`/`resumeFromSparePending()` (already the hook points
+  `WorkshopService.requestSpare()` calls) now auto-open/close a `MATERIAL_SHORTAGE` pause,
+  skipping the auto-open if a pause is already open for any other reason (never stacks a
+  second concurrent pause) and only auto-closing a pause it auto-opened itself (a
+  technician's own manual `MATERIAL_SHORTAGE` pause is left for them to resume
+  explicitly).
+- **`OperationalReportsService.getSlaBreach()`** now subtracts `MATERIAL_SHORTAGE` paused
+  duration (bounded to `[createdAt, qcApprovedAt]`, so a pause a technician forgot to
+  resume before QC approval can never exclude more than the job's own elapsed time) from
+  the elapsed-hours calculation, and reports how much it excluded per breached job
+  (`materialShortageHoursExcluded`) - the report's own class doc comment used to flag
+  "reason codes... are not tracked" as a known gap; this fills it for the one reason that
+  actually changes the SLA math.
+- **New `GET /reports/operational/time-waiting-on-parts`** report - your own ask from the
+  review call ("a report metric on how long a job sits in a 'waiting for part' status"),
+  aggregating `MATERIAL_SHORTAGE` pause time per Job Card (both auto-opened and manually
+  logged), with a `stillWaiting` flag for a pause that's currently open.
+- Web (`JobCardsPage.tsx`): a "Task timer" card - reason chips + optional notes when
+  nothing is paused, a Resume button + reason/notes/who-opened-it banner when something
+  is, and a collapsible full pause history. Mobile (`appointment/[id].tsx`): the same
+  pause/resume control for the field technician's own on-site job (workshop jobs' pause
+  state is a Workshop-screen concern this app never shows), using tappable reason chips
+  instead of a dropdown.
+- 66 new backend tests (entity/service ownership+invariants, the auto-pause/resume hooks,
+  the SLA Breach exclusion math including the forgot-to-resume cap, the new report).
+  **725/725 backend tests passing**, `tsc --noEmit` clean. 8 new frontend web tests
+  (wrapper URLs only, matching this page's existing test-coverage convention - no
+  dedicated `JobCardsPage.test.tsx` exists yet, same as before this change). 15 new
+  mobile tests (chip selection, pause/resume round-trip, error states, hidden for
+  workshop jobs and once a visit is completed). **141/141 mobile tests passing**,
+  `tsc --noEmit` clean on both frontend and mobile.
+
+**Committed as `6614811`**, on top of `8310549`. `main`/`master` synced. Not yet pushed
 to the remote - push both branches yourself when ready.
 
 ## Open items / blockers (from planning docs, still unresolved)
