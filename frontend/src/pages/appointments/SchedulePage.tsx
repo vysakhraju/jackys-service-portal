@@ -735,7 +735,11 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
           {visit && (
             <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
               <DetailRow label="Started">{new Date(visit.startedAt).toLocaleString()}</DetailRow>
-              <DetailRow label="GPS">{visit.startGpsLat.toFixed(4)}, {visit.startGpsLng.toFixed(4)}</DetailRow>
+              {/* Number(...) guards against a decimal column ever coming back as a string
+                  (node-postgres's default for NUMERIC/DECIMAL) - see main.ts's global type
+                  parser fix for the real root cause; this is just defense-in-depth so a
+                  future drift here degrades to a value, not a blank page. */}
+              <DetailRow label="GPS">{Number(visit.startGpsLat).toFixed(4)}, {Number(visit.startGpsLng).toFixed(4)}</DetailRow>
               <DetailRow label="Serial / warranty">
                 {visit.serialNumber ? (
                   <>

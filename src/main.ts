@@ -5,6 +5,12 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import * as cors from 'cors';
 import { AppModule } from './app.module';
+import { registerPgTypeParsers } from './database-type-parsers';
+
+// Must happen before TypeORM opens its first connection - see database-type-parsers.ts
+// for why (node-postgres returns NUMERIC/DECIMAL columns as strings by default, which
+// silently breaks every screen that calls a number method on one).
+registerPgTypeParsers();
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
