@@ -7,17 +7,31 @@ Built with **NestJS + PostgreSQL + JWT** (backend) and **React** (frontend).
 ## Status
 
 Backend: MVP (8-week plan) + AMC + Dismantling + Reports/Dashboards + Warranty Claims +
-Finance/Quality/Operational Dashboards + User Management + Extra Role Access all built
-and live-verified — 158+ REST endpoints, 1 WebSocket gateway, 600+ automated tests
-passing. Frontend: all 12 phases (Authentication through Reports/Dashboards) built and
-live-verified, plus User Management and Extra Role Access.
+Finance/Quality/Operational Dashboards + User Management + Extra Role Access + Job Card
+Journey + admin Reset Password all built and live-verified — 185+ REST endpoints, 2
+WebSocket gateways (live Kanban board + Need Spare pop-up notifications), 777/777
+automated backend tests passing. Frontend: all 12 phases (Authentication through
+Reports/Dashboards) built and live-verified, plus User Management, Extra Role Access,
+Job Card Journey, and admin Reset Password — 440/440 automated frontend tests passing.
 
-Mobile app (`mobile/`, React Native/Expo, Field Technician only): Phases 1-4 built and
-live-verified - login, Today's Schedule, Start Visit + GPS, Serial Number/warranty +
-Fault/Symptom capture, and an offline queue so a technician with no signal can keep
-working and sync automatically once reconnected. Phase 5 (Need Spare +
-Complete/QC-handoff) is next. See "Running the Mobile App" below and `mobile/README.md`
-for the full walkthrough.
+Mobile app (`mobile/`, React Native/Expo, Field Technician only): **all 5 planned
+phases built and live-verified** - login, Today's Schedule, Start Visit + GPS, Serial
+Number/warranty + Fault/Symptom capture, an offline queue so a technician with no
+signal can keep working and sync automatically once reconnected, and Need Spare +
+Complete/QC-handoff (with a Team Leader review screen and a live pop-up notification on
+the web side). Push notifications are the one deliberately-deferred piece, parked for
+v1.1 in favor of pull-to-refresh. See "Running the Mobile App" below and
+`mobile/README.md` for the full walkthrough.
+
+What's actually left to build, roughly in priority order: a Gantt-style technician
+assignment board with conflict detection (the last open item from a competitor-system
+review - see `docs/planning/STATUS_TRACKER.md`'s "Redtra360 competitor-system review"
+entry for the full comparison and what's already been adopted from it); notify-customer/
+notify-technician checkboxes on appointment creation (parked behind the WhatsApp
+Business account approval below, same as real Estimate notification delivery); the
+customer portal's branding/visual design pass; and auto-collapsing job card sections as
+a job accumulates more stages. None of these are blockers - the app is fully usable and
+tested end-to-end without them.
 
 Full detail, updated every session: **`docs/planning/STATUS_TRACKER.md`** (what's
 built, what's not, design decisions and honest simplifications) and
@@ -176,6 +190,92 @@ PostgreSQL can stay running all the time — no need to stop it between sessions
 | First-ever login setup | `npm run seed:admin` (repo root, once only) | — |
 | Default login | — | `admin@jackys.com` / `Admin123!` |
 
+## Letting a Colleague Test Over the Same Wi-Fi (LAN)
+
+Both servers bind to `localhost` by default, which only your own laptop can reach. To
+let a colleague on the same office Wi-Fi open the app from their own machine/phone,
+point them at your laptop's LAN IP instead — no separate deployment needed.
+
+### 1. Find your laptop's LAN IP
+
+```powershell
+ipconfig
+```
+
+Look for the `IPv4 Address` under your active adapter (Wi-Fi or Ethernet) — e.g.
+`192.168.60.85`. Use that number in place of `192.168.60.85` below if yours is different.
+
+### 2. Allow the frontend's origin in the backend's CORS config
+
+Edit the repo-root `.env` file and set (or add) `CORS_ORIGIN` to a **comma-separated
+list that still includes `localhost`**:
+
+```
+CORS_ORIGIN=http://localhost:5173,http://192.168.60.85:5173
+```
+
+> **Important — this is a real footgun, not a hypothetical**: `CORS_ORIGIN`
+> **replaces** the whole allowed-origins list, it does not add to the built-in
+> defaults. If you set it to only the LAN address (`CORS_ORIGIN=http://192.168.60.85:5173`),
+> your *own* `http://localhost:5173` frontend will immediately start failing to log in
+> with a CORS error in the browser console, even though Swagger still works fine
+> (Swagger isn't a cross-origin request, so it doesn't hit this check). Always include
+> both origins, comma-separated, as shown above.
+
+Editing `.env` is the recommended way since it persists across restarts. If you'd
+rather not touch `.env`, you can set it just for the current PowerShell window instead
+(PowerShell doesn't support the `VAR=value` bash syntax — use `$env:`):
+
+```powershell
+$env:CORS_ORIGIN="http://localhost:5173,http://192.168.60.85:5173"
+npm run start:dev
+```
+
+### 3. Start the frontend so it's reachable from other devices
+
+By default Vite's dev server also only listens on `localhost`. Start it with `--host`
+so it binds to your LAN interface too:
+
+```powershell
+cd "D:\Jackys\jackys service portal\frontend"
+npm run dev -- --host
+```
+
+### 4. Point the frontend at your LAN IP (not `localhost`)
+
+Edit `frontend/.env` (create it if it doesn't exist) so the app calls the backend at
+your LAN IP instead of `localhost` — this still works fine for you too, since your own
+laptop can reach itself by its LAN IP:
+
+```
+VITE_API_BASE_URL=http://192.168.60.85:3000/api/v1
+VITE_WS_BASE_URL=http://192.168.60.85:3000
+```
+
+Restart `npm run dev -- --host` after saving so Vite picks up the change.
+
+### 5. Share the URL
+
+Your colleague opens **`http://192.168.60.85:5173`** in their own browser (same Wi-Fi
+network required) and signs in normally.
+
+### 6. If it still can't connect: check the Windows Firewall
+
+Windows may block inbound connections on ports 3000/5173 from other devices the first
+time. If your colleague's browser just hangs/times out (as opposed to a CORS error),
+allow the ports:
+
+```powershell
+New-NetFirewallRule -DisplayName "Jackys Backend 3000" -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "Jackys Frontend 5173" -Direction Inbound -LocalPort 5173 -Protocol TCP -Action Allow
+```
+
+### Switching back to solo/localhost-only testing
+
+Set `CORS_ORIGIN` back to just `http://localhost:5173` (or remove it from `.env`
+entirely — the backend's built-in default already includes it), and change
+`frontend/.env` back to `http://localhost:3000/...`. Restart both servers.
+
 ## Running the Mobile App (Field Technician)
 
 The mobile app is a separate React Native/Expo project in `mobile/` - it talks to the
@@ -210,10 +310,14 @@ This opens the Expo dev server and prints a QR code. Scan it with Expo Go (phone
 be on the **same Wi-Fi network** as this PC), or press `a`/`i` in the terminal for an
 Android emulator/iOS Simulator. Sign in with the `TECHNICIAN_FIELD` login above.
 
-**What's built:** login + Today's Schedule, Start Visit + GPS capture, Serial
-Number/warranty + Fault/Symptom capture, and an offline queue that lets a technician
-keep working with no signal and syncs automatically once reconnected - all built and
-live-verified. Need Spare + Complete/QC-handoff is next, not built yet.
+**What's built:** all 5 planned phases - login + Today's Schedule, Start Visit + GPS
+capture, Serial Number/warranty + Fault/Symptom capture, an offline queue that lets a
+technician keep working with no signal and syncs automatically once reconnected, and
+Need Spare + Complete/QC-handoff (a technician can request a spare or hand off a
+finished repair to QC fully offline; it syncs and routes to a Team Leader review screen
+- with a live pop-up notification on the web side - once reconnected). All built and
+live-verified. Push notifications are the one deliberately-deferred piece (v1.1,
+pull-to-refresh covers it for now).
 
 **Full walkthrough, including a real device-connectivity test for the offline queue
 and troubleshooting a stuck LAN connection:** `mobile/README.md`. Endpoint-level detail
@@ -323,7 +427,11 @@ npm run preview  # Preview a production build locally
 - `JWT_SECRET`, `JWT_REFRESH_SECRET` (min 32 chars, change in production!)
 - `CORS_ORIGIN` — comma-separated allowed origins; must include the frontend's own
   origin (`http://localhost:5173` in dev) or the browser will silently block every
-  request from it
+  request from it. **Setting this REPLACES the built-in default list, it does not
+  add to it** — if you set it (e.g. for LAN testing, see "Letting a Colleague Test
+  Over the Same Wi-Fi" above), always keep `http://localhost:5173` in the
+  comma-separated list too, or your own local frontend will start failing to log in
+  with a CORS error even though Swagger still works
 - External API keys for WhatsApp, Email, SMS, Warranty (not yet wired to a real provider)
 
 `frontend/.env` (also gitignored) holds the frontend's own config — just the backend's

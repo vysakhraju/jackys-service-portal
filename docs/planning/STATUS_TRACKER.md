@@ -4395,16 +4395,31 @@ to the remote - push both branches yourself when ready.
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
   started (shares TypeScript and much of the existing frontend's API/auth/type layer
   with the current React app, unlike Flutter's separate Dart ecosystem).
-- ~~Mobile app v1 scope~~ — scoped 2026-09-03, not yet built: see
-  `docs/planning/MOBILE_APP_SCOPE_v1.md`. Field Technicians only for v1; iOS +
-  Android together; offline mode (NFR-03) built into v1 rather than deferred; push
-  notifications deferred to v1.1. ~~Need Spare's offline behavior~~ — decided: queues
-  client-side like every other capture action, pushed to the server on reconnect;
-  ~~Need Spare's server-side approval rule~~ — decided 2026-09-03: routes through
-  Team Leader review first (same pattern as idle/stale reservation review), not an
-  immediate auto-reservation. Still open: confirm Workshop Technician is genuinely
-  out of v1, and Complete/QC-handoff's own server-side shape (and whether it queues
-  offline the same way) - see the doc's "Open questions" section.
+- ~~Mobile app v1 scope~~ — scoped 2026-09-03, **all 5 phases now built and
+  live-verified** (2026-09-07/08): see `docs/planning/MOBILE_APP_SCOPE_v1.md`. Field
+  Technicians only for v1; iOS + Android together; offline mode (NFR-03) built into v1;
+  push notifications deferred to v1.1 (pull-to-refresh covers it). ~~Need Spare's
+  offline behavior~~ / ~~Need Spare's server-side approval rule~~ / ~~Confirm Workshop
+  Technician is genuinely out of v1~~ / ~~Complete/QC-handoff's own server-side shape~~
+  — all decided and built: Need Spare + Complete/QC-handoff both queue offline like
+  every other capture action, Need Spare routes through a Team Leader review screen
+  (with a live pop-up notification on web), Workshop Technician stays out of the mobile
+  app entirely. See "Mobile Phase 5 live-verify follow-up" above for the follow-up fixes
+  that shipped alongside it.
+- ~~Redtra360 competitor-system review~~ — reviewed 2026-09-07, acted on 2026-09-08:
+  of the 9 items surfaced, everything is now built (Lane label, Google Maps short-link,
+  Service Desk channel field, Fault Codes SRT + Technician Efficiency report, task-timer
+  pause-reasons + time-waiting-on-parts report) or was already covered structurally
+  (job-warranty-vs-unit-warranty split, FT/WT typing). **One item left, not started:** a
+  Gantt-style technician assignment board with conflict detection (color-coded per-
+  technician timeline, "Add crew helper," a hard confirmation before a double-booking
+  saves) - the biggest lift on the list, roadmap item rather than urgent. Two smaller
+  items from the review were never explicitly picked up either: notify-customer/
+  notify-technician checkboxes on appointment creation (the Service Desk channel-field
+  work only built the channel column/filter, not the notify toggles - low priority
+  since real delivery is blocked on the WhatsApp Business account below anyway), and
+  auto-collapsing job card sections as a job accumulates more visible stages (small UI
+  polish, not started).
 - WhatsApp Business API account approval — paused, not actively pursued right now:
   waiting on the company itself to create a WhatsApp Business account first (your
   instruction, 2026-09-03). Still blocking real Estimate notification delivery
