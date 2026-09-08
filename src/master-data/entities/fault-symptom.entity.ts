@@ -46,6 +46,16 @@ export class FaultSymptom {
   @Column({ default: false })
   requiresWorkshop: boolean;
 
+  // Standard Repair Time, in minutes - the expected time to complete a repair diagnosed
+  // with this fault code. Feeds OperationalReportsService.getTechnicianEfficiency(), which
+  // compares this against each job's actual elapsed time (TechnicianVisit.startedAt ->
+  // JobCard.qcApprovedAt, the same "actual time" convention getTechnicianProductivity
+  // already uses) to produce a per-technician efficiency %. Nullable/optional - a fault
+  // code with no SRT set is simply excluded from that report rather than defaulting to 0
+  // and reporting a nonsensical (near-infinite) efficiency number.
+  @Column({ type: 'int', nullable: true })
+  standardRepairMinutes: number | null;
+
   @Column({ default: true })
   isActive: boolean;
 

@@ -18,6 +18,7 @@ describe('OperationalReportsService', () => {
   let userRepo: any;
   let reservationRepo: any;
   let sparePartRepo: any;
+  let faultSymptomRepo: any;
 
   beforeEach(() => {
     jobCardRepo = { createQueryBuilder: jest.fn(() => makeQb([])) };
@@ -26,8 +27,17 @@ describe('OperationalReportsService', () => {
     userRepo = { find: jest.fn().mockResolvedValue([]) };
     reservationRepo = { createQueryBuilder: jest.fn(() => makeQb([])) };
     sparePartRepo = { find: jest.fn().mockResolvedValue([]) };
+    faultSymptomRepo = { find: jest.fn().mockResolvedValue([]) };
 
-    service = new OperationalReportsService(jobCardRepo, visitRepo, appointmentRepo, userRepo, reservationRepo, sparePartRepo);
+    service = new OperationalReportsService(
+      jobCardRepo,
+      visitRepo,
+      appointmentRepo,
+      userRepo,
+      reservationRepo,
+      sparePartRepo,
+      faultSymptomRepo,
+    );
   });
 
   describe('getTechnicianProductivity (zero grace period on-time arrival)', () => {
@@ -66,6 +76,115 @@ describe('OperationalReportsService', () => {
       const row = report.rows[0];
       expect(row.jobsCompleted).toBe(2);
       expect(row.avgHoursLoginToQc).toBe(2);
+    });
+  });
+
+  describe('getTechnicianEfficiency (SRT vs actual, per fault code, whole-job approximation)', () => {
+    const startedAt = new Date('2026-08-10T09:00:00.000Z');
+
+    it('excludes a job whose fault code has no SRT set, rather than fabricating an efficiency figure', async () => {
+      jobCardRepo.createQueryBuilder = jest.fn(() =>
+        makeQb([
+          {
+            jobCardId: 'jc-1', jobCardNumber: 'JC-0001', faultCode: 'F-NO-SRT', qcRejectionCount: 0,
+            qcApprovedAt: new Date(startedAt.getTime() + 30 * 60_000), technicianId: 'tech-1', startedAt,
+          },
+        ]),
+      );
+      faultSymptomRepo.find = jest.fn().mockResolvedValue([]); // No FaultSymptom row -> no SRT known
+
+      const report = await service.getTechnicianEfficiency();
+
+      expect(report.rows).toHaveLength(0);
+      expect(report.summaryByTechnician).toHaveLength(0);
+    });
+
+    it('computes efficiencyPercent = SRT / actual * 100, over 100% when the technician beats standard time', async () => {
+      jobCardRepo.createQueryBuilder = jest.fn(() =>
+        makeQb([
+          {
+            jobCardId: 'jc-1', jobCardNumber: 'JC-0001', faultCode: 'F001', qcRejectionCount: 0,
+            qcApprovedAt: new Date(startedAt.getTime() + 30 * 60_000), technicianId: 'tech-1', startedAt, // 30 actual minutes
+          },
+        ]),
+      );
+      faultSymptomRepo.find = jest.fn().mockResolvedValue([{ faultCode: 'F001', standardRepairMinutes: 45 }]);
+      userRepo.find = jest.fn().mockResolvedValue([{ id: 'tech-1', firstName: 'Ali', lastName: 'Khan' }]);
+
+      const report = await service.getTechnicianEfficiency();
+
+      expect(report.rows).toHaveLength(1);
+      expect(report.rows[0]).toEqual(
+        expect.objectContaining({
+          standardRepairMinutes: 45,
+          actualMinutes: 30,
+          efficiencyPercent: 150, // faster than standard
+          hadQcRejection: false,
+          technicianName: 'Ali Khan',
+        }),
+      );
+    });
+
+    it('flags hadQcRejection when the job card was rejected by QC at least once, and folds it into qcFirstPassPct', async () => {
+      jobCardRepo.createQueryBuilder = jest.fn(() =>
+        makeQb([
+          {
+            jobCardId: 'jc-1', jobCardNumber: 'JC-0001', faultCode: 'F001', qcRejectionCount: 0,
+            qcApprovedAt: new Date(startedAt.getTime() + 45 * 60_000), technicianId: 'tech-1', startedAt,
+          },
+          {
+            jobCardId: 'jc-2', jobCardNumber: 'JC-0002', faultCode: 'F001', qcRejectionCount: 1,
+            qcApprovedAt: new Date(startedAt.getTime() + 45 * 60_000), technicianId: 'tech-1', startedAt,
+          },
+        ]),
+      );
+      faultSymptomRepo.find = jest.fn().mockResolvedValue([{ faultCode: 'F001', standardRepairMinutes: 45 }]);
+
+      const report = await service.getTechnicianEfficiency();
+
+      expect(report.rows.find((r) => r.jobCardId === 'jc-2')!.hadQcRejection).toBe(true);
+      const summary = report.summaryByTechnician.find((s) => s.technicianId === 'tech-1')!;
+      expect(summary.jobsCompleted).toBe(2);
+      expect(summary.qcFirstPassPct).toBe(50); // 1 of 2 jobs passed QC with zero rejections
+    });
+
+    it('excludes a job with a non-positive/invalid actual duration, same defensive rule as getTechnicianProductivity', async () => {
+      jobCardRepo.createQueryBuilder = jest.fn(() =>
+        makeQb([
+          {
+            jobCardId: 'jc-1', jobCardNumber: 'JC-0001', faultCode: 'F001', qcRejectionCount: 0,
+            qcApprovedAt: new Date(startedAt.getTime() - 60_000), technicianId: 'tech-1', startedAt, // qcApprovedAt before startedAt
+          },
+        ]),
+      );
+      faultSymptomRepo.find = jest.fn().mockResolvedValue([{ faultCode: 'F001', standardRepairMinutes: 45 }]);
+
+      const report = await service.getTechnicianEfficiency();
+
+      expect(report.rows).toHaveLength(0);
+    });
+
+    it('averages SRT, actual minutes, and efficiency per technician across multiple jobs, sorted best-efficiency first', async () => {
+      jobCardRepo.createQueryBuilder = jest.fn(() =>
+        makeQb([
+          {
+            jobCardId: 'jc-1', jobCardNumber: 'JC-0001', faultCode: 'F001', qcRejectionCount: 0,
+            qcApprovedAt: new Date(startedAt.getTime() + 60 * 60_000), technicianId: 'tech-slow', startedAt, // 60 actual vs 45 SRT = 75%
+          },
+          {
+            jobCardId: 'jc-2', jobCardNumber: 'JC-0002', faultCode: 'F001', qcRejectionCount: 0,
+            qcApprovedAt: new Date(startedAt.getTime() + 30 * 60_000), technicianId: 'tech-fast', startedAt, // 30 actual vs 45 SRT = 150%
+          },
+        ]),
+      );
+      faultSymptomRepo.find = jest.fn().mockResolvedValue([{ faultCode: 'F001', standardRepairMinutes: 45 }]);
+
+      const report = await service.getTechnicianEfficiency();
+
+      expect(report.summaryByTechnician[0].technicianId).toBe('tech-fast');
+      expect(report.summaryByTechnician[0].avgEfficiencyPercent).toBe(150);
+      expect(report.summaryByTechnician[1].technicianId).toBe('tech-slow');
+      expect(report.summaryByTechnician[1].avgEfficiencyPercent).toBe(75);
     });
   });
 

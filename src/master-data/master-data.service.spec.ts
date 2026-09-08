@@ -140,6 +140,18 @@ describe('MasterDataService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it('passes standardRepairMinutes (SRT) through to the created fault symptom when given', async () => {
+      faultSymptomRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createFaultSymptom({
+        faultCode: 'F1',
+        symptomCode: 'S1',
+        standardRepairMinutes: 45,
+      });
+
+      expect(result).toEqual(expect.objectContaining({ standardRepairMinutes: 45 }));
+    });
+
     it('finds active fault symptoms filtered by category when provided', async () => {
       const qb = buildQb([{ id: '1' }], true);
       faultSymptomRepository.createQueryBuilder.mockReturnValue(qb);

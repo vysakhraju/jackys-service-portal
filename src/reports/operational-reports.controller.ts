@@ -31,6 +31,14 @@ export class OperationalReportsController {
     return this.operationalReportsService.getSlaBreach(thresholdHours ? Number(thresholdHours) : undefined);
   }
 
+  @Get('technician-efficiency')
+  @ApiQuery({ name: 'periodStart', required: false })
+  @ApiQuery({ name: 'periodEnd', required: false })
+  @ApiOperation({ summary: 'Technician Efficiency - Standard Repair Time (per fault code) vs actual elapsed time (TechnicianVisit.startedAt -> JobCard.qcApprovedAt), by technician and by job. Jobs whose fault code has no SRT set are omitted.' })
+  getTechnicianEfficiency(@Query('periodStart') periodStart?: string, @Query('periodEnd') periodEnd?: string) {
+    return this.operationalReportsService.getTechnicianEfficiency(periodStart, periodEnd);
+  }
+
   @Get('spare-parts-consumption')
   @ApiQuery({ name: 'periodStart', required: false })
   @ApiQuery({ name: 'periodEnd', required: false })

@@ -7,6 +7,7 @@ import { Appointment } from '../appointments/entities/appointment.entity';
 import { User } from '../auth/entities/user.entity';
 import { InventoryReservation, ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
 import { SparePart } from '../master-data/entities/spare-part.entity';
+import { FaultSymptom } from '../master-data/entities/fault-symptom.entity';
 
 const COMPLETED_STATUSES = [JobCardStatus.QC_PASSED, JobCardStatus.DELIVERED];
 const DEFAULT_SLA_HOURS = 48; // BRD 18.4's own literal example ("e.g., 48-hour completion") - no stored per-job SLA field exists.
@@ -76,6 +77,37 @@ export interface SpareConsumptionReport {
   byWarrantyStatus: SpareConsumptionByGroup[];
 }
 
+export interface TechnicianEfficiencyRow {
+  jobCardId: string;
+  jobCardNumber: string;
+  technicianId: string;
+  technicianName: string;
+  faultCode: string;
+  standardRepairMinutes: number;
+  actualMinutes: number;
+  efficiencyPercent: number;
+  hadQcRejection: boolean;
+}
+
+export interface TechnicianEfficiencySummaryRow {
+  technicianId: string;
+  technicianName: string;
+  jobsCompleted: number;
+  avgStandardRepairMinutes: number;
+  avgActualMinutes: number;
+  avgEfficiencyPercent: number;
+  qcFirstPassPct: number;
+}
+
+export interface TechnicianEfficiencyReport {
+  asOf: Date;
+  periodStart: string | null;
+  periodEnd: string | null;
+  rows: TechnicianEfficiencyRow[];
+  summaryByTechnician: TechnicianEfficiencySummaryRow[];
+  note: string;
+}
+
 @Injectable()
 export class OperationalReportsService {
   constructor(
@@ -85,6 +117,7 @@ export class OperationalReportsService {
     @InjectRepository(User) private userRepo: Repository<User>,
     @InjectRepository(InventoryReservation) private reservationRepo: Repository<InventoryReservation>,
     @InjectRepository(SparePart) private sparePartRepo: Repository<SparePart>,
+    @InjectRepository(FaultSymptom) private faultSymptomRepo: Repository<FaultSymptom>,
   ) {}
 
   private round(n: number): number {
@@ -149,6 +182,106 @@ export class OperationalReportsService {
       periodEnd: periodEnd ?? null,
       rows: resultRows,
       note: 'Customer rating is not captured anywhere in this app and is omitted from this report (the BRD itself marks it "(if captured)"). On-time arrival uses zero grace period (technician start time strictly at-or-before the scheduled time) - the BRD specifies no grace window.',
+    };
+  }
+
+  /**
+   * Technician Efficiency - compares each completed Job Card's Standard Repair Time
+   * (FaultSymptom.standardRepairMinutes, keyed off JobCard.faultCode) against its actual
+   * elapsed time. "Actual" uses the same TechnicianVisit.startedAt -> JobCard.qcApprovedAt
+   * convention as getTechnicianProductivity's avgHoursLoginToQc above, in minutes rather
+   * than hours - there is no per-task start/pause/resume timer in this app yet, so this is
+   * a whole-job approximation, not a stopwatch-accurate one (it does not exclude, say, time
+   * spent waiting on a material request). Jobs whose fault code has no SRT set are
+   * excluded entirely rather than reported with a fabricated efficiency figure.
+   *
+   * efficiencyPercent = standardRepairMinutes / actualMinutes * 100 - over 100% means the
+   * technician beat the standard time; under 100% means it took longer than standard.
+   */
+  async getTechnicianEfficiency(periodStart?: string, periodEnd?: string): Promise<TechnicianEfficiencyReport> {
+    let qb = this.jobCardRepo
+      .createQueryBuilder('jc')
+      .innerJoin(TechnicianVisit, 'tv', '"tv"."appointmentId" = "jc"."appointmentId"')
+      .select('"jc"."id"', 'jobCardId')
+      .addSelect('"jc"."jobCardNumber"', 'jobCardNumber')
+      .addSelect('"jc"."faultCode"', 'faultCode')
+      .addSelect('"jc"."qcApprovedAt"', 'qcApprovedAt')
+      .addSelect('"jc"."qcRejectionCount"', 'qcRejectionCount')
+      .addSelect('"tv"."technicianId"', 'technicianId')
+      .addSelect('"tv"."startedAt"', 'startedAt')
+      .where('"jc"."status" IN (:...statuses)', { statuses: COMPLETED_STATUSES });
+
+    if (periodStart) qb = qb.andWhere('"jc"."qcApprovedAt" >= :periodStart', { periodStart });
+    if (periodEnd) qb = qb.andWhere('"jc"."qcApprovedAt" <= :periodEnd', { periodEnd: `${periodEnd} 23:59:59.999` });
+
+    const rawRows = await qb.getRawMany();
+
+    const faultCodes = [...new Set(rawRows.map((r) => r.faultCode))];
+    const faultSymptoms = faultCodes.length
+      ? await this.faultSymptomRepo.find({ where: { faultCode: In(faultCodes) } })
+      : [];
+    const srtByFaultCode = new Map(faultSymptoms.map((f) => [f.faultCode, f.standardRepairMinutes]));
+
+    const technicianIds = [...new Set(rawRows.map((r) => r.technicianId))];
+    const technicians = technicianIds.length
+      ? await this.userRepo.find({ where: { id: In(technicianIds) }, select: { id: true, firstName: true, lastName: true } })
+      : [];
+    const nameById = new Map(technicians.map((t) => [t.id, `${t.firstName} ${t.lastName}`]));
+
+    const rows: TechnicianEfficiencyRow[] = [];
+    for (const r of rawRows) {
+      const standardRepairMinutes = srtByFaultCode.get(r.faultCode);
+      if (standardRepairMinutes == null) continue; // No SRT set for this fault code - exclude rather than fabricate.
+
+      const actualMinutes = (new Date(r.qcApprovedAt).getTime() - new Date(r.startedAt).getTime()) / 60_000;
+      if (!Number.isFinite(actualMinutes) || actualMinutes <= 0) continue; // Same defensive skip as getTechnicianProductivity.
+
+      rows.push({
+        jobCardId: r.jobCardId,
+        jobCardNumber: r.jobCardNumber,
+        technicianId: r.technicianId,
+        technicianName: nameById.get(r.technicianId) ?? r.technicianId,
+        faultCode: r.faultCode,
+        standardRepairMinutes,
+        actualMinutes: this.round(actualMinutes),
+        efficiencyPercent: this.round((standardRepairMinutes / actualMinutes) * 100),
+        hadQcRejection: Number(r.qcRejectionCount) > 0,
+      });
+    }
+
+    const agg = new Map<
+      string,
+      { count: number; sumSrt: number; sumActual: number; sumEfficiency: number; firstPassCount: number }
+    >();
+    for (const row of rows) {
+      const a = agg.get(row.technicianId) ?? { count: 0, sumSrt: 0, sumActual: 0, sumEfficiency: 0, firstPassCount: 0 };
+      a.count += 1;
+      a.sumSrt += row.standardRepairMinutes;
+      a.sumActual += row.actualMinutes;
+      a.sumEfficiency += row.efficiencyPercent;
+      if (!row.hadQcRejection) a.firstPassCount += 1;
+      agg.set(row.technicianId, a);
+    }
+
+    const summaryByTechnician: TechnicianEfficiencySummaryRow[] = [...agg.entries()]
+      .map(([technicianId, a]) => ({
+        technicianId,
+        technicianName: nameById.get(technicianId) ?? technicianId,
+        jobsCompleted: a.count,
+        avgStandardRepairMinutes: this.round(a.sumSrt / a.count),
+        avgActualMinutes: this.round(a.sumActual / a.count),
+        avgEfficiencyPercent: this.round(a.sumEfficiency / a.count),
+        qcFirstPassPct: this.round((a.firstPassCount / a.count) * 100),
+      }))
+      .sort((a, b) => b.avgEfficiencyPercent - a.avgEfficiencyPercent);
+
+    return {
+      asOf: new Date(),
+      periodStart: periodStart ?? null,
+      periodEnd: periodEnd ?? null,
+      rows,
+      summaryByTechnician,
+      note: 'Actual time is whole-job (TechnicianVisit.startedAt -> JobCard.qcApprovedAt), not a per-task stopwatch - there is no pause/resume timer in this app yet, so time spent waiting on parts is not excluded. Jobs whose fault code has no Standard Repair Time set are omitted rather than reported with a fabricated efficiency figure.',
     };
   }
 

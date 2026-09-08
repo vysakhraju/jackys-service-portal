@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEnum, IsOptional, IsBoolean, MaxLength } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsBoolean, IsInt, Min, MaxLength } from 'class-validator';
 import { ApplianceCategory } from '../entities/fault-symptom.entity';
 
 export class CreateFaultSymptomDto {
@@ -31,6 +31,12 @@ export class CreateFaultSymptomDto {
   @IsOptional()
   @IsBoolean()
   requiresWorkshop?: boolean;
+
+  @ApiProperty({ required: false, description: 'Standard Repair Time in minutes, used by the Technician Efficiency report.' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  standardRepairMinutes?: number;
 
   @ApiProperty({ required: false, default: true })
   @IsOptional()
