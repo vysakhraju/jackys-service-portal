@@ -78,7 +78,15 @@ export function ReadyForDeliveryPage() {
       label: 'Job Card',
       render: (r) => (
         <div>
-          <p className="font-medium text-slate-800">{r.jobCard.jobCardNumber}</p>
+          <p className="font-medium text-slate-800">
+            {r.jobCard.jobCardNumber}{' '}
+            <Link
+              to={`/job-cards/journey?jobCardId=${r.jobCard.id}`}
+              className="text-xs font-normal text-slate-400 underline"
+            >
+              Journey →
+            </Link>
+          </p>
           <p className="text-xs text-slate-400">
             {r.jobCard.brand ?? 'Unknown brand'} · S/N {r.jobCard.serialNumber}
           </p>

@@ -13,6 +13,7 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Master Data', path: '/master-data' },
   { label: 'Appointments', path: '/appointments' },
   { label: 'Job Cards', path: '/job-cards' },
+  { label: 'Job Card Journey', path: '/job-cards/journey' },
   { label: 'Estimates', path: '/estimates' },
   { label: 'Workshop & Inventory', path: '/workshop-inventory' },
   { label: 'QC & Permissions', path: '/qc-permissions' },

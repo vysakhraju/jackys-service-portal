@@ -136,7 +136,15 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
             {jobCard.section?.replaceAll('_', ' ') ?? '—'}
           </p>
         </div>
-        <StatusBadge status={jobCard.status} />
+        <div className="flex items-center gap-2">
+          <Link
+            to={`/job-cards/journey?jobCardId=${jobCard.id}`}
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Journey →
+          </Link>
+          <StatusBadge status={jobCard.status} />
+        </div>
       </div>
 
       {notWorkshopSection && (

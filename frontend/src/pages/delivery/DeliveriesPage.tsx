@@ -146,6 +146,9 @@ function DeliveryDetail({ id }: { id: string }) {
                 </span>
                 <span className="flex items-center gap-2">
                   <StatusBadge status={jc.warrantyStatus} />
+                  <Link to={`/job-cards/journey?jobCardId=${jc.id}`} className="text-slate-500 underline">
+                    Journey →
+                  </Link>
                   <Link to={`/workshop-inventory/workshop?jobCardId=${jc.id}`} className="text-slate-500 underline">
                     Details →
                   </Link>

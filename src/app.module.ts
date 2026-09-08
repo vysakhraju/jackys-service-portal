@@ -22,6 +22,7 @@ import { AmcModule } from './amc/amc.module';
 import { DismantlingModule } from './dismantling/dismantling.module';
 import { ReportsModule } from './reports/reports.module';
 import { WarrantyClaimsModule } from './warranty-claims/warranty-claims.module';
+import { JobCardJourneyModule } from './job-card-journey/job-card-journey.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { WarrantyClaimsModule } from './warranty-claims/warranty-claims.module';
     DismantlingModule,
     ReportsModule,
     WarrantyClaimsModule,
+    JobCardJourneyModule,
   ],
 })
 export class AppModule {}

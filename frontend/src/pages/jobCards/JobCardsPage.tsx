@@ -365,6 +365,12 @@ function JobCardDetail({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            to={`/job-cards/journey?jobCardId=${jobCard.id}`}
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Journey →
+          </Link>
           {jobCard.lane && <LaneBadge lane={jobCard.lane} />}
           <StatusBadge status={jobCard.status} />
         </div>

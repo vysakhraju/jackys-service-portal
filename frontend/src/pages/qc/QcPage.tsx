@@ -106,7 +106,15 @@ function QcDetail({ jobCard, onChanged }: { jobCard: JobCard; onChanged: () => v
             )}
           </p>
         </div>
-        <StatusBadge status={jobCard.status} />
+        <div className="flex items-center gap-2">
+          <Link
+            to={`/job-cards/journey?jobCardId=${jobCard.id}`}
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Journey →
+          </Link>
+          <StatusBadge status={jobCard.status} />
+        </div>
       </div>
 
       {notYetReady && (
@@ -122,11 +130,11 @@ function QcDetail({ jobCard, onChanged }: { jobCard: JobCard; onChanged: () => v
       {pastQc && (
         <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
           This job is {jobCard.status.replaceAll('_', ' ')} - past what this screen covers.{' '}
-          {jobCard.status === 'QC_PASSED' && (
-            <Link to="/delivery/ready" className="font-medium underline">
-              Go to Delivery →
-            </Link>
-          )}
+          <Link to={`/job-cards/journey?jobCardId=${jobCard.id}`} className="font-medium underline">
+            View full journey →
+          </Link>{' '}
+          tracks it the rest of the way through delivery and invoicing, highlighting exactly
+          where this job stands.
         </p>
       )}
 
