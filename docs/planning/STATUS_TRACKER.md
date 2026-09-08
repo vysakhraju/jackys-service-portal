@@ -4277,6 +4277,86 @@ completeAppointment's new idempotency, completeFromJobCardCreation's own guards)
 **Committed as `8fe8be7`**, on top of `613d20a`. `main`/`master` synced. Not yet pushed
 to the remote - push both branches yourself when ready.
 
+## Job Card Journey: one-page lifecycle view with a live progress stepper (2026-09-08)
+
+Direct response to a live bug report plus a broader ask, both about traceability: Job
+Card JC-0120 (QC_PASSED) wasn't showing up in the Ready for Delivery tab or obviously in
+the Deliveries tab, and separately, tracking one job's progress across
+Appointments/Job Cards/Workshop/QC/Delivery/Invoicing meant hopping between six separate
+screens with no unified view - inspired by a competitor's ("redtra") single-page journey
+view with a green-highlighted progress stepper.
+
+**The JC-0120 diagnosis**: not a backend bug. `JobCard.deliveryId` is the one stored
+(non-derived) flag gating Ready-for-Delivery inclusion - once a Job Card is claimed into
+a Delivery (`DeliveryService.create()`), it stays off the ready list until that Delivery
+either completes or is cancelled while still `PENDING`. JC-0120 was almost certainly
+already attached to a `PENDING`/`DISPATCHED` Delivery, which explains both symptoms at
+once: absent from Ready for Delivery (already claimed), and not obviously findable in
+Deliveries (that screen only showed DLV#/status/dispatcher/driver - never which Job Cards
+were inside each delivery, at the top level). The Journey page's search directly closes
+that gap - paste the JC number and it's found regardless of which delivery claimed it.
+
+**What shipped** (deliberately additive - every existing menu, page, and route stays
+exactly as it was, per explicit instruction):
+
+- New page at `/job-cards/journey` (own nav item, "Job Card Journey"): a search box (JC
+  number, Appointment number, Delivery number, or customer name/phone - the same
+  "paste an id" convention this app already uses everywhere, extended with free-text
+  search since not everyone has an id handy) plus, once a job is selected, a vertical
+  stepper with green highlighting for the current/completed stages and info cards
+  (appointment/customer, technician visit, spare parts, QC, estimates,
+  delivery/invoicing) with cross-links back to each existing screen for that same job.
+- Backend: a new read-only `job-card-journey` module sitting *above* every module a Job
+  Card's lifecycle touches (Appointments/Technician/JobCards/Inventory/Estimates/
+  Invoicing/Delivery) - imports all of them, is imported by none, avoiding the circular-
+  dependency traps already documented across this codebase (Delivery/Estimates/
+  Invoicing/Workshop all already import JobCardsModule one-directionally). A pure
+  `buildJourneySteps()` util derives every step's state from existing fields only -
+  nothing new is stored, matching this codebase's "derive, don't store, one shared rule
+  set" pattern (`job-card-progress.util.ts`). `GET /job-card-journey/search` and `/:id`,
+  both open to any authenticated role (no `@Roles()`) - deliberate, matching the existing
+  precedent that `GET /job-cards/:id` is already unrestricted; this is a read-only
+  traceability view every role legitimately needs.
+- "Journey →" links added into the existing Job Cards/Workshop/QC/Deliveries/Ready-for-
+  Delivery screens - nothing removed, nothing restructured.
+
+**QA pass (test-master) caught two real bugs before they shipped, not after**:
+
+1. `buildJourneySteps` had **no 'current' step highlighted at all** while a Job Card sat
+   at `SECTION_ASSIGNED` - which is the actual "work is under way" status for on-site
+   repairs (they have no separate `IN_PROGRESS`; this is exactly why `SECTION_ASSIGNED`
+   is in `JobCardsPage`'s own `PAUSABLE_STATUSES`), and is also the moment a workshop job
+   is waiting on a technician assignment. The stepper would have rendered a fully honest
+   but visually dead page - every bullet either filled in green or empty grey, nothing
+   highlighted - on the single status a technician is most likely to be actively looking
+   at it during. Fixed, plus a full status × section matrix test (14 combinations) added
+   so this class of gap can't silently reopen.
+2. **Unrelated to this feature, found as a side effect of writing its module-wiring
+   test**: `GlLedgerModule` never imported `AuthModule`, so `GlLedgerController`'s own
+   `RolesGuard` couldn't resolve its `RoleAccessService` dependency - every GL Ledger
+   endpoint (`GET /gl-postings`) would have thrown "Nest can't resolve dependencies of
+   RolesGuard" on its very first real request. This class of bug is invisible to
+   `tsc`/unit tests with manual mocks (both stay green), and invisible at app boot too -
+   Nest resolves route-level guards lazily, on first request, not eagerly at startup -
+   which is exactly why it had survived undetected. Fixed (one import), with its own
+   dedicated wiring-test regression guard.
+
+Also fixed while reviewing: search now escapes literal `%`/`_`/`\` in the query so they
+match literally instead of acting as ILIKE wildcards, and the aggregator no longer does a
+redundant second Job Card lookup when resolving the linked Delivery.
+
+34 new backend tests (13 → 34 in the journey-specific suites: matrix coverage, the two
+bug-fix regressions, service aggregation/error-fallback cases, and the two module-wiring
+compile-through-real-DI tests). **774/774 backend tests passing**, `tsc --noEmit` clean.
+7 new frontend tests (search/select flow, direct-link load, no-results, and both
+fetch-failure error paths). **437/437 frontend tests passing** (one pre-existing,
+unrelated canvas-mock flake in `DeliveriesPage.test.tsx` reproduces intermittently under
+the full suite but passes consistently in isolation - not caused by this change), `tsc
+--noEmit` clean.
+
+**Committed as `aad474a`**, on top of `af3e3d9`. `main`/`master` synced. Not yet pushed
+to the remote - push both branches yourself when ready.
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet

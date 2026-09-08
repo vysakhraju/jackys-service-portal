@@ -2028,6 +2028,54 @@
   </div>
 
   <div class="section">
+    <h3 style="color:var(--success);">Job Card Journey: one-page lifecycle view with a live progress stepper (2026-09-08)</h3>
+    <p>
+      Direct response to a live bug report (Job Card JC-0120, QC_PASSED, wasn't showing in
+      Ready for Delivery or obviously in Deliveries) plus a broader traceability ask -
+      tracking one job across Appointments/Job Cards/Workshop/QC/Delivery/Invoicing meant
+      hopping between six screens with no unified view, inspired by a competitor's single-
+      page journey view with a green-highlighted progress stepper.
+    </p>
+    <p>
+      <b>The JC-0120 diagnosis was not a backend bug.</b> <span class="mono">JobCard.deliveryId</span>
+      is the one stored flag gating Ready-for-Delivery inclusion - once claimed into a
+      Delivery it stays off that list until the Delivery completes or is cancelled while
+      still PENDING. JC-0120 was almost certainly already attached to a PENDING/DISPATCHED
+      Delivery, which explains both symptoms: absent from Ready for Delivery (already
+      claimed), and hard to find in Deliveries (that screen never showed which Job Cards
+      were inside each delivery at the top level). The new page's search closes that gap -
+      paste the JC number and it's found regardless of which delivery claimed it.
+    </p>
+    <p>
+      New <span class="mono">/job-cards/journey</span> page: search by JC/APT/DLV number or
+      customer name/phone, then a vertical stepper with green highlighting for
+      current/completed stages plus info cards for every stage of the job - all additive,
+      every existing menu/page/route stays exactly as it was. Backend is a new read-only
+      module sitting above every lifecycle-touching module (Appointments/Technician/
+      JobCards/Inventory/Estimates/Invoicing/Delivery) without being imported back by any
+      of them, avoiding this codebase's already-documented circular-dependency traps. A
+      pure <span class="mono">buildJourneySteps()</span> util derives every step from
+      existing fields only - nothing new stored.
+    </p>
+    <p style="margin-top:10px; font-size:14px; color:var(--ink-faint);">
+      <b>Independent test-master QA pass caught two real bugs before they shipped:</b> (1)
+      the stepper had no 'current' step highlighted at all while a job sat at
+      SECTION_ASSIGNED - the actual "work under way" status for on-site repairs - fixed,
+      with a full status × section matrix test now guarding every other combination; (2)
+      unrelated to this feature, found via the new module's own DI wiring test -
+      <span class="mono">GlLedgerModule</span> never imported <span class="mono">AuthModule</span>,
+      so every GL Ledger endpoint would 500 on its first real request (RolesGuard couldn't
+      resolve RoleAccessService). Both fixed, both given dedicated regression tests.
+    </p>
+    <div class="verified">
+      <span>774/774 backend tests</span>
+      <span>437/437 frontend tests</span>
+      <span>tsc clean (both)</span>
+    </div>
+    <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+  </div>
+
+  <div class="section">
     <div class="next">
       <div>
         <h3>Only the Gantt-style technician assignment board is left from the Redtra360 review</h3>
@@ -2060,7 +2108,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 8fe8be7 — awaiting push from your machine</span>
+    <span>master + main synced locally at aad474a — awaiting push from your machine</span>
   </footer>
 
 </div>
