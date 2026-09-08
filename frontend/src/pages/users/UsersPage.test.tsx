@@ -12,6 +12,7 @@ vi.mock('../../lib/usersApi', () => ({
   updateUser: vi.fn(),
   deactivateUser: vi.fn(),
   reactivateUser: vi.fn(),
+  resetPassword: vi.fn(),
 }));
 vi.mock('../../lib/roleAccessApi', () => ({
   listGrantableRoles: vi.fn(),
@@ -28,6 +29,7 @@ import {
   listCreatableRoles,
   listUsers,
   reactivateUser,
+  resetPassword,
   updateUser,
 } from '../../lib/usersApi';
 import {
@@ -70,6 +72,7 @@ beforeEach(() => {
   vi.mocked(updateUser).mockReset();
   vi.mocked(deactivateUser).mockReset();
   vi.mocked(reactivateUser).mockReset();
+  vi.mocked(resetPassword).mockReset();
   vi.mocked(listGrantableRoles).mockReset().mockResolvedValue(ROLES);
   vi.mocked(getRoleCapabilities).mockReset();
   vi.mocked(grantRoleAccess).mockReset();
@@ -161,6 +164,64 @@ describe('UsersPage - roster', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Deactivate' }));
     expect(await screen.findByText(/still hold 1 open item/)).toBeInTheDocument();
+  });
+});
+
+describe('UsersPage - reset password', () => {
+  it("opens a reset-password modal from a user's row and resets on submit with matching passwords", async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([
+      makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', email: 'priya@jackys.com', status: 'ACTIVE' }),
+    ]);
+    vi.mocked(resetPassword).mockResolvedValue({ message: 'Password reset successfully' });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Reset password' }));
+    const modal = (await screen.findByText('Reset password for Priya Nair')).closest('div.rounded-lg') as HTMLElement;
+
+    await user.type(within(modal).getByLabelText(/^New password/), 'Welcome2026!');
+    await user.type(within(modal).getByLabelText('Confirm new password'), 'Welcome2026!');
+    await user.click(within(modal).getByRole('button', { name: 'Reset password' }));
+
+    await waitFor(() => expect(resetPassword).toHaveBeenCalledWith('user-2', 'Welcome2026!'));
+    expect(await screen.findByText(/Password reset\. priya@jackys\.com is signed out/)).toBeInTheDocument();
+  });
+
+  it('blocks submit and shows a mismatch warning when the two password fields differ', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', status: 'ACTIVE' })]);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Reset password' }));
+    const modal = (await screen.findByText('Reset password for Priya Nair')).closest('div.rounded-lg') as HTMLElement;
+
+    await user.type(within(modal).getByLabelText(/^New password/), 'Welcome2026!');
+    await user.type(within(modal).getByLabelText('Confirm new password'), 'Different2026!');
+
+    expect(await within(modal).findByText("Passwords don't match.")).toBeInTheDocument();
+    expect(within(modal).getByRole('button', { name: 'Reset password' })).toBeDisabled();
+    expect(resetPassword).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a server error (e.g. an admin trying to reset their own account) as an error notice inside the modal', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', status: 'ACTIVE' })]);
+    vi.mocked(resetPassword).mockRejectedValue({
+      response: { data: { message: 'You cannot reset your own password from this screen - use Change Password instead.' } },
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Reset password' }));
+    const modal = (await screen.findByText('Reset password for Priya Nair')).closest('div.rounded-lg') as HTMLElement;
+
+    await user.type(within(modal).getByLabelText(/^New password/), 'Welcome2026!');
+    await user.type(within(modal).getByLabelText('Confirm new password'), 'Welcome2026!');
+    await user.click(within(modal).getByRole('button', { name: 'Reset password' }));
+
+    expect(await within(modal).findByText(/use Change Password instead/)).toBeInTheDocument();
   });
 });
 

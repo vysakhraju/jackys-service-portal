@@ -348,6 +348,47 @@ export class AuthService {
     );
   }
 
+  /**
+   * Admin-initiated password reset for a user who's forgotten theirs. Unlike
+   * changePassword() above, no old password is required - that's the whole point, since
+   * this is exactly for when the user can't supply one. Guarded server-side to
+   * SUPER_ADMIN/SERVICE_HEAD only (see UsersController's USER_ADMIN_ROLES).
+   *
+   * Mirrors updateUser()'s self-lockout prevention (the-fool finding #1, 2026-09-03): an
+   * admin can't reset their own password from this screen. They're already logged in, so
+   * they already know it - the only effect of allowing it here would be an accidental typo
+   * locking themselves out with no upside; Change Password (which requires the current
+   * password) is the right tool for an admin's own account.
+   *
+   * Also immediately invalidates any existing session by clearing refreshTokenHash, same
+   * mechanism as logout() - a forgotten-password reset is exactly the moment you'd want
+   * every existing session for that account signed out, not just future logins covered by
+   * the new password.
+   */
+  async resetPasswordByAdmin(id: string, actingUserId: string, newPassword: string, req: any): Promise<void> {
+    if (id === actingUserId) {
+      throw new ForbiddenException('You cannot reset your own password from this screen - use Change Password instead.');
+    }
+
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`User ${id} not found`);
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await this.userRepository.update(id, { passwordHash, refreshTokenHash: '' });
+
+    await this.logAudit(
+      req.user,
+      AuditAction.PASSWORD_CHANGE,
+      'User',
+      id,
+      null,
+      { changedBy: 'admin', targetEmail: user.email },
+      req,
+    );
+  }
+
   async createUser(userData: Partial<User>, roleName: string, req: any): Promise<User> {
     const existingUser = await this.userRepository.findOne({
       where: [{ email: userData.email }, { employeeId: userData.employeeId }],

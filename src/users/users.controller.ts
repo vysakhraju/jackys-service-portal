@@ -8,6 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 // Same admin role set as AuthController.deactivateUser()/PermissionsController's
 // PERMISSION_ADMIN_ROLES - only SUPER_ADMIN/SERVICE_HEAD can create accounts, change
@@ -76,6 +77,21 @@ export class UsersController {
     const user = await this.authService.updateUser(id, currentUser.id, dto, req);
     const { passwordHash, refreshTokenHash, ...safeUser } = user;
     return safeUser;
+  }
+
+  @Patch(':id/reset-password')
+  @ApiOperation({ summary: "Reset a user's forgotten password - signs them out of any existing session immediately" })
+  @ApiResponse({ status: 200, description: 'Password reset' })
+  @ApiResponse({ status: 403, description: 'Cannot reset your own password from this screen - use Change Password instead' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async resetPassword(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ResetPasswordDto,
+    @CurrentUser() currentUser: User,
+    @Request() req: any,
+  ) {
+    await this.authService.resetPasswordByAdmin(id, currentUser.id, dto.newPassword, req);
+    return { message: 'Password reset successfully' };
   }
 
   @Patch(':id/reactivate')

@@ -275,6 +275,42 @@ describe('AuthService', () => {
     });
   });
 
+  describe('resetPasswordByAdmin', () => {
+    it('throws ForbiddenException when an admin tries to reset their own password', async () => {
+      await expect(
+        service.resetPasswordByAdmin('admin-1', 'admin-1', 'NewPass123!', { user: { id: 'admin-1' }, headers: {} }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(userRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the target user does not exist', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.resetPasswordByAdmin('missing', 'admin-1', 'NewPass123!', { user: { id: 'admin-1' }, headers: {} }),
+      ).rejects.toThrow(NotFoundException);
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('hashes the new password, signs the user out of any existing session, and logs a PASSWORD_CHANGE audit entry', async () => {
+      const target = { id: 'user-2', email: 'tech@jackys.com' } as User;
+      userRepository.findOne.mockResolvedValue(target);
+      (bcrypt.hash as jest.Mock).mockResolvedValue('new-hash');
+
+      await service.resetPasswordByAdmin('user-2', 'admin-1', 'NewPass123!', { user: { id: 'admin-1' }, headers: {} });
+
+      expect(bcrypt.hash).toHaveBeenCalledWith('NewPass123!', 12);
+      // refreshTokenHash cleared alongside the password - any existing session for this
+      // user is signed out immediately, same as logout(), not just future logins.
+      expect(userRepository.update).toHaveBeenCalledWith('user-2', { passwordHash: 'new-hash', refreshTokenHash: '' });
+      expect(auditLogRepository.save).toHaveBeenCalled();
+      const savedLog = auditLogRepository.create.mock.calls[0][0];
+      expect(savedLog.action).toBe(AuditAction.PASSWORD_CHANGE);
+      expect(savedLog.newValues).toEqual({ changedBy: 'admin', targetEmail: 'tech@jackys.com' });
+      expect(savedLog.userId).toBe('admin-1');
+    });
+  });
+
   describe('createUser', () => {
     it('creates a user for a valid, unused email/employeeId and role', async () => {
       userRepository.findOne.mockResolvedValue(null);

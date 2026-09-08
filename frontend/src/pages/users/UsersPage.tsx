@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
+import { Modal } from '../../components/Modal';
 import { useAuth } from '../../lib/auth';
 import type { User } from '../../lib/types';
 import {
@@ -11,6 +12,7 @@ import {
   listCreatableRoles,
   listUsers,
   reactivateUser,
+  resetPassword,
   updateUser,
 } from '../../lib/usersApi';
 import { USER_MANAGEMENT_ADMIN_ROLES, type CreateUserInput } from '../../lib/usersTypes';
@@ -130,6 +132,7 @@ function RosterSection({ currentUserId, onGrantAccess }: { currentUserId: string
   const queryClient = useQueryClient();
   const usersQuery = useQuery({ queryKey: ['users'], queryFn: listUsers });
   const rolesQuery = useQuery({ queryKey: ['users', 'roles'], queryFn: listCreatableRoles });
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<User | null>(null);
 
   const roleMutation = useMutation({
     mutationFn: ({ id, roleName }: { id: string; roleName: string }) => updateUser(id, { roleName }),
@@ -202,6 +205,12 @@ function RosterSection({ currentUserId, onGrantAccess }: { currentUserId: string
               >
                 Grant access
               </button>
+              <button
+                onClick={() => setResetPasswordTarget(u)}
+                className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Reset password
+              </button>
               {u.status === 'ACTIVE' ? (
                 <button
                   onClick={() => deactivateMutation.mutate(u.id)}
@@ -223,7 +232,98 @@ function RosterSection({ currentUserId, onGrantAccess }: { currentUserId: string
           )
         }
       />
+      <ResetPasswordModal user={resetPasswordTarget} onClose={() => setResetPasswordTarget(null)} />
     </section>
+  );
+}
+
+// Admin-set password, shared directly with the user afterwards - same convention as
+// CreateUserSection below (no email/invite-link flow exists in this app). The backend
+// blocks resetting your own password from this screen (AuthService.resetPasswordByAdmin),
+// which is exactly why this modal is only ever reachable from another user's row - the
+// roster already hides all row actions, including this one, on the admin's own row.
+function ResetPasswordModal({ user, onClose }: { user: User | null; onClose: () => void }) {
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [justReset, setJustReset] = useState(false);
+
+  const resetMutation = useMutation({
+    mutationFn: () => resetPassword(user!.id, newPassword),
+    onSuccess: () => setJustReset(true),
+  });
+
+  const handleClose = () => {
+    setNewPassword('');
+    setConfirmPassword('');
+    setJustReset(false);
+    resetMutation.reset();
+    onClose();
+  };
+
+  const mismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
+  const tooShort = newPassword.length > 0 && newPassword.length < 8;
+
+  return (
+    <Modal
+      open={!!user}
+      onClose={handleClose}
+      title={user ? `Reset password for ${user.firstName} ${user.lastName}` : 'Reset password'}
+    >
+      {justReset ? (
+        <div className="space-y-3">
+          <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            Password reset. {user?.email} is signed out of any existing session - share the new password with them
+            directly (WhatsApp, verbally, a note); they can change it themselves afterwards.
+          </p>
+          <button
+            onClick={handleClose}
+            className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            Done
+          </button>
+        </div>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!mismatch && newPassword.length >= 8) resetMutation.mutate();
+          }}
+          className="space-y-3"
+        >
+          <p className="text-xs text-slate-500">
+            Sets a new temporary password directly, the same way a new account's password is set.{' '}
+            {user?.email} is signed out of any existing session immediately once this is saved.
+          </p>
+          <ErrorNotice error={resetMutation.error} />
+          <Field label="New password" hint="At least 8 characters.">
+            <input
+              type="text"
+              autoFocus
+              className={inputClass}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+          </Field>
+          <Field label="Confirm new password">
+            <input
+              type="text"
+              className={inputClass}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          </Field>
+          {tooShort && <p className="text-xs text-red-600">Must be at least 8 characters.</p>}
+          {mismatch && <p className="text-xs text-red-600">Passwords don't match.</p>}
+          <button
+            type="submit"
+            disabled={resetMutation.isPending || newPassword.length < 8 || mismatch}
+            className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            Reset password
+          </button>
+        </form>
+      )}
+    </Modal>
   );
 }
 

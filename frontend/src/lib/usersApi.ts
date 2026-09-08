@@ -19,4 +19,7 @@ export const updateUser = (id: string, data: UpdateUserInput) =>
 
 export const reactivateUser = (id: string) => api.patch<User>(`${BASE}/${id}/reactivate`).then((r) => r.data);
 
+export const resetPassword = (id: string, newPassword: string) =>
+  api.patch<{ message: string }>(`${BASE}/${id}/reset-password`, { newPassword }).then((r) => r.data);
+
 export const deactivateUser = (id: string) => api.patch<User>(`/auth/users/${id}/deactivate`).then((r) => r.data);
