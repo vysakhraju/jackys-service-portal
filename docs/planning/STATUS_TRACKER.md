@@ -4018,6 +4018,32 @@ mirroring the step-by-step indicator seen in the Redtra360 video.
 **Committed as `ed35c5a`**, on top of `8682445`. `main`/`master` synced. Not yet
 pushed to the remote - push when ready.
 
+## Two bugs found live-testing the Lane/stepper feature - fixed (2026-09-08)
+
+You ran the full journey end to end (on-site -> workshop -> delivered) and found two
+real, pre-existing issues, neither caused by today's Lane/stepper work itself:
+
+- **Mobile: a finished workshop job was mislabeled "sent to QC".** The technician
+  screen's "workshop, nothing to do here" message only showed while the job sat at
+  exactly `SECTION_ASSIGNED` - once it moved on (workshop technician assigned, WIP,
+  QC, delivered) it fell through to the on-site "sent to QC" message, which is wrong
+  since this app never sent a workshop job to QC. Fixed: the workshop message now
+  shows for the job's entire lifecycle on this app, with its real current status and
+  next-step text (reusing today's `nextStepText` field). 5 new tests, one per
+  downstream status.
+- **Web: the POD signature pad silently dropped strokes drawn with a mouse.** Root
+  cause: `onPointerLeave` was ending the stroke the instant the cursor left the
+  112px-tall canvas box - which a real mouse does constantly mid-signature - and if
+  that happened before the minimum-drawn-distance check passed, the stroke was
+  silently discarded and further movement was ignored until the next click-down. Fixed
+  by removing that handler (pointer capture already keeps delivering events outside the
+  box - that's its purpose) and ending the stroke on release or a lost capture instead.
+  2 new regression tests reproduce the exact leave-and-re-enter sequence.
+
+**420/420 frontend tests, 130/130 mobile tests, `tsc` clean on both** (backend
+untouched by these two). Committed as `d226a19`, on top of `a50e962`. `main`/`master`
+synced.
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
