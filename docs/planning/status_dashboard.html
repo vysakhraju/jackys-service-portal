@@ -1774,26 +1774,74 @@
       </div>
       <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
     </div>
+
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Redtra360 competitor review + Fault Codes SRT / Technician Efficiency report (2026-09-08)</h3>
+      <p>
+        Reviewed the ~58-minute Redtra360 demo you shared plus its meeting transcript
+        (screen content and the actual conversation with Gulam Gaus, cross-checked against
+        each other). Two of the review's own findings turned out to already be built here
+        once checked against the real entities: the "job warranty vs. unit warranty" split
+        (a unit can be under warranty while the specific repair is customer-induced damage,
+        out of warranty) already exists as <span class="mono">JobCard.originalWarrantyStatus</span>
+        vs. <span class="mono">warrantyStatus</span> with a TL-approved, audited override
+        (<span class="mono">FR-17/AC-18</span>); the FT/WT technician-type split is already
+        covered by <span class="mono">Appointment.technicianId</span> vs.
+        <span class="mono">JobCard.assignedWorkshopTechnicianId</span> being two distinct
+        assignees on one job card.
+      </p>
+      <p>
+        Built the highest-value real gap: <span class="mono">FaultSymptom.standardRepairMinutes</span>
+        (SRT, per fault code) plus a new <span class="mono">GET /reports/operational/technician-efficiency</span>
+        report comparing each completed job's SRT against actual elapsed time
+        (<span class="mono">TechnicianVisit.startedAt → JobCard.qcApprovedAt</span>, the same
+        whole-job convention the existing Technician Productivity report already uses - no
+        per-task stopwatch exists yet). Per-job rows plus a per-technician summary (avg SRT,
+        avg actual, avg efficiency %, QC first-pass %), jobs with no SRT set omitted rather
+        than given a fabricated number.
+      </p>
+      <div class="verified">
+        <span>664/664 backend tests</span>
+        <span>tsc clean</span>
+      </div>
+      <ul style="margin:14px 0 0; padding-left:20px; font-size:14.5px;">
+        <li style="text-decoration:line-through; color:var(--ink-faint);">Review Redtra360 demo + transcript, compare against this build</li>
+        <li style="text-decoration:line-through; color:var(--ink-faint);">Fault Codes Standard Repair Time field</li>
+        <li style="text-decoration:line-through; color:var(--ink-faint);">Technician Efficiency report</li>
+      </ul>
+      <p style="margin-top:12px;"><b>Pending for next session:</b></p>
+      <div class="verified">
+        <span style="background:var(--pending-wash); color:var(--pending);">Lane label + contextual "Next" text</span>
+        <span style="background:var(--pending-wash); color:var(--pending);">Service Desk channel field</span>
+        <span style="background:var(--pending-wash); color:var(--pending);">Google Maps short-link → lat/long</span>
+        <span style="background:var(--pending-wash); color:var(--pending);">Customer portal branding polish</span>
+        <span style="background:var(--pending-wash); color:var(--pending);"><span class="mono">git push</span> to remote</span>
+      </div>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+    </div>
   </div>
 
   <div class="section">
     <div class="next">
       <div>
-        <h3>Mobile Need Spare fix + review screen + live pop-up shipped</h3>
-        <h2>The Need Spare loop is closed end-to-end now - request, review, live notify. What remains is the mobile Phases 3-4 live pass, a video-review follow-up on a competitor system, and the customer portal polish pass.</h2>
-        <p>Nothing is blocking. Live-verifying Mobile Phases 3-4 on your device surfaced
-        the "forgotten request" bug and the missing review screen - both fixed and shipped
-        today, along with a live pop-up notification for reviewers. You tested the fix live
-        yourself and confirmed it works. <b>658/658 backend, 418/418 frontend, and 125/125
-        mobile tests passing</b>, <span class="mono">tsc</span> clean across all three. The
-        mobile app's Phases 1-2 and 5 are live-device-verified; <b>Phases 3-4</b> are built,
-        tested, and QA'd but still awaiting that same live pass. You're also planning to
-        share a video of a competitor system you were reviewing for purchase, for a
-        logic/feature review against this build. The <b>customer portal</b> branding/visual
-        polish pass on the existing no-login <span class="mono">/track/:token</span> page
-        hasn't started yet. <b>WhatsApp Business API</b> stays paused until the company
-        creates its own account — not a technical blocker here. Still open: your own
-        <span class="mono">git push</span> (run
+        <h3>Redtra360 review done - Fault Codes SRT + Technician Efficiency report shipped</h3>
+        <h2>The Redtra360 review is done and its highest-value gap (Fault Codes SRT + Technician Efficiency) is shipped. What remains from that review: the Lane label, the Service Desk channel field, and the Google Maps short-link idea - plus the customer portal polish pass, which does not depend on any of it.</h2>
+        <p>Nothing is blocking. The Redtra360 competitor review (screen content plus the
+        meeting transcript) is complete, and checking its findings against the real code
+        surfaced that two of them were already solved here (job-warranty-vs-unit-warranty
+        override, FT/WT technician split) - no action needed on those. The one clear,
+        highest-value gap, Fault Codes Standard Repair Time + a Technician Efficiency
+        report, is built and pushed. <b>664/664 backend tests passing</b>,
+        <span class="mono">tsc</span> clean. Still open from the same review: the Lane
+        label + contextual "Next" text, a <span class="mono">channel</span> field for the
+        Service Desk, and the Google Maps short-link → lat/long idea - roughly in that
+        priority order. Separately, still open from before: mobile Phases 3-4's live-device
+        pass (you've informally tested Phase 3 already), and the <b>customer portal</b>
+        branding/visual polish pass on the existing no-login
+        <span class="mono">/track/:token</span> page, which doesn't depend on any of the
+        above and can start any time. <b>WhatsApp Business API</b> stays paused until the
+        company creates its own account — not a technical blocker here. Still open: your
+        own <span class="mono">git push</span> (run
         <span class="mono">git log origin/main..main</span> yourself for the current count)
         and confirming a Job Card advanced in a second tab makes the Kanban board update
         live within ~5s (the connection pill itself is already confirmed live).</p>
@@ -1804,7 +1852,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 3ada889 — awaiting push from your machine</span>
+    <span>master + main synced locally at 6276c94 — awaiting push from your machine</span>
   </footer>
 
 </div>

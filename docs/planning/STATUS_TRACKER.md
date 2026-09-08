@@ -3920,6 +3920,58 @@ Not yet pushed to the remote - push both branches yourself when ready.
 
 ---
 
+## Redtra360 competitor-system review (2026-09-07)
+
+Reviewed the ~58-minute Redtra360 demo recording plus its meeting transcript (you and
+Gulam Gaus) - full writeup delivered as a file. Two corrections made after actually
+checking the codebase against the transcript's biggest finding: the "job warranty vs.
+unit warranty" split (a unit can be under warranty while the specific repair is
+customer-induced damage, out of warranty) is **already built** here -
+`JobCard.originalWarrantyStatus` (immutable snapshot) vs. `warrantyStatus` (effective),
+with `warrantyOverridden`/`warrantyOverrideReason`/`warrantyOverrideByUser`/
+`warrantyOverrideAt`/`overrideCount` as the TL-approved, audited override (`FR-17/AC-18`).
+Same story for Redtra's FT/WT technician-type split - already covered structurally by
+`Appointment.technicianId` (field tech) vs. `JobCard.assignedWorkshopTechnicianId`
+(workshop tech) being two distinct assignees on one job card. Real gaps still open,
+in priority order: ~~Fault Codes Standard Repair Time + Technician Efficiency report~~
+(done, see below), Lane label + contextual "Next" text bundling `JobCardSection`+
+`warrantyStatus`, Service Desk `channel` field on `Appointment` (confirmed missing),
+Google Maps short-link -> lat/long (your own idea), then bigger items: timer
+pause-reasons/SLA-safe pausing, and a Gantt-style technician assignment board with
+conflict detection.
+
+## Fault Codes SRT + Technician Efficiency report - done (2026-09-08)
+
+- `FaultSymptom.standardRepairMinutes` (nullable int, minutes) - the Standard Repair
+  Time for that fault code. Flows through `CreateFaultSymptomDto` (optional,
+  `@IsInt() @Min(1)`) and `MasterDataService.createFaultSymptom()` (already a
+  `Partial<FaultSymptom>` passthrough, no service change needed). No update endpoint
+  exists for fault symptoms yet (create/list/get-by-code only) - only new fault codes
+  can carry an SRT until one is added.
+- `OperationalReportsService.getTechnicianEfficiency(periodStart?, periodEnd?)` +
+  `GET /reports/operational/technician-efficiency` (same `SERVICE_HEAD`/`SUPER_ADMIN`/
+  `TECHNICAL_TEAM_LEADER` roles as the other operational reports). Compares each
+  completed Job Card's fault-code SRT against actual elapsed time
+  (`TechnicianVisit.startedAt` -> `JobCard.qcApprovedAt`, minutes - the same
+  whole-job convention `getTechnicianProductivity` already uses for
+  `avgHoursLoginToQc`, not a per-task stopwatch, since no pause/resume timer exists
+  yet). `efficiencyPercent = SRT / actual * 100` - over 100% means faster than
+  standard. Jobs whose fault code has no SRT set are omitted rather than given a
+  fabricated efficiency number. Returns per-job rows plus a per-technician summary
+  (avg SRT, avg actual, avg efficiency, `qcFirstPassPct` from `qcRejectionCount`),
+  sorted best-efficiency-first.
+- 6 new backend tests (master-data SRT passthrough + 5 on the new report method).
+  **664/664 backend tests passing** (658 + 6 new), `tsc -b` clean - verified in the
+  cloud sandbox; on-device `npx jest` hit the same known device-shell-speed limit
+  noted earlier in this build, so the cloud-sandbox run is the reliable signal here.
+  `synchronize: true` outside production, so no manual migration needed in dev - the
+  new column applies itself on next backend start.
+
+**Committed as `6276c94`**, on top of `636c822`. `main`/`master` synced. Not yet pushed
+to the remote - push both branches yourself when ready.
+
+---
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
