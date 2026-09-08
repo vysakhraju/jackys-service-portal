@@ -3935,10 +3935,10 @@ Same story for Redtra's FT/WT technician-type split - already covered structural
 (workshop tech) being two distinct assignees on one job card. Real gaps still open,
 in priority order: ~~Fault Codes Standard Repair Time + Technician Efficiency report~~
 (done, see below), Lane label + contextual "Next" text bundling `JobCardSection`+
-~~`warrantyStatus`~~ (done, see below), Service Desk `channel` field on `Appointment` (confirmed missing),
-Google Maps short-link -> lat/long (your own idea), then bigger items: timer
-pause-reasons/SLA-safe pausing, and a Gantt-style technician assignment board with
-conflict detection.
+~~`warrantyStatus`~~ (done, see below), ~~Service Desk `channel` field on `Appointment`~~
+(done, see below), ~~Google Maps short-link -> lat/long~~ (done, see below), then bigger
+items: timer pause-reasons/SLA-safe pausing, and a Gantt-style technician assignment
+board with conflict detection.
 
 ## Fault Codes SRT + Technician Efficiency report - done (2026-09-08)
 
@@ -4043,6 +4043,62 @@ real, pre-existing issues, neither caused by today's Lane/stepper work itself:
 **420/420 frontend tests, 130/130 mobile tests, `tsc` clean on both** (backend
 untouched by these two). Committed as `d226a19`, on top of `a50e962`. `main`/`master`
 synced.
+
+## Service Desk channel field + Google Maps short-link resolver - done (2026-09-08)
+
+Next two items off the Redtra360 gap list (priorities #6 and #3 on the suggested-order
+list from the review), picked up right after parking the signature-pad follow-up report.
+
+- **Service Desk `channel` field.** `AppointmentChannel` enum (PHONE/EMAIL/WHATSAPP/
+  WALK_IN/PORTAL/DEALER) as a new `channel` column on `Appointment`, DB-default `PHONE`
+  so every existing row and every caller that doesn't know about the field yet keeps
+  working unchanged. Filterable via `GET /appointments?channel=`. The Schedule page
+  (`frontend/src/pages/appointments/SchedulePage.tsx`) already *is* the "dedicated list
+  view" the review asked for, so this landed as a Channel column, a Channel filter
+  dropdown, and a Channel field on the create form there, rather than a new screen -
+  the live WhatsApp/email intake itself stays correctly parked behind the WhatsApp
+  Business account plan, per the review; this is the triage value only.
+- **Google Maps short-link -> lat/long** (your own idea from the review call).
+  `src/appointments/google-maps-link.util.ts` follows a `maps.app.goo.gl`/`goo.gl` short
+  link's redirect chain server-side and reads the coordinates straight out of the URL
+  (`@lat,lng`, the more precise `!3d!4d` pin form, or a `q=lat,lng` query) rather than
+  downloading/scraping the destination page. Since this makes an outbound request to a
+  client-supplied URL (a textbook SSRF shape), every hop - the input and every redirect
+  after it - is checked against a Google-only hostname allowlist and required to be
+  https before it's fetched, with a redirect-hop cap and a request timeout. New
+  standalone `POST /appointments/resolve-map-link` endpoint backs a "paste a Google Maps
+  link" + Resolve button on the create form; it's deliberately NOT wired into
+  create()/update() itself, so a bad or unreachable link only fails that one lookup and
+  can never block saving an appointment. `Appointment.customerLat`/`customerLng`
+  (nullable `double precision`, not `decimal` - TypeORM maps Postgres decimal columns to
+  JS strings, and these are used as numbers) hold the resolved result; manual
+  latitude/longitude entry works as a fallback if a link can't be resolved.
+- **Real bug caught while writing the frontend test, fixed before it shipped:** the
+  latitude/longitude inputs originally used react-hook-form's `valueAsNumber`, which
+  reads an *empty* number input's native `.valueAsNumber` as `NaN`, not `''` - and does
+  so on every `watch()`/`getValues()` call, not just on change. That both made the
+  "Resolved: ..." confirmation text appear even after a *failed* resolve (showing
+  "Resolved: NaN, NaN") and would have silently submitted `customerLat: NaN` -> `null`
+  on every appointment left without coordinates, every time. Fixed by keeping the two
+  fields as plain strings in form state and parsing once, explicitly, at submit time.
+- Backend: 66 new/updated appointments-module tests - the resolver's redirect-following,
+  host-allowlist enforcement, and coordinate-extraction logic tested standalone against
+  a fake `fetch` (including two explicit SSRF-guard tests: a redirect to a non-Google
+  host, and a redirect that downgrades to plain http), plus the channel filter and the
+  service's `resolveMapLink()` wiring. **698/699 backend tests passing** (the 1 failure
+  is the pre-existing `finance-reports.service.spec.ts` aging-bucket flake, already
+  flagged, unrelated), `tsc -p . --noEmit` clean.
+- Frontend: 7 new/updated tests on `SchedulePage.test.tsx` (channel column/filter/create
+  submission, map-link resolve success, resolve failure showing the inline error without
+  polluting the coordinate fields, and manual lat/lng entry without ever calling
+  resolve). **425 frontend tests total** (424 passing + the 1 known-flaky
+  `DeliveriesPage.test.tsx` photo-upload test, re-confirmed via 3 isolated reruns to
+  still reproduce independently of this change - jsdom `FileReader` timing, not a real
+  product bug; left alone since the delivery/signature area is intentionally parked
+  right now), `tsc -b` clean.
+
+**Committed as `5ef38e2`**, on top of `a07ccb6`. `main`/`master` synced. Not yet pushed
+to the remote - push both branches yourself when ready.
 
 ## Open items / blockers (from planning docs, still unresolved)
 

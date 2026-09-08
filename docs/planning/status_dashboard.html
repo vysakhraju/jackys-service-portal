@@ -1867,20 +1867,66 @@
   </div>
 
   <div class="section">
+    <h3 style="color:var(--success);">Service Desk channel field + Google Maps short-link resolver (2026-09-08)</h3>
+    <p>
+      The last two items off the Redtra360 gap list. <b>Service Desk channel:</b> a new
+      <span class="mono">channel</span> column on Appointment (Phone/Email/WhatsApp/
+      Walk-in/Portal/Dealer, DB-default Phone so nothing existing breaks), filterable via
+      the API and shown as a column + filter + create-form field right on the existing
+      Schedule page - that page already is the "dedicated list view" the review asked
+      for, so no new screen was needed. <b>Google Maps short-link:</b> your own idea from
+      the review call - paste a <span class="mono">maps.app.goo.gl</span> link and the
+      backend follows its redirect chain server-side to pull out the coordinates, no
+      manual lat/long typing required. Since that means fetching a URL the client
+      supplied (a classic SSRF shape), every hop is checked against a Google-only
+      hostname allowlist and required to be https before it's followed, with a hop cap
+      and timeout - and it's a standalone "resolve" endpoint the create form calls
+      before submitting, not wired into appointment creation itself, so a bad link can
+      never block saving an appointment.
+    </p>
+    <p>
+      Caught and fixed a real bug while writing the test for it, before it ever shipped:
+      the lat/lng inputs originally used a form-library option that reads an *empty*
+      number field as <span class="mono">NaN</span> rather than blank on every read, not
+      just on change - which both showed a false "Resolved: NaN, NaN" confirmation after
+      a *failed* resolve, and would have silently sent
+      <span class="mono">customerLat: NaN</span> → <span class="mono">null</span> on
+      every single appointment left without coordinates. Fixed before it ever reached the
+      device.
+    </p>
+    <div class="verified">
+      <span>698/699 backend tests</span>
+      <span>425 frontend tests (424 + 1 known-flaky)</span>
+      <span>tsc clean (both)</span>
+    </div>
+    <p style="margin-top:10px; font-size:14px; color:var(--ink-faint);">
+      The 1 backend "failure" is the pre-existing <span class="mono">finance-reports</span>
+      aging-bucket flake (already flagged, unrelated). The 1 frontend flake is the same
+      pre-existing <span class="mono">DeliveriesPage.test.tsx</span> photo-upload timing
+      issue as last time - re-confirmed via 3 isolated reruns, still reproduces
+      independently of this change; left alone since the delivery/signature area is
+      intentionally parked right now.
+    </p>
+    <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+  </div>
+
+  <div class="section">
     <div class="next">
       <div>
-        <h3>Redtra360 review done - Fault Codes SRT + Technician Efficiency report shipped</h3>
-        <h2>The Redtra360 review is done and its highest-value gap (Fault Codes SRT + Technician Efficiency) is shipped. What remains from that review: the Lane label, the Service Desk channel field, and the Google Maps short-link idea - plus the customer portal polish pass, which does not depend on any of it.</h2>
+        <h3>Redtra360 review's small/medium items are all shipped - Gantt board is the one big item left</h3>
+        <h2>Every small/medium item from the Redtra360 review is now shipped: Fault Codes SRT + Technician Efficiency, the Lane label + stepper, the Service Desk channel field, and the Google Maps short-link resolver. What is left from that review is the one big roadmap item (the Gantt-style technician assignment board) plus the customer portal polish pass, neither of which depends on any of it.</h2>
         <p>Nothing is blocking. The Redtra360 competitor review (screen content plus the
         meeting transcript) is complete, and checking its findings against the real code
         surfaced that two of them were already solved here (job-warranty-vs-unit-warranty
         override, FT/WT technician split) - no action needed on those. The one clear,
         highest-value gap, Fault Codes Standard Repair Time + a Technician Efficiency
         report, is built and pushed. <b>664/664 backend tests passing</b>,
-        <span class="mono">tsc</span> clean. Still open from the same review: the Lane
-        label + contextual "Next" text, a <span class="mono">channel</span> field for the
-        Service Desk, and the Google Maps short-link → lat/long idea - roughly in that
-        priority order. Separately, still open from before: mobile Phases 3-4's live-device
+        <span class="mono">tsc</span> clean. The Lane label + contextual "Next" text,
+        the Service Desk <span class="mono">channel</span> field, and the Google Maps
+        short-link → lat/long resolver have all since shipped too - see the two sections
+        above. What's left from the review is the Gantt-style technician assignment board
+        (the one big roadmap item) and the task-timer pause-reasons work. Separately,
+        still open from before: mobile Phases 3-4's live-device
         pass (you've informally tested Phase 3 already), and the <b>customer portal</b>
         branding/visual polish pass on the existing no-login
         <span class="mono">/track/:token</span> page, which doesn't depend on any of the
@@ -1897,7 +1943,7 @@
 
   <footer>
     <span>github.com/vysakhraju/jackys-service-portal</span>
-    <span>master + main synced locally at 6276c94 — awaiting push from your machine</span>
+    <span>master + main synced locally at 5ef38e2 — awaiting push from your machine</span>
   </footer>
 
 </div>
