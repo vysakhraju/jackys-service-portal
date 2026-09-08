@@ -3935,7 +3935,7 @@ Same story for Redtra's FT/WT technician-type split - already covered structural
 (workshop tech) being two distinct assignees on one job card. Real gaps still open,
 in priority order: ~~Fault Codes Standard Repair Time + Technician Efficiency report~~
 (done, see below), Lane label + contextual "Next" text bundling `JobCardSection`+
-`warrantyStatus`, Service Desk `channel` field on `Appointment` (confirmed missing),
+~~`warrantyStatus`~~ (done, see below), Service Desk `channel` field on `Appointment` (confirmed missing),
 Google Maps short-link -> lat/long (your own idea), then bigger items: timer
 pause-reasons/SLA-safe pausing, and a Gantt-style technician assignment board with
 conflict detection.
@@ -3971,6 +3971,52 @@ conflict detection.
 to the remote - push both branches yourself when ready.
 
 ---
+
+## Job Card Lane label + progress stepper - done (2026-09-08)
+
+Priority #1 off the Redtra360 gap list, plus a UI addition you asked for while
+scoping it: a bullet-point/stepper progress view on the Job Card single-screen flow,
+mirroring the step-by-step indicator seen in the Redtra360 video.
+
+- Backend: `src/job-cards/job-card-progress.util.ts` - two pure functions,
+  `getJobCardLane()` (A = on-site+IW, B = on-site+OOW, C = workshop+IW,
+  D = workshop+OOW; null until a section is assigned) and
+  `getJobCardNextStepText()` (one sentence per `JobCardStatus`, warranty-conditional
+  at `SN_VALIDATED` for the customer-approval gate). Deliberately computed, not
+  stored - no migration. Attached at the two read endpoints web/mobile actually use
+  to refresh Job Card state (`JobCardsService.findById`/`findByAppointmentId`,
+  `TechnicianService.getOwnJobCard`) via `Object.assign` onto the real entity
+  instance rather than a plain-object spread - this app has no
+  `ClassSerializerInterceptor` (a getter would be silently dropped by
+  `JSON.stringify`), and a plain-object spread would have broken
+  `DeliveryService`'s `manager.save(jobCard)` calls elsewhere, which infer the
+  target entity from the object's own prototype. Caught this in the regression pass
+  before it shipped, not after.
+- Frontend: Lane badge + "Next: ..." line on the Job Card detail header, plus a new
+  `JobCardProgressStepper` - a vertical bullet list of every status in the job's
+  actual path (on-site-repair and workshop have different step sequences after
+  `SECTION_ASSIGNED`), with done/current/upcoming states, RWR and SPARE_PENDING
+  shown as a note on the step they effectively sit at (not their own step, since
+  both loop back rather than advance), and CANCELLED shown as its own banner
+  instead of a numbered list. Purely derived from `status`+`section`, already on
+  every Job Card response - no new API calls, so this needed no backend change of
+  its own.
+- Mobile: same Lane badge + next-step text on the technician's own Job Card card
+  (`appointment/[id].tsx`), reusing `getOwnJobCard`'s updated response.
+- Regression pass (you asked explicitly that this be checked, not assumed): full
+  suites re-run after the change - **681/681 backend** (18 new tests: lane/next-text
+  derivation for every status, both attach points, a prototype-preservation
+  regression guard), **417/418 frontend** (the 1 failure is
+  `DeliveriesPage.test.tsx`'s POD-photo-upload test - confirmed pre-existing and
+  unrelated: fails intermittently in isolation too, nothing in this session touched
+  delivery/POD code), **125/125 mobile**, `tsc --noEmit` clean on all three. Also
+  found (not fixed, out of scope for this change): `finance-reports.service.spec.ts`'s
+  aging-bucket day-boundary tests are flakily date-based (compare `Date.now()` at two
+  different moments against a fixed day-boundary) - pre-existing, unrelated to Job
+  Cards, worth a quick fix next time reports code is touched.
+
+**Committed as `ed35c5a`**, on top of `8682445`. `main`/`master` synced. Not yet
+pushed to the remote - push when ready.
 
 ## Open items / blockers (from planning docs, still unresolved)
 

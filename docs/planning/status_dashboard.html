@@ -1811,12 +1811,57 @@
       </ul>
       <p style="margin-top:12px;"><b>Pending for next session:</b></p>
       <div class="verified">
-        <span style="background:var(--pending-wash); color:var(--pending);">Lane label + contextual "Next" text</span>
         <span style="background:var(--pending-wash); color:var(--pending);">Service Desk channel field</span>
         <span style="background:var(--pending-wash); color:var(--pending);">Google Maps short-link → lat/long</span>
         <span style="background:var(--pending-wash); color:var(--pending);">Customer portal branding polish</span>
         <span style="background:var(--pending-wash); color:var(--pending);"><span class="mono">git push</span> to remote</span>
       </div>
+      <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
+    </div>
+
+    <div class="alert" style="border-color:var(--success); background:var(--success-wash); margin-top:14px;">
+      <h3 style="color:var(--success);">Job Card Lane label + progress stepper (2026-09-08)</h3>
+      <p>
+        Priority #1 off the Redtra360 gap list, plus a UI addition you asked to add while
+        scoping it: a bullet-point/step progress view on the Job Card single-screen flow,
+        mirroring the step-by-step indicator seen in the Redtra360 video.
+      </p>
+      <p>
+        Backend: <span class="mono">job-card-progress.util.ts</span> derives a Lane badge
+        (A/B/C/D from section × warranty status) and a one-sentence "Next" step from
+        <span class="mono">JobCardStatus</span> - computed on every read, not stored, no
+        migration. Attached at the two endpoints web/mobile actually use to refresh a Job
+        Card. Frontend: Lane badge + "Next" text on the detail header, plus a new
+        step-by-step progress list (on-site-repair and workshop show different sequences
+        after Section Assigned; RWR/Spare Pending show as a note rather than their own
+        step; Cancelled shows its own banner). Mobile: same Lane badge + next-step text on
+        the technician's own Job Card screen. Purely derived from data already on the Job
+        Card response - no new API calls anywhere.
+      </p>
+      <p>
+        You explicitly asked for a real regression check here, not an assumption - re-ran
+        every suite after the change. Found and fixed one real risk in the process: the
+        first draft attached the new fields by spreading the Job Card into a plain object,
+        which would have silently broken <span class="mono">DeliveryService</span>'s
+        <span class="mono">manager.save(jobCard)</span> calls elsewhere (they infer the
+        target entity from the object's own prototype) - fixed by attaching the fields
+        onto the real entity instance instead (<span class="mono">Object.assign</span>),
+        with a dedicated test guarding against it recurring.
+      </p>
+      <div class="verified">
+        <span>681/681 backend tests</span>
+        <span>417/418 frontend tests</span>
+        <span>125/125 mobile tests</span>
+        <span>tsc clean (all 3)</span>
+      </div>
+      <p style="margin-top:10px; font-size:14px; color:var(--ink-faint);">
+        The 1 frontend failure (<span class="mono">DeliveriesPage.test.tsx</span>, POD
+        photo upload) is confirmed pre-existing and unrelated - fails intermittently in
+        isolation too, and nothing in this change touches delivery/POD code. Also found
+        (not fixed, out of scope here): <span class="mono">finance-reports.service.spec.ts</span>'s
+        aging-bucket tests are flakily date-based - worth a quick fix next time reports
+        code is touched.
+      </p>
       <span class="resolved-tag" style="background:var(--success);">Shipped this session</span>
     </div>
   </div>
