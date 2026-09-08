@@ -4357,6 +4357,39 @@ the full suite but passes consistently in isolation - not caused by this change)
 **Committed as `aad474a`**, on top of `af3e3d9`. `main`/`master` synced. Not yet pushed
 to the remote - push both branches yourself when ready.
 
+## Admin Reset Password for existing users (2026-09-08)
+
+Direct response to a live question: passwords are bcrypt-hashed and can never be looked
+up, only reset - there was no way for an admin to get a forgotten-password user back into
+the app short of manual DB surgery. The Users admin screen already had create/edit-role/
+deactivate/reactivate; this adds the missing "forgot password" path.
+
+`PATCH /users/:id/reset-password` (`ResetPasswordDto { newPassword }`, min 8 chars, same
+validation as account creation's temporary password) - guarded by the same
+`SUPER_ADMIN`/`SERVICE_HEAD`-only class-level decorator as every other route on
+`UsersController`, no new guard needed. `AuthService.resetPasswordByAdmin()` mirrors
+`updateUser()`'s existing self-lockout prevention (an admin can't reset their own password
+from this screen - they're already logged in, so they already know it; Change Password,
+which requires the current password, is the right tool for their own account) and clears
+`refreshTokenHash` alongside the new hash, the same mechanism `logout()` uses, so any
+session already open for that account is signed out immediately rather than only future
+logins being covered. Logged as a `PASSWORD_CHANGE` audit entry with `changedBy: 'admin'`
+plus the target's email, reusing the existing audit action rather than adding a new one.
+
+Frontend: a "Reset password" button on every roster row (own row already hides all row
+actions, same as Deactivate/Reactivate) opens a modal - new password + confirm, blocked
+client-side on a mismatch before the request even goes out, success state reminds the
+admin to share the new password directly (WhatsApp, verbally, a note - same convention as
+account creation, no email/invite-link flow exists in this app).
+
+3 new backend tests (self-block, not-found, hash+refresh-token-clear+audit-entry). 3 new
+frontend tests (submit flow, mismatch validation blocks submit, server-error surfacing).
+**777/777 backend tests passing**, **440/440 frontend tests passing**, `tsc --noEmit`
+clean on both.
+
+**Committed as `5b72df2`**, on top of `07e851e`. `main`/`master` synced. Not yet pushed
+to the remote - push both branches yourself when ready.
+
 ## Open items / blockers (from planning docs, still unresolved)
 
 - ~~Mobile framework decision~~ — decided 2026-09-03: **React Native**, not yet
