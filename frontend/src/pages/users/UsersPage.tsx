@@ -65,7 +65,7 @@ export function UsersPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-8 p-6">
+    <div className="max-w-6xl space-y-8 p-6">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Users</p>
         <h1 className="mt-0.5 text-xl font-semibold text-slate-900">Create staff accounts and manage roles</h1>
@@ -159,7 +159,10 @@ function RosterSection({ currentUserId, onGrantAccess }: { currentUserId: string
       render: (u) => (
         <select
           aria-label={`Change role for ${u.firstName} ${u.lastName}`}
-          className={`${inputClass} py-1`}
+          // min-width prevents the browser's table auto-layout from collapsing this
+          // column down to just the dropdown arrow, hiding the selected role's text
+          // entirely - a real bug you hit live (2026-09-08), not just a style nit.
+          className={`${inputClass} min-w-[10rem] py-1`}
           value={u.role.name}
           disabled={u.id === currentUserId || roleMutation.isPending}
           onChange={(e) => roleMutation.mutate({ id: u.id, roleName: e.target.value })}
@@ -198,7 +201,7 @@ function RosterSection({ currentUserId, onGrantAccess }: { currentUserId: string
           u.id === currentUserId ? (
             <span className="text-xs text-slate-400">You can't modify your own account here</span>
           ) : (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 onClick={() => onGrantAccess(u.id)}
                 className="rounded-md border border-indigo-300 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
