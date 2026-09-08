@@ -20,6 +20,11 @@ export type AppointmentStatusValue = (typeof APPOINTMENT_STATUSES)[number];
 export const CUSTOMER_TYPES = ['B2C', 'B2B', 'B2B_SALES_CHANNEL'] as const;
 export type CustomerTypeValue = (typeof CUSTOMER_TYPES)[number];
 
+// Mirrors AppointmentChannel in src/appointments/entities/appointment.entity.ts - how the
+// request came in (Service Desk triage gap from REDTRA360_REVIEW.md).
+export const APPOINTMENT_CHANNELS = ['PHONE', 'EMAIL', 'WHATSAPP', 'WALK_IN', 'PORTAL', 'DEALER'] as const;
+export type AppointmentChannelValue = (typeof APPOINTMENT_CHANNELS)[number];
+
 export interface ServiceCentreRef {
   id: string;
   code: string;
@@ -38,11 +43,14 @@ export interface Appointment {
   appointmentNumber: string;
   type: AppointmentTypeValue;
   status: AppointmentStatusValue;
+  channel: AppointmentChannelValue;
   customerType: CustomerTypeValue;
   customerName: string;
   customerPhone: string;
   customerEmail: string | null;
   customerAddress: string | null;
+  customerLat: number | null;
+  customerLng: number | null;
   customerCity: string | null;
   customerCountry: string | null;
   customerVatNumber: string | null;
@@ -74,11 +82,14 @@ export interface Appointment {
 // Matches CreateAppointmentDto exactly - every optional field here is optional there too.
 export interface CreateAppointmentInput {
   type: AppointmentTypeValue;
+  channel?: AppointmentChannelValue;
   customerType: CustomerTypeValue;
   customerName: string;
   customerPhone: string;
   customerEmail?: string;
   customerAddress?: string;
+  customerLat?: number;
+  customerLng?: number;
   customerCity?: string;
   customerCountry?: string;
   customerVatNumber?: string;
@@ -102,10 +113,16 @@ export interface AppointmentListFilters {
   technicianId?: string;
   status?: AppointmentStatusValue;
   type?: AppointmentTypeValue;
+  channel?: AppointmentChannelValue;
   dateFrom?: string;
   dateTo?: string;
   page?: number;
   limit?: number;
+}
+
+export interface ResolvedMapLink {
+  lat: number;
+  lng: number;
 }
 
 export interface AppointmentListResult {

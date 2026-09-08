@@ -9,6 +9,7 @@ import {
   ValidateNested,
   IsNumber,
   Min,
+  Max,
   MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -16,11 +17,20 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AppointmentType } from '../entities/appointment.entity';
 import { AppointmentStatus } from '../entities/appointment.entity';
 import { CustomerType } from '../entities/appointment.entity';
+import { AppointmentChannel } from '../entities/appointment.entity';
 
 export class CreateAppointmentDto {
   @ApiProperty({ enum: AppointmentType })
   @IsEnum(AppointmentType)
   type: AppointmentType;
+
+  @ApiPropertyOptional({
+    enum: AppointmentChannel,
+    description: 'How this request came in. Defaults to PHONE (the DB column default) when omitted.',
+  })
+  @IsOptional()
+  @IsEnum(AppointmentChannel)
+  channel?: AppointmentChannel;
 
   @ApiProperty({ enum: CustomerType })
   @IsEnum(CustomerType)
@@ -47,6 +57,25 @@ export class CreateAppointmentDto {
   @IsString()
   @MaxLength(255)
   customerAddress?: string;
+
+  // Populated by resolving a Google Maps short link via POST /appointments/resolve-map-link
+  // (see google-maps-link.util.ts) and then submitted alongside the rest of the form, same
+  // pattern the mobile "Use my location" GPS flow already uses - the browser/CCE UI does the
+  // resolving as a separate step, and these are just plain numbers by the time they reach
+  // this DTO. Also fine to type in by hand if the CCE already knows the coordinates.
+  @ApiPropertyOptional({ example: 25.2048493, description: 'Service address latitude, e.g. resolved from a Google Maps link' })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  customerLat?: number;
+
+  @ApiPropertyOptional({ example: 55.2707828, description: 'Service address longitude, e.g. resolved from a Google Maps link' })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  customerLng?: number;
 
   @ApiPropertyOptional({ example: 'Dubai' })
   @IsOptional()

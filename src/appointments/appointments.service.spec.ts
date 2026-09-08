@@ -1,7 +1,9 @@
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
-import { AppointmentStatus, AppointmentType, CustomerType } from './entities/appointment.entity';
+import { AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType } from './entities/appointment.entity';
 import { AuditAction } from '../auth/entities/audit-log.entity';
+import * as googleMapsLinkUtil from './google-maps-link.util';
+import { GoogleMapsLinkError } from './google-maps-link.util';
 
 describe('AppointmentsService', () => {
   let service: AppointmentsService;
@@ -182,6 +184,7 @@ describe('AppointmentsService', () => {
         technicianId: 'tech-1',
         status: AppointmentStatus.SCHEDULED,
         type: AppointmentType.WARRANTY,
+        channel: AppointmentChannel.WHATSAPP,
         dateFrom: new Date('2026-08-01'),
         dateTo: new Date('2026-08-31'),
         page: 2,
@@ -194,6 +197,7 @@ describe('AppointmentsService', () => {
       expect(qb.andWhere).toHaveBeenCalledWith('apt.technicianId = :technicianId', { technicianId: 'tech-1' });
       expect(qb.andWhere).toHaveBeenCalledWith('apt.status = :status', { status: AppointmentStatus.SCHEDULED });
       expect(qb.andWhere).toHaveBeenCalledWith('apt.type = :type', { type: AppointmentType.WARRANTY });
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.channel = :channel', { channel: AppointmentChannel.WHATSAPP });
       expect(qb.skip).toHaveBeenCalledWith(10);
       expect(qb.take).toHaveBeenCalledWith(10);
       expect(result).toEqual({ data: [appointment()], total: 1, page: 2, limit: 10 });
@@ -630,6 +634,41 @@ describe('AppointmentsService', () => {
 
       expect(consoleSpy).toHaveBeenCalled();
       consoleSpy.mockRestore();
+    });
+  });
+
+  // The resolution logic itself (redirect-following, host allowlisting, coordinate
+  // extraction) is unit-tested directly against a fake fetch in
+  // google-maps-link.util.spec.ts - these only cover this service method's own job: call
+  // through, and translate a GoogleMapsLinkError into the 400 the controller/frontend expect.
+  describe('resolveMapLink', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    it('returns the coordinates resolveGoogleMapsLink() finds', async () => {
+      jest.spyOn(googleMapsLinkUtil, 'resolveGoogleMapsLink').mockResolvedValue({ lat: 25.2048493, lng: 55.2707828 });
+
+      const result = await service.resolveMapLink('https://maps.app.goo.gl/AbCdEf');
+
+      expect(result).toEqual({ lat: 25.2048493, lng: 55.2707828 });
+      expect(googleMapsLinkUtil.resolveGoogleMapsLink).toHaveBeenCalledWith('https://maps.app.goo.gl/AbCdEf');
+    });
+
+    it('turns a GoogleMapsLinkError into a BadRequestException carrying the same message', async () => {
+      jest.spyOn(googleMapsLinkUtil, 'resolveGoogleMapsLink').mockRejectedValue(
+        new GoogleMapsLinkError('That does not look like a Google Maps link.'),
+      );
+
+      await expect(service.resolveMapLink('https://evil.example.com/')).rejects.toThrow(BadRequestException);
+      await expect(service.resolveMapLink('https://evil.example.com/')).rejects.toThrow(
+        'That does not look like a Google Maps link.',
+      );
+    });
+
+    it('does not swallow an unrelated error as if it were a bad link', async () => {
+      jest.spyOn(googleMapsLinkUtil, 'resolveGoogleMapsLink').mockRejectedValue(new Error('boom'));
+
+      await expect(service.resolveMapLink('https://maps.app.goo.gl/AbCdEf')).rejects.toThrow('boom');
+      await expect(service.resolveMapLink('https://maps.app.goo.gl/AbCdEf')).rejects.not.toBeInstanceOf(BadRequestException);
     });
   });
 });

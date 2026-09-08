@@ -38,6 +38,22 @@ export enum CustomerType {
   B2B_SALES_CHANNEL = 'B2B_SALES_CHANNEL',
 }
 
+// Service Desk gap flagged in REDTRA360_REVIEW.md - the vendor's demo had a single
+// channel-agnostic triage inbox (phone/email/WhatsApp/walk-in/portal-dealer all landing in
+// one list) that Jacky's had no equivalent of: every appointment looked the same regardless
+// of how the request actually came in, so there was no way to see where the day's intake
+// was coming from. This enum plus the `channel` column below is the minimum needed for that
+// triage value - it does NOT wire up live WhatsApp/email intake (that stays correctly
+// parked behind the business's own WhatsApp Business account plan, per the review).
+export enum AppointmentChannel {
+  PHONE = 'PHONE',
+  EMAIL = 'EMAIL',
+  WHATSAPP = 'WHATSAPP',
+  WALK_IN = 'WALK_IN',
+  PORTAL = 'PORTAL',
+  DEALER = 'DEALER',
+}
+
 @Entity('appointments')
 @Index(['serviceCentreId', 'scheduledAt'])
 @Index(['technicianId', 'scheduledAt'])
@@ -58,6 +74,13 @@ export class Appointment {
   @Column({ type: 'enum', enum: CustomerType })
   customerType: CustomerType;
 
+  // Defaults to PHONE at the DB level (not just in the DTO) so every pre-existing row and
+  // every caller that doesn't yet know about this field - Swagger scripts, the mobile app's
+  // own appointment lookups, this app's own tests - keeps working unchanged rather than
+  // getting a NULL that the triage list then has to special-case.
+  @Column({ type: 'enum', enum: AppointmentChannel, default: AppointmentChannel.PHONE })
+  channel: AppointmentChannel;
+
   @Column()
   customerName: string;
 
@@ -69,6 +92,22 @@ export class Appointment {
 
   @Column({ nullable: true })
   customerAddress: string;
+
+  // The user's own idea from the REDTRA360 review call (10:29-11:08): accept the short link
+  // a customer shares from Google Maps and resolve it server-side into coordinates, instead
+  // of asking anyone to type latitude/longitude by hand. These two columns are the resolved
+  // output only - the raw link the CCE pasted isn't persisted (nothing downstream needs it
+  // once it's been resolved, and keeping it around would just be another stale copy to go
+  // out of sync with the coordinates). `double precision`, not `decimal`: TypeORM maps
+  // Postgres `decimal`/`numeric` columns to JS strings, not numbers (a well-known gotcha),
+  // and these are plotted/used as numbers everywhere they're read (frontend "View on
+  // Google Maps" link, any future distance/routing use) - see
+  // google-maps-link.util.ts for how they get populated.
+  @Column({ type: 'double precision', nullable: true })
+  customerLat: number | null;
+
+  @Column({ type: 'double precision', nullable: true })
+  customerLng: number | null;
 
   @Column({ nullable: true })
   customerCity: string;

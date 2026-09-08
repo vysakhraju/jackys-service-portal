@@ -18,6 +18,7 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
 import { AssignTechnicianDto } from './dto/assign-technician.dto';
+import { ResolveMapLinkDto } from './dto/resolve-map-link.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -25,7 +26,7 @@ import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { Appointment } from './entities/appointment.entity';
-import { AppointmentStatus, AppointmentType, CustomerType } from './entities/appointment.entity';
+import { AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType } from './entities/appointment.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 
@@ -65,6 +66,7 @@ export class AppointmentsController {
   @ApiQuery({ name: 'technicianId', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: AppointmentStatus })
   @ApiQuery({ name: 'type', required: false, enum: AppointmentType })
+  @ApiQuery({ name: 'channel', required: false, enum: AppointmentChannel })
   @ApiQuery({ name: 'dateFrom', required: false, type: String, description: 'ISO date string' })
   @ApiQuery({ name: 'dateTo', required: false, type: String, description: 'ISO date string' })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -75,6 +77,7 @@ export class AppointmentsController {
     @Query('technicianId') technicianId?: string,
     @Query('status') status?: AppointmentStatus,
     @Query('type') type?: AppointmentType,
+    @Query('channel') channel?: AppointmentChannel,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('page') page?: number,
@@ -85,11 +88,21 @@ export class AppointmentsController {
       technicianId,
       status,
       type,
+      channel,
       dateFrom: dateFrom ? new Date(dateFrom) : undefined,
       dateTo: dateTo ? new Date(dateTo) : undefined,
       page,
       limit,
     });
+  }
+
+  @Post('resolve-map-link')
+  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE')
+  @ApiOperation({ summary: 'Resolve a Google Maps short link to { lat, lng } - does not create or modify anything' })
+  @ApiResponse({ status: 200, description: '{ lat: number, lng: number }' })
+  @ApiResponse({ status: 400, description: 'Not a resolvable Google Maps link' })
+  async resolveMapLink(@Body() body: ResolveMapLinkDto) {
+    return this.appointmentsService.resolveMapLink(body.url);
   }
 
   @Get('dashboard/stats')

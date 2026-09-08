@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
-import { Appointment, AppointmentStatus, AppointmentType, CustomerType } from './entities/appointment.entity';
+import { Appointment, AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType } from './entities/appointment.entity';
+import { resolveGoogleMapsLink, GoogleMapsLinkError, LatLng } from './google-maps-link.util';
 import { ServiceCentre } from '../master-data/entities/service-centre.entity';
 import { User } from '../auth/entities/user.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
@@ -142,6 +143,7 @@ export class AppointmentsService {
     technicianId?: string;
     status?: AppointmentStatus;
     type?: AppointmentType;
+    channel?: AppointmentChannel;
     dateFrom?: Date;
     dateTo?: Date;
     page?: number;
@@ -173,6 +175,10 @@ export class AppointmentsService {
 
     if (filters?.type) {
       query.andWhere('apt.type = :type', { type: filters.type });
+    }
+
+    if (filters?.channel) {
+      query.andWhere('apt.channel = :channel', { channel: filters.channel });
     }
 
     if (filters?.dateFrom) {
@@ -589,6 +595,24 @@ export class AppointmentsService {
       today: todayStats,
       week: { total: weekAppointments.length, byStatus },
     };
+  }
+
+  // Backs POST /appointments/resolve-map-link - a standalone endpoint the create/edit form
+  // calls live (same shape as the mobile "Use my location" GPS flow: resolve first, then
+  // submit the resulting numbers as ordinary fields) rather than something wired into
+  // create()/update() itself. Keeping it standalone means a bad/unreachable link only fails
+  // this one lookup - it can never block or fail an appointment save, and the CCE gets
+  // immediate feedback (or can fall back to typing lat/lng by hand) before submitting rather
+  // than after.
+  async resolveMapLink(url: string): Promise<LatLng> {
+    try {
+      return await resolveGoogleMapsLink(url);
+    } catch (err) {
+      if (err instanceof GoogleMapsLinkError) {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
+    }
   }
 
   private async logAudit(

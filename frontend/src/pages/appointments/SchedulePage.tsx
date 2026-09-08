@@ -18,8 +18,10 @@ import {
   getVisit,
   listAppointments,
   markAppointmentOnSite,
+  resolveMapLink,
 } from '../../lib/appointmentsApi';
 import {
+  APPOINTMENT_CHANNELS,
   APPOINTMENT_STATUSES,
   APPOINTMENT_TYPES,
   CUSTOMER_TYPES,
@@ -30,11 +32,19 @@ import {
 
 type FormValues = {
   type: string;
+  channel: string;
   customerType: string;
   customerName: string;
   customerPhone: string;
   customerEmail: string;
   customerAddress: string;
+  // Deliberately plain strings, not `valueAsNumber`-backed numbers: an empty number input's
+  // native `.valueAsNumber` is NaN (not ''), and react-hook-form's `valueAsNumber: true`
+  // reads through to that native property on every watch()/getValues() call - not just on
+  // change - so an untouched field would silently read back as NaN rather than ''. Parsing
+  // happens once, explicitly, at submit time (onSubmit below) instead.
+  customerLat: string;
+  customerLng: string;
   customerCity: string;
   customerCountry: string;
   customerVatNumber: string;
@@ -53,11 +63,14 @@ type FormValues = {
 
 const EMPTY_FORM: FormValues = {
   type: 'WARRANTY',
+  channel: 'PHONE',
   customerType: 'B2C',
   customerName: '',
   customerPhone: '',
   customerEmail: '',
   customerAddress: '',
+  customerLat: '',
+  customerLng: '',
   customerCity: '',
   customerCountry: '',
   customerVatNumber: '',
@@ -73,6 +86,20 @@ const EMPTY_FORM: FormValues = {
   technicianId: '',
   notes: '',
 };
+
+function googleMapsViewUrl(lat: number, lng: number) {
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+// A blank field must become `undefined` (omit the field entirely), never NaN/null - see the
+// FormValues.customerLat/customerLng doc comment for why these stay plain strings up to
+// this point rather than react-hook-form's `valueAsNumber`.
+function parseOptionalNumber(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === '') return undefined;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : undefined;
+}
 
 // Mirrors the exact status-transition guards in AppointmentsService, so we don't render a
 // button that the backend will just 400 - see confirmAppointment/markOnSite/
@@ -108,6 +135,7 @@ export function SchedulePage() {
     technicianId: '',
     status: '',
     type: '',
+    channel: '',
     dateFrom: '',
     dateTo: '',
   });
@@ -122,6 +150,7 @@ export function SchedulePage() {
         technicianId: filters.technicianId || undefined,
         status: (filters.status || undefined) as AppointmentStatusValue | undefined,
         type: (filters.type || undefined) as CreateAppointmentInput['type'] | undefined,
+        channel: (filters.channel || undefined) as CreateAppointmentInput['channel'] | undefined,
         dateFrom: filters.dateFrom || undefined,
         dateTo: filters.dateTo || undefined,
         page,
@@ -143,8 +172,18 @@ export function SchedulePage() {
     register,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ defaultValues: EMPTY_FORM });
+
+  const [mapLinkInput, setMapLinkInput] = useState('');
+  const resolveMapLinkMutation = useMutation({
+    mutationFn: (url: string) => resolveMapLink(url),
+    onSuccess: (coords) => {
+      setValue('customerLat', String(coords.lat));
+      setValue('customerLng', String(coords.lng));
+    },
+  });
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: ['appointments'] });
@@ -203,17 +242,22 @@ export function SchedulePage() {
   function openCreate() {
     setMutationError(null);
     reset(EMPTY_FORM);
+    setMapLinkInput('');
+    resolveMapLinkMutation.reset();
     setCreateOpen(true);
   }
 
   function onSubmit(values: FormValues) {
     const payload: CreateAppointmentInput = {
       type: values.type as CreateAppointmentInput['type'],
+      channel: values.channel as CreateAppointmentInput['channel'],
       customerType: values.customerType as CreateAppointmentInput['customerType'],
       customerName: values.customerName,
       customerPhone: values.customerPhone,
       customerEmail: values.customerEmail || undefined,
       customerAddress: values.customerAddress || undefined,
+      customerLat: parseOptionalNumber(values.customerLat),
+      customerLng: parseOptionalNumber(values.customerLng),
       customerCity: values.customerCity || undefined,
       customerCountry: values.customerCountry || undefined,
       customerVatNumber: values.customerVatNumber || undefined,
@@ -241,6 +285,7 @@ export function SchedulePage() {
       </div>
     ) },
     { key: 'type', label: 'Type', render: (r) => r.type.replaceAll('_', ' ') },
+    { key: 'channel', label: 'Channel', render: (r) => <span className="text-xs text-slate-600">{r.channel.replaceAll('_', ' ')}</span> },
     { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
     { key: 'centre', label: 'Service Centre', render: (r) => r.serviceCentre?.name ?? r.serviceCentreId },
     { key: 'technician', label: 'Technician', render: (r) => (r.technician ? `${r.technician.firstName} ${r.technician.lastName}` : '—') },
@@ -302,6 +347,18 @@ export function SchedulePage() {
             <option value="">All</option>
             {APPOINTMENT_TYPES.map((t) => (
               <option key={t} value={t}>{t.replaceAll('_', ' ')}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Channel" hint="Service Desk triage - how the request came in">
+          <select
+            className={`${inputClass} w-36`}
+            value={filters.channel}
+            onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, channel: e.target.value })); }}
+          >
+            <option value="">All</option>
+            {APPOINTMENT_CHANNELS.map((c) => (
+              <option key={c} value={c}>{c.replaceAll('_', ' ')}</option>
             ))}
           </select>
         </Field>
@@ -428,6 +485,11 @@ export function SchedulePage() {
               </select>
             </Field>
           </div>
+          <Field label="Channel" hint="How this request came in - Service Desk triage">
+            <select className={inputClass} {...register('channel', { required: true })}>
+              {APPOINTMENT_CHANNELS.map((c) => <option key={c} value={c}>{c.replaceAll('_', ' ')}</option>)}
+            </select>
+          </Field>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Customer name" error={errors.customerName?.message}>
               <input className={inputClass} {...register('customerName', { required: 'Required' })} />
@@ -443,6 +505,45 @@ export function SchedulePage() {
             <Field label="Address (optional)">
               <input className={inputClass} {...register('customerAddress')} />
             </Field>
+          </div>
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+              Service address coordinates (optional)
+            </p>
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="flex-1" style={{ minWidth: '14rem' }}>
+                <Field label="Paste a Google Maps link">
+                  <input
+                    className={inputClass}
+                    placeholder="https://maps.app.goo.gl/…"
+                    value={mapLinkInput}
+                    onChange={(e) => setMapLinkInput(e.target.value)}
+                  />
+                </Field>
+              </div>
+              <button
+                type="button"
+                disabled={!mapLinkInput.trim() || resolveMapLinkMutation.isPending}
+                onClick={() => resolveMapLinkMutation.mutate(mapLinkInput.trim())}
+                className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                {resolveMapLinkMutation.isPending ? 'Resolving…' : 'Resolve'}
+              </button>
+            </div>
+            {resolveMapLinkMutation.error ? <ErrorNotice error={resolveMapLinkMutation.error} /> : null}
+            {resolveMapLinkMutation.isSuccess && resolveMapLinkMutation.data && (
+              <p className="mt-1 text-xs text-emerald-700">
+                Resolved: {resolveMapLinkMutation.data.lat}, {resolveMapLinkMutation.data.lng}
+              </p>
+            )}
+            <div className="mt-2 grid grid-cols-2 gap-4">
+              <Field label="Latitude (optional)" hint="Auto-filled by Resolve, or type it in">
+                <input type="number" step="any" className={inputClass} {...register('customerLat')} />
+              </Field>
+              <Field label="Longitude (optional)">
+                <input type="number" step="any" className={inputClass} {...register('customerLng')} />
+              </Field>
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <Field label="City (optional)">
@@ -591,6 +692,7 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
           <DetailRow label="Status"><StatusBadge status={appointment.status} /></DetailRow>
           <DetailRow label="Type">{appointment.type.replaceAll('_', ' ')}</DetailRow>
+          <DetailRow label="Channel">{appointment.channel.replaceAll('_', ' ')}</DetailRow>
           <DetailRow label="Customer">{appointment.customerName} · {appointment.customerPhone}</DetailRow>
           <DetailRow label="Customer type">{appointment.customerType}</DetailRow>
           <DetailRow label="Service centre">{appointment.serviceCentre?.name ?? appointment.serviceCentreId}</DetailRow>
@@ -599,6 +701,18 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
           <DetailRow label="Brand / model">{[appointment.brand, appointment.modelNumber].filter(Boolean).join(' / ') || '—'}</DetailRow>
           <DetailRow label="Serial number">{appointment.serialNumber ?? '—'}</DetailRow>
           <DetailRow label="Invoice number">{appointment.invoiceNumber ?? '—'}</DetailRow>
+          <DetailRow label="Service address coordinates">
+            {appointment.customerLat != null && appointment.customerLng != null ? (
+              <a
+                href={googleMapsViewUrl(appointment.customerLat, appointment.customerLng)}
+                target="_blank"
+                rel="noreferrer"
+                className="text-slate-700 underline"
+              >
+                {appointment.customerLat.toFixed(5)}, {appointment.customerLng.toFixed(5)} · View on Google Maps →
+              </a>
+            ) : '—'}
+          </DetailRow>
           {appointment.cancellationReason && (
             <DetailRow label="Cancellation reason">{appointment.cancellationReason}</DetailRow>
           )}

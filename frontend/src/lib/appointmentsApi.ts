@@ -12,6 +12,7 @@ import type {
   CaptureFaultSymptomInput,
   CaptureSerialNumberInput,
   CreateAppointmentInput,
+  ResolvedMapLink,
   StartVisitInput,
   TechnicianVisit,
 } from './appointmentsTypes';
@@ -30,6 +31,7 @@ export const listAppointments = (filters: AppointmentListFilters) =>
         technicianId: filters.technicianId || undefined,
         status: filters.status || undefined,
         type: filters.type || undefined,
+        channel: filters.channel || undefined,
         dateFrom: filters.dateFrom || undefined,
         dateTo: filters.dateTo || undefined,
         page: filters.page,
@@ -64,6 +66,13 @@ export const markAppointmentOnSite = (id: string) => api.put<Appointment>(`${BAS
 export const completeAppointment = (id: string) => api.put<Appointment>(`${BASE}/${id}/complete`).then((r) => r.data);
 
 export const deleteAppointment = (id: string) => api.delete(`${BASE}/${id}`).then((r) => r.data);
+
+// The user's own idea from the REDTRA360 review call: paste a Google Maps short link
+// instead of typing lat/lng by hand. Resolved live (a separate step, like the mobile "Use
+// my location" GPS flow), then submitted as plain customerLat/customerLng numbers alongside
+// the rest of the create form - see google-maps-link.util.ts for how resolution works.
+export const resolveMapLink = (url: string) =>
+  api.post<ResolvedMapLink>(`${BASE}/resolve-map-link`, { url }).then((r) => r.data);
 
 // === Technician field view (src/technician) ===
 const TECH_BASE = '/technician';
