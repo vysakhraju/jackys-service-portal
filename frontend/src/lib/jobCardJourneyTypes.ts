@@ -32,6 +32,15 @@ export interface JourneySearchResult {
   deliveryNumber: string | null;
 }
 
+// Mirrors job-card-edit-lock.util.ts's JobCardEditLock - display-only, added 2026-09-09.
+// `allowedRoles` is who can still amend an Estimate/Invoice (or a future generic edit
+// screen) once the Job Card is late-stage; every role can when `locked` is false.
+export interface JobCardEditLock {
+  locked: boolean;
+  allowedRoles: string[];
+  reason: string | null;
+}
+
 export interface JobCardJourney {
   jobCard: JobCard;
   appointment: Appointment;
@@ -42,4 +51,5 @@ export interface JobCardJourney {
   invoice: Invoice | null;
   delivery: Delivery | null;
   steps: JourneyStep[];
+  editLock: JobCardEditLock;
 }

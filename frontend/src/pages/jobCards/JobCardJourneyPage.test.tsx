@@ -9,10 +9,31 @@ vi.mock('../../lib/jobCardJourneyApi', () => ({
   searchJobCardJourney: vi.fn(),
   getJobCardJourney: vi.fn(),
 }));
+vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
 
 import { getJobCardJourney, searchJobCardJourney } from '../../lib/jobCardJourneyApi';
+import { useAuth } from '../../lib/auth';
 import { JobCardJourneyPage } from './JobCardJourneyPage';
 import type { JobCardJourney } from '../../lib/jobCardJourneyTypes';
+
+function mockUser(roleName: string) {
+  vi.mocked(useAuth).mockReturnValue({
+    user: {
+      id: 'user-1',
+      firstName: 'Test',
+      lastName: 'User',
+      email: 't@example.com',
+      employeeId: 'E1',
+      status: 'ACTIVE',
+      lastLoginAt: null,
+      role: { id: 'r1', name: roleName, displayName: roleName },
+    },
+    isLoading: false,
+    isAuthenticated: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+  } as any);
+}
 
 function renderPage(initialPath = '/job-cards/journey') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -59,6 +80,7 @@ function makeJourney(overrides: Partial<JobCardJourney> = {}): JobCardJourney {
         detail: 'This Job Card is back in the Ready for Delivery pool.',
       },
     ],
+    editLock: { locked: false, allowedRoles: [], reason: null },
     ...overrides,
   };
 }
@@ -66,6 +88,8 @@ function makeJourney(overrides: Partial<JobCardJourney> = {}): JobCardJourney {
 beforeEach(() => {
   vi.mocked(searchJobCardJourney).mockReset();
   vi.mocked(getJobCardJourney).mockReset();
+  vi.mocked(useAuth).mockReset();
+  mockUser('SUPER_ADMIN');
 });
 
 describe('JobCardJourneyPage', () => {
@@ -80,6 +104,51 @@ describe('JobCardJourneyPage', () => {
     // the JC-0120-shaped case (QC_PASSED, delivery cancelled) the user reported.
     expect(screen.getByText('Delivery cancelled')).toBeInTheDocument();
     expect(screen.getByText(/back in the Ready for Delivery pool/)).toBeInTheDocument();
+  });
+
+  it('shows no edit-lock banner when the journey is unlocked', async () => {
+    vi.mocked(getJobCardJourney).mockResolvedValue(makeJourney());
+
+    renderPage('/job-cards/journey?jobCardId=jc-120');
+
+    await screen.findByText('JC-0120');
+    expect(screen.queryByText(/Late-stage job card/)).not.toBeInTheDocument();
+  });
+
+  it("shows the 'still editable' banner variant for a role in editLock.allowedRoles", async () => {
+    mockUser('SERVICE_HEAD');
+    vi.mocked(getJobCardJourney).mockResolvedValue(
+      makeJourney({
+        editLock: {
+          locked: true,
+          allowedRoles: ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'ACCOUNTANT', 'FINANCE_MANAGER'],
+          reason: 'This job card is QC_PASSED - further changes need Super Admin, Service Head, ...',
+        },
+      }),
+    );
+
+    renderPage('/job-cards/journey?jobCardId=jc-120');
+
+    expect(await screen.findByText('Late-stage job card')).toBeInTheDocument();
+    expect(screen.getByText(/This job card is QC_PASSED/)).toBeInTheDocument();
+    expect(screen.queryByText('Read-only — late-stage job card')).not.toBeInTheDocument();
+  });
+
+  it("shows the read-only banner variant for a role NOT in editLock.allowedRoles", async () => {
+    mockUser('TECHNICIAN_WORKSHOP');
+    vi.mocked(getJobCardJourney).mockResolvedValue(
+      makeJourney({
+        editLock: {
+          locked: true,
+          allowedRoles: ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'ACCOUNTANT', 'FINANCE_MANAGER'],
+          reason: 'This job card is DELIVERED - further changes need Super Admin, Service Head, ...',
+        },
+      }),
+    );
+
+    renderPage('/job-cards/journey?jobCardId=jc-120');
+
+    expect(await screen.findByText('Read-only — late-stage job card')).toBeInTheDocument();
   });
 
   it('searches by free text and lets the user pick a result to load its journey', async () => {

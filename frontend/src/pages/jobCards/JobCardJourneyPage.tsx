@@ -19,8 +19,9 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
+import { useAuth } from '../../lib/auth';
 import { getJobCardJourney, searchJobCardJourney } from '../../lib/jobCardJourneyApi';
-import type { JobCardJourney, JourneyStep, JourneyStepState } from '../../lib/jobCardJourneyTypes';
+import type { JobCardEditLock, JobCardJourney, JourneyStep, JourneyStepState } from '../../lib/jobCardJourneyTypes';
 
 export function JobCardJourneyPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -129,11 +130,14 @@ function JourneyDetail({ jobCardId }: { jobCardId: string }) {
 }
 
 function JourneyView({ journey }: { journey: JobCardJourney }) {
-  const { jobCard, appointment, visit, taskPauses, spareRequest, estimates, invoice, delivery, steps } = journey;
+  const { jobCard, appointment, visit, taskPauses, spareRequest, estimates, invoice, delivery, steps, editLock } =
+    journey;
   const openPause = taskPauses.find((p) => p.resumedAt === null);
 
   return (
     <div className="space-y-6">
+      <EditLockBanner editLock={editLock} />
+
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <div className="flex items-center justify-between">
           <div>
@@ -325,6 +329,34 @@ const STEP_LABEL: Record<JourneyStepState, string> = {
   skipped: 'text-slate-300 line-through',
   cancelled: 'font-semibold text-red-700',
 };
+
+/**
+ * Late-stage edit-lock banner - 2026-09-09, backed by job-card-edit-lock.util.ts on the
+ * backend. Display-only: nothing here enforces anything, it just tells whoever's looking
+ * whether they personally can still amend an Estimate/Invoice (or a future generic edit
+ * screen) on this Job Card, or need a Super Admin/Service Head/Team Leader/Accountant/
+ * Finance Manager. Renders nothing when the Job Card isn't late-stage at all.
+ */
+function EditLockBanner({ editLock }: { editLock: JobCardEditLock }) {
+  const { user } = useAuth();
+  if (!editLock.locked) return null;
+
+  const currentUserCanEdit = !!user && editLock.allowedRoles.includes(user.role.name);
+
+  return (
+    <div
+      role="status"
+      className={`rounded-lg border p-3 text-sm ${
+        currentUserCanEdit
+          ? 'border-amber-200 bg-amber-50 text-amber-900'
+          : 'border-slate-300 bg-slate-100 text-slate-600'
+      }`}
+    >
+      <p className="font-medium">{currentUserCanEdit ? 'Late-stage job card' : 'Read-only — late-stage job card'}</p>
+      <p className="mt-0.5">{editLock.reason}</p>
+    </div>
+  );
+}
 
 function JourneyStepper({ steps }: { steps: JourneyStep[] }) {
   return (

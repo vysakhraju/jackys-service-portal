@@ -10,6 +10,7 @@ import { EstimatesService } from '../estimates/estimates.service';
 import { InvoicingService } from '../invoicing/invoicing.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { buildJourneySteps } from '../job-cards/job-card-journey.util';
+import { getJobCardEditLock } from '../job-cards/job-card-edit-lock.util';
 
 export interface JourneySearchResult {
   jobCardId: string;
@@ -86,7 +87,13 @@ export class JobCardJourneyService {
         : null,
     });
 
-    return { jobCard, appointment, visit, taskPauses, spareRequest, estimates, invoice, delivery, steps };
+    // Display-only summary of the 2026-09-09 late-stage edit-lock (see
+    // job-card-edit-lock.util.ts's doc comment for what this does and, just as
+    // importantly, does NOT touch) - lets the frontend grey out edit affordances on this
+    // page without duplicating the status list/role list here.
+    const editLock = getJobCardEditLock(jobCard.status);
+
+    return { jobCard, appointment, visit, taskPauses, spareRequest, estimates, invoice, delivery, steps, editLock };
   }
 
   /**

@@ -105,6 +105,24 @@ describe('JobCardJourneyService', () => {
       expect(result.steps.some((s) => s.key === 'delivery_cancelled')).toBe(true);
     });
 
+    it('includes a locked editLock summary when the Job Card is late-stage (default fixture is QC_PASSED)', async () => {
+      const result = await service.getJourney('jc-1');
+
+      expect(result.editLock).toEqual({
+        locked: true,
+        allowedRoles: ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'ACCOUNTANT', 'FINANCE_MANAGER'],
+        reason: expect.stringContaining('QC_PASSED'),
+      });
+    });
+
+    it('includes an unlocked editLock summary for an early-stage Job Card', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS }));
+
+      const result = await service.getJourney('jc-1');
+
+      expect(result.editLock).toEqual({ locked: false, allowedRoles: [], reason: null });
+    });
+
     it('never throws when the technician visit lookup fails - falls back to a null visit step', async () => {
       technicianService.getVisit.mockRejectedValue(new Error('visit lookup exploded'));
 
