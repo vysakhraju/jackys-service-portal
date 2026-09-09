@@ -259,6 +259,18 @@ Restart `npm run dev -- --host` after saving so Vite picks up the change.
 Your colleague opens **`http://192.168.60.85:5173`** in their own browser (same Wi-Fi
 network required) and signs in normally.
 
+> **Note — OS-level browser notifications don't work over a LAN address.** The Need
+> Spare pop-up now has two layers (added 2026-09-09): an in-app toast (always works) and
+> a real OS/browser notification (the "Enable notifications" banner a Team
+> Leader/Service Head/Super Admin sees). The OS notification uses the browser's
+> Notifications API, which only works in a *secure context* — `https://`, or
+> `http://localhost` / `http://127.0.0.1`. `http://192.168.60.85:5173` is **not** a
+> secure context, so anyone testing over the LAN address (including you, if you're the
+> one using it) will only ever get the toast there, never the OS pop-up, even after
+> clicking "Enable notifications". This isn't a bug to chase — there's no workaround
+> short of serving over HTTPS or a real deployment domain. If you need to verify the OS
+> notification itself, test from `http://localhost:5173` instead.
+
 ### 6. If it still can't connect: check the Windows Firewall
 
 Windows may block inbound connections on ports 3000/5173 from other devices the first

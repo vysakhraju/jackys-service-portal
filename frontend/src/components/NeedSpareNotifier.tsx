@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { useNeedSpareSocket } from '../lib/useNeedSpareSocket';
 import { useToast } from '../lib/toast';
+import { showBrowserNotification } from '../lib/browserNotifications';
 import { PENDING_NEED_SPARE_QUERY_KEY } from '../pages/inventory/NeedSpareReviewPage';
 
 // Same reviewer roles as NeedSpareReviewPage/InventoryController's own @Roles() on
 // review-need-spare, and the roles InventoryGateway itself admits - kept in sync by hand,
 // same convention every other role-list constant in this app already follows.
-const REVIEW_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
+export const REVIEW_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
 
 /**
  * Mounted once, app-wide, inside AppLayout (inside <ToastProvider>) - this is the "force a
@@ -28,14 +29,28 @@ export function NeedSpareNotifier() {
   useNeedSpareSocket(enabled, (request) => {
     const partLabel = request.sparePart ? `${request.sparePart.name} (${request.sparePart.code})` : 'a spare part';
     const jobCardLabel = request.jobCard?.jobCardNumber ?? request.jobCardId;
+    const description = `${request.quantityRequested} × ${partLabel} for job card ${jobCardLabel}`;
 
     push({
       title: 'New Need Spare request',
-      description: `${request.quantityRequested} × ${partLabel} for job card ${jobCardLabel}`,
+      description,
       action: {
         label: 'Review',
         onClick: () => navigate('/workshop-inventory/need-spare'),
       },
+    });
+
+    // The OS-level counterpart to the toast above - added 2026-09-09, see
+    // browserNotifications.ts. No-ops silently (still leaves the toast doing its job) when
+    // the browser/context doesn't support it or the reviewer hasn't granted permission via
+    // NotificationPermissionBanner yet. Tagged per-request-id so re-broadcasts of the same
+    // still-pending request (see InventoryGateway's poll-and-diff) don't stack duplicate OS
+    // notifications - the newest one for that id just replaces the last.
+    showBrowserNotification({
+      title: 'New Need Spare request',
+      body: description,
+      tag: `need-spare-${request.id}`,
+      onClick: () => navigate('/workshop-inventory/need-spare'),
     });
 
     queryClient.invalidateQueries({ queryKey: PENDING_NEED_SPARE_QUERY_KEY });

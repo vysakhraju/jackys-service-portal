@@ -1,7 +1,8 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { ToastProvider } from '../lib/toast';
-import { NeedSpareNotifier } from './NeedSpareNotifier';
+import { NeedSpareNotifier, REVIEW_ROLES } from './NeedSpareNotifier';
+import { NotificationPermissionBanner } from './NotificationPermissionBanner';
 
 // One row per module in the build plan. `path` is only set once that
 // module's screens actually exist — until then it renders as a disabled
@@ -90,8 +91,13 @@ export function AppLayout() {
           </div>
         </aside>
 
-        <main className="flex-1 overflow-y-auto">
-          <Outlet />
+        <main className="flex flex-1 flex-col overflow-y-auto">
+          {/* Same reviewer gate as NeedSpareNotifier - only the roles who'd ever get a Need
+              Spare pop-up are asked to turn on OS notifications for it. */}
+          {!!user && REVIEW_ROLES.includes(user.role.name) && <NotificationPermissionBanner />}
+          <div className="flex-1">
+            <Outlet />
+          </div>
         </main>
       </div>
     </ToastProvider>
