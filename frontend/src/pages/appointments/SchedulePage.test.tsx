@@ -13,6 +13,7 @@ vi.mock('../../lib/appointmentsApi', () => ({
   createAppointment: vi.fn(),
   deleteAppointment: vi.fn(),
   getAppointmentDashboardStats: vi.fn(),
+  getSchedulingGrid: vi.fn(),
   getVisit: vi.fn(),
   listAppointments: vi.fn(),
   markAppointmentOnSite: vi.fn(),
@@ -20,8 +21,37 @@ vi.mock('../../lib/appointmentsApi', () => ({
 }));
 
 import { useAuth } from '../../lib/auth';
-import { createAppointment, getAppointmentDashboardStats, listAppointments, resolveMapLink } from '../../lib/appointmentsApi';
+import { createAppointment, getAppointmentDashboardStats, getSchedulingGrid, listAppointments, resolveMapLink } from '../../lib/appointmentsApi';
 import { SchedulePage } from './SchedulePage';
+
+// One technician, one hour, all free - just enough for fillRequiredCreateFields() below to
+// tap a real chip. Individual tests override this via getSchedulingGrid.mockResolvedValueOnce
+// when they care about the grid's own behavior (see SchedulingGrid.test.tsx for that).
+function schedulingGridFixture() {
+  return {
+    date: '2026-09-09',
+    isOpen: true,
+    startTime: '08:00',
+    endTime: '09:00',
+    breakStart: null,
+    breakEnd: null,
+    rosterLabel: 'Mon-Sat 08:00-09:00',
+    technicians: [
+      {
+        id: 'tech-1',
+        name: 'Ravi Kumar',
+        appointmentCount: 0,
+        atDailyCap: false,
+        slots: [
+          { time: '08:00', iso: '2026-09-09T08:00:00.000Z', available: true },
+          { time: '08:15', iso: '2026-09-09T08:15:00.000Z', available: true },
+          { time: '08:30', iso: '2026-09-09T08:30:00.000Z', available: true },
+          { time: '08:45', iso: '2026-09-09T08:45:00.000Z', available: true },
+        ],
+      },
+    ],
+  };
+}
 
 // This page (unlike Finance/AMC) has no layout-level role gate at all - every logged-in
 // user reaches it. Only the dashboard-stats widget it now renders is itself role-gated
@@ -54,6 +84,7 @@ beforeEach(() => {
   vi.mocked(getAppointmentDashboardStats).mockReset().mockResolvedValue(makeAppointmentDashboardStats());
   vi.mocked(createAppointment).mockReset();
   vi.mocked(resolveMapLink).mockReset();
+  vi.mocked(getSchedulingGrid).mockReset().mockResolvedValue(schedulingGridFixture());
   mockUser();
 });
 
@@ -75,11 +106,14 @@ async function openCreateModal() {
 // text for e.g. "Customer phone" (which has a hint) is actually "Customer phonee.g.
 // +971501234567" once concatenated, not the bare string. Substring matching sidesteps that
 // without needing to track which fields happen to carry a hint today.
-function fillRequiredCreateFields(form: ReturnType<typeof within>) {
+// Picking a technician + time is now one tap on the scheduling grid (2026-09-09), not a
+// separate "Scheduled at" input - fill in the service centre id first (the grid query is
+// disabled until one is set), then wait for the grid to load and tap its first chip.
+async function fillRequiredCreateFields(form: ReturnType<typeof within>) {
   fireEvent.change(form.getByLabelText('Customer name', { exact: false }), { target: { value: 'Jane Doe' } });
   fireEvent.change(form.getByLabelText('Customer phone', { exact: false }), { target: { value: '+971500000000' } });
-  fireEvent.change(form.getByLabelText('Scheduled at', { exact: false }), { target: { value: '2026-09-10T09:00' } });
   fireEvent.change(form.getByLabelText('Service centre id', { exact: false }), { target: { value: 'sc-1' } });
+  fireEvent.click(await form.findByTestId('chip-tech-1-08:00'));
 }
 
 // Regression test for the-fool's most severe Frontend Phase 10 finding: an AMC-type,
@@ -215,7 +249,7 @@ describe('SchedulePage - Service Desk channel', () => {
   it('submits the selected channel (defaulting to PHONE) when creating an appointment', async () => {
     vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
     const form = await openCreateModal();
-    fillRequiredCreateFields(form);
+    await fillRequiredCreateFields(form);
 
     // Default should already be PHONE without the user touching the field.
     expect(form.getByLabelText('Channel', { exact: false })).toHaveValue('PHONE');
@@ -238,7 +272,7 @@ describe('SchedulePage - Google Maps link resolve', () => {
     vi.mocked(resolveMapLink).mockResolvedValue({ lat: 25.2048493, lng: 55.2707828 });
     vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
     const form = await openCreateModal();
-    fillRequiredCreateFields(form);
+    await fillRequiredCreateFields(form);
 
     fireEvent.change(form.getByPlaceholderText('https://maps.app.goo.gl/…'), {
       target: { value: 'https://maps.app.goo.gl/AbCdEf' },
@@ -280,7 +314,7 @@ describe('SchedulePage - Google Maps link resolve', () => {
   it('lets latitude/longitude be typed in by hand without ever resolving a link', async () => {
     vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
     const form = await openCreateModal();
-    fillRequiredCreateFields(form);
+    await fillRequiredCreateFields(form);
 
     fireEvent.change(form.getByLabelText(/Latitude/), { target: { value: '25.1' } });
     fireEvent.change(form.getByLabelText(/Longitude/), { target: { value: '55.2' } });

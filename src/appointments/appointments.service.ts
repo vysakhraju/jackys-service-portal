@@ -10,7 +10,8 @@ import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In } from 'typeo
 import { Appointment, AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType } from './entities/appointment.entity';
 import { resolveGoogleMapsLink, GoogleMapsLinkError, LatLng } from './google-maps-link.util';
 import { ServiceCentre } from '../master-data/entities/service-centre.entity';
-import { User } from '../auth/entities/user.entity';
+import { User, UserStatus } from '../auth/entities/user.entity';
+import { RoleName } from '../auth/entities/role.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { AuditLog } from '../auth/entities/audit-log.entity';
@@ -19,6 +20,7 @@ import { AuditAction } from '../auth/entities/audit-log.entity';
 // (JobCardsModule already imports this module, so the reverse would be a cycle).
 import { JobCard } from '../job-cards/entities/job-card.entity';
 import { InventoryService } from '../inventory/inventory.service';
+import { buildSchedulingGrid, SchedulingGridResult } from './appointment-scheduling-grid.util';
 
 interface CapacityCheckResult {
   available: boolean;
@@ -40,6 +42,35 @@ const REASSIGNABLE_APPOINTMENT_STATUSES: readonly AppointmentStatus[] = [
   AppointmentStatus.SCHEDULED,
   AppointmentStatus.CONFIRMED,
   AppointmentStatus.TECHNICIAN_ASSIGNED,
+];
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+// Sunday-indexed to match Date.getUTCDay() directly (0 = Sunday) - used by getSchedulingGrid()
+// below to look up ServiceCentre.schedule's per-weekday entry for a bare 'YYYY-MM-DD' date
+// without going through toLocaleDateString() (locale/timezone-dependent, and this call site
+// only has a date, not a real instant, to format in the first place).
+const WEEKDAY_KEYS_BY_UTC_DAY = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+// Monday-first order, purely for the scheduling grid's "Mon-Sat"-style roster badge - see
+// appointment-scheduling-grid.util.ts's own doc comment.
+const WEEKDAY_BADGE_ORDER: { key: string; abbr: string }[] = [
+  { key: 'monday', abbr: 'Mon' },
+  { key: 'tuesday', abbr: 'Tue' },
+  { key: 'wednesday', abbr: 'Wed' },
+  { key: 'thursday', abbr: 'Thu' },
+  { key: 'friday', abbr: 'Fri' },
+  { key: 'saturday', abbr: 'Sat' },
+  { key: 'sunday', abbr: 'Sun' },
+];
+
+// Same active-status set checkTechnicianAvailability()/getTechnicianSchedule() already use -
+// these are the appointments that actually occupy a technician's day for the scheduling grid.
+const ACTIVE_APPOINTMENT_STATUSES_FOR_GRID: readonly AppointmentStatus[] = [
+  AppointmentStatus.SCHEDULED,
+  AppointmentStatus.CONFIRMED,
+  AppointmentStatus.TECHNICIAN_ASSIGNED,
+  AppointmentStatus.ON_SITE,
 ];
 
 @Injectable()
@@ -552,6 +583,58 @@ export class AppointmentsService {
       },
       relations: { technician: true },
       order: { scheduledAt: 'ASC' },
+    });
+  }
+
+  // Backs the "New Appointment" scheduling grid (2026-09-09) - a Redtra360-style
+  // per-technician grid of tappable 15-minute chips, replacing a plain datetime input +
+  // pasted technician id. Scoped to field technicians actually assigned to the selected
+  // service centre (ServiceCentre.assignedTechnicianIds), unlike the Gantt board's
+  // getGanttBoard() which deliberately shows every active technician company-wide - this is
+  // about booking one visit at one centre, not a cross-centre operational view.
+  async getSchedulingGrid(serviceCentreId: string, date: string): Promise<SchedulingGridResult> {
+    if (!DATE_ONLY.test(date)) {
+      throw new BadRequestException('date must be in YYYY-MM-DD format.');
+    }
+    const serviceCentre = await this.serviceCentreRepository.findOne({ where: { id: serviceCentreId } });
+    if (!serviceCentre) {
+      throw new NotFoundException(`Service centre ${serviceCentreId} not found.`);
+    }
+
+    const technicianIds = serviceCentre.assignedTechnicianIds ?? [];
+    const technicians = technicianIds.length
+      ? await this.userRepository.find({
+          where: { id: In(technicianIds), role: { name: RoleName.TECHNICIAN_FIELD }, status: UserStatus.ACTIVE },
+          relations: { role: true },
+          order: { firstName: 'ASC', lastName: 'ASC' },
+        })
+      : [];
+
+    const dayStart = new Date(`${date}T00:00:00.000Z`);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    const appointments = technicians.length
+      ? await this.appointmentRepository.find({
+          where: {
+            technicianId: In(technicians.map((t) => t.id)),
+            scheduledAt: Between(dayStart, dayEnd),
+            status: In(ACTIVE_APPOINTMENT_STATUSES_FOR_GRID),
+          },
+        })
+      : [];
+
+    const dayKey = WEEKDAY_KEYS_BY_UTC_DAY[dayStart.getUTCDay()];
+
+    return buildSchedulingGrid({
+      date,
+      daySchedule: serviceCentre.schedule?.[dayKey] ?? null,
+      openDayAbbreviations: WEEKDAY_BADGE_ORDER.filter((d) => serviceCentre.schedule?.[d.key]?.isOpen).map((d) => d.abbr),
+      technicians: technicians.map((t) => ({
+        id: t.id,
+        name: t.fullName,
+        appointments: appointments
+          .filter((a) => a.technicianId === t.id)
+          .map((a) => ({ scheduledAt: a.scheduledAt, estimatedDurationMinutes: a.estimatedDurationMinutes })),
+      })),
     });
   }
 

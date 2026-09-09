@@ -55,7 +55,7 @@ describe('AppointmentsService', () => {
       find: jest.fn(),
     };
     serviceCentreRepository = { findOne: jest.fn() };
-    userRepository = { findOne: jest.fn() };
+    userRepository = { findOne: jest.fn(), find: jest.fn() };
     auditLogRepository = { create: jest.fn((d: any) => d), save: jest.fn().mockResolvedValue(undefined) };
     jobCardRepository = { findOne: jest.fn().mockResolvedValue(null) };
     inventoryService = { hasActiveReservationInCustody: jest.fn().mockResolvedValue(false) };
@@ -807,6 +807,109 @@ describe('AppointmentsService', () => {
         }),
       );
       expect(result).toEqual([appointment()]);
+    });
+  });
+
+  describe('getSchedulingGrid', () => {
+    const centreWithTechs = (schedule: any) => ({
+      id: 'sc-1',
+      assignedTechnicianIds: ['tech-1', 'tech-2'],
+      schedule,
+    });
+
+    it('rejects a malformed date without querying anything', async () => {
+      await expect(service.getSchedulingGrid('sc-1', '25-08-2026')).rejects.toThrow(BadRequestException);
+      expect(serviceCentreRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the service centre does not exist', async () => {
+      serviceCentreRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.getSchedulingGrid('sc-missing', '2026-09-14')).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns an empty technician list without querying users/appointments when the centre has no assigned technicians', async () => {
+      serviceCentreRepository.findOne.mockResolvedValue({ id: 'sc-1', assignedTechnicianIds: [], schedule: {} });
+
+      const result = await service.getSchedulingGrid('sc-1', '2026-09-14');
+
+      expect(result.technicians).toEqual([]);
+      expect(userRepository.find).not.toHaveBeenCalled();
+      expect(appointmentRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('looks up field technicians assigned to the centre and only their appointments for that date', async () => {
+      // 2026-09-14 is a Monday.
+      serviceCentreRepository.findOne.mockResolvedValue(
+        centreWithTechs({ monday: { isOpen: true, startTime: '08:00', endTime: '09:00' } }),
+      );
+      userRepository.find.mockResolvedValue([
+        { id: 'tech-1', fullName: 'Ravi Kumar' },
+        { id: 'tech-2', fullName: 'Fahad Noor' },
+      ]);
+      appointmentRepository.find.mockResolvedValue([]);
+
+      await service.getSchedulingGrid('sc-1', '2026-09-14');
+
+      expect(userRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ role: { name: 'TECHNICIAN_FIELD' } }),
+          relations: { role: true },
+        }),
+      );
+      expect(appointmentRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ technicianId: expect.anything() }),
+        }),
+      );
+    });
+
+    it('builds a real slot grid end-to-end for the correct weekday', async () => {
+      // 2026-09-14 is a Monday - the Sunday entry must not be consulted.
+      serviceCentreRepository.findOne.mockResolvedValue(
+        centreWithTechs({
+          sunday: { isOpen: false, startTime: '00:00', endTime: '00:00' },
+          monday: { isOpen: true, startTime: '08:00', endTime: '08:30' },
+        }),
+      );
+      userRepository.find.mockResolvedValue([{ id: 'tech-1', fullName: 'Ravi Kumar' }]);
+      appointmentRepository.find.mockResolvedValue([]);
+
+      const result = await service.getSchedulingGrid('sc-1', '2026-09-14');
+
+      expect(result.isOpen).toBe(true);
+      expect(result.technicians).toEqual([
+        {
+          id: 'tech-1',
+          name: 'Ravi Kumar',
+          appointmentCount: 0,
+          atDailyCap: false,
+          slots: [
+            { time: '08:00', iso: '2026-09-14T08:00:00.000Z', available: true },
+            { time: '08:15', iso: '2026-09-14T08:15:00.000Z', available: true },
+          ],
+        },
+      ]);
+    });
+
+    it('feeds each technician only their own appointments, not another technician\'s', async () => {
+      serviceCentreRepository.findOne.mockResolvedValue(
+        centreWithTechs({ monday: { isOpen: true, startTime: '08:00', endTime: '09:00' } }),
+      );
+      userRepository.find.mockResolvedValue([
+        { id: 'tech-1', fullName: 'Ravi Kumar' },
+        { id: 'tech-2', fullName: 'Fahad Noor' },
+      ]);
+      appointmentRepository.find.mockResolvedValue([
+        { technicianId: 'tech-1', scheduledAt: new Date('2026-09-14T08:00:00.000Z'), estimatedDurationMinutes: 60 },
+      ]);
+
+      const result = await service.getSchedulingGrid('sc-1', '2026-09-14');
+
+      const tech1 = result.technicians.find((t) => t.id === 'tech-1')!;
+      const tech2 = result.technicians.find((t) => t.id === 'tech-2')!;
+      expect(tech1.slots.every((s) => !s.available)).toBe(true);
+      expect(tech2.slots.every((s) => s.available)).toBe(true);
     });
   });
 

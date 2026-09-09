@@ -8,6 +8,7 @@ import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { DashboardStatsWidget } from './DashboardStatsWidget';
+import { SchedulingGridPicker, type SchedulingSelection } from './SchedulingGrid';
 import {
   assignTechnician,
   cancelAppointment,
@@ -54,10 +55,7 @@ type FormValues = {
   purchaseDate: string;
   invoiceNumber: string;
   problemDescription: string;
-  scheduledAt: string;
-  estimatedDurationMinutes: number | '';
   serviceCentreId: string;
-  technicianId: string;
   notes: string;
 };
 
@@ -80,10 +78,7 @@ const EMPTY_FORM: FormValues = {
   purchaseDate: '',
   invoiceNumber: '',
   problemDescription: '',
-  scheduledAt: '',
-  estimatedDurationMinutes: '',
   serviceCentreId: '',
-  technicianId: '',
   notes: '',
 };
 
@@ -99,6 +94,10 @@ function parseOptionalNumber(raw: string): number | undefined {
   if (trimmed === '') return undefined;
   const n = Number(trimmed);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // Mirrors the exact status-transition guards in AppointmentsService, so we don't render a
@@ -171,13 +170,22 @@ export function SchedulePage() {
   const [cancelReason, setCancelReason] = useState('');
   const [viewTarget, setViewTarget] = useState<Appointment | null>(null);
 
+  // The New Appointment scheduling grid (2026-09-09) picks the technician, start time, AND
+  // duration together via tapped chips - kept as plain state rather than RHF-registered
+  // fields, since there's no visible date/technician/duration input for RHF to register
+  // against any more, only the grid component reporting a selection.
+  const [gridDate, setGridDate] = useState(todayIsoDate());
+  const [gridSelection, setGridSelection] = useState<SchedulingSelection | null>(null);
+
   const {
     register,
     handleSubmit,
     reset,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ defaultValues: EMPTY_FORM });
+  const watchedServiceCentreId = watch('serviceCentreId');
 
   const [mapLinkInput, setMapLinkInput] = useState('');
   const resolveMapLinkMutation = useMutation({
@@ -247,10 +255,16 @@ export function SchedulePage() {
     reset(EMPTY_FORM);
     setMapLinkInput('');
     resolveMapLinkMutation.reset();
+    setGridDate(todayIsoDate());
+    setGridSelection(null);
     setCreateOpen(true);
   }
 
   function onSubmit(values: FormValues) {
+    // scheduledAt/technicianId/estimatedDurationMinutes all come from one tap on the
+    // scheduling grid now, not three separate fields - see gridSelection's own doc comment.
+    // The Create button stays disabled until a chip is picked (below), so gridSelection is
+    // never null here in practice.
     const payload: CreateAppointmentInput = {
       type: values.type as CreateAppointmentInput['type'],
       channel: values.channel as CreateAppointmentInput['channel'],
@@ -270,10 +284,10 @@ export function SchedulePage() {
       purchaseDate: values.purchaseDate || undefined,
       invoiceNumber: values.invoiceNumber || undefined,
       problemDescription: values.problemDescription || undefined,
-      scheduledAt: values.scheduledAt ? new Date(values.scheduledAt).toISOString() : '',
-      estimatedDurationMinutes: values.estimatedDurationMinutes === '' ? undefined : Number(values.estimatedDurationMinutes),
+      scheduledAt: gridSelection?.scheduledAt ?? '',
+      estimatedDurationMinutes: gridSelection?.estimatedDurationMinutes,
       serviceCentreId: values.serviceCentreId,
-      technicianId: values.technicianId || undefined,
+      technicianId: gridSelection?.technicianId,
       notes: values.notes || undefined,
     };
     createMutation.mutate(payload);
@@ -578,28 +592,33 @@ export function SchedulePage() {
               <input className={inputClass} {...register('invoiceNumber')} />
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Purchase date (optional)">
-              <input type="date" className={inputClass} {...register('purchaseDate')} />
-            </Field>
-            <Field label="Estimated duration (minutes, optional)" hint="Minimum 15">
-              <input type="number" min={15} className={inputClass} {...register('estimatedDurationMinutes', { valueAsNumber: true })} />
-            </Field>
-          </div>
+          <Field label="Purchase date (optional)">
+            <input type="date" className={inputClass} {...register('purchaseDate')} />
+          </Field>
           <Field label="Problem description (optional)">
             <textarea className={inputClass} rows={2} {...register('problemDescription')} />
           </Field>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Scheduled at" error={errors.scheduledAt?.message}>
-              <input type="datetime-local" className={inputClass} {...register('scheduledAt', { required: 'Required' })} />
-            </Field>
-            <Field label="Service centre id" error={errors.serviceCentreId?.message} hint="paste uuid from Master Data">
-              <input className={inputClass} {...register('serviceCentreId', { required: 'Required' })} />
-            </Field>
-          </div>
-          <Field label="Technician id (optional)" hint="Assign now, or leave blank and use Assign later">
-            <input className={inputClass} {...register('technicianId')} />
+          <Field label="Service centre id" error={errors.serviceCentreId?.message} hint="paste uuid from Master Data">
+            <input className={inputClass} {...register('serviceCentreId', { required: 'Required' })} />
           </Field>
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Technician &amp; time</p>
+            <SchedulingGridPicker
+              serviceCentreId={watchedServiceCentreId}
+              date={gridDate}
+              onDateChange={setGridDate}
+              onChange={setGridSelection}
+            />
+            {gridSelection ? (
+              <p className="mt-2 text-xs font-medium text-emerald-700">
+                {gridSelection.technicianName} · {new Date(gridSelection.scheduledAt).toLocaleString()} · {gridSelection.estimatedDurationMinutes} min
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-slate-400">Pick a slot above to set the technician and time.</p>
+            )}
+          </div>
+
           <Field label="Notes (optional)">
             <textarea className={inputClass} rows={2} {...register('notes')} />
           </Field>
@@ -610,7 +629,8 @@ export function SchedulePage() {
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || createMutation.isPending}
+              disabled={isSubmitting || createMutation.isPending || !gridSelection}
+              title={!gridSelection ? 'Pick a technician + time slot on the grid above first' : undefined}
               className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
               Create

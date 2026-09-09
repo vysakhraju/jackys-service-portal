@@ -13,6 +13,7 @@ import type {
   CaptureSerialNumberInput,
   CreateAppointmentInput,
   ResolvedMapLink,
+  SchedulingGrid,
   StartVisitInput,
   TechnicianVisit,
 } from './appointmentsTypes';
@@ -78,6 +79,10 @@ export const deleteAppointment = (id: string) => api.delete(`${BASE}/${id}`).the
 // the rest of the create form - see google-maps-link.util.ts for how resolution works.
 export const resolveMapLink = (url: string) =>
   api.post<ResolvedMapLink>(`${BASE}/resolve-map-link`, { url }).then((r) => r.data);
+
+// New Appointment scheduling grid (2026-09-09) - see SchedulingGrid's own doc comment.
+export const getSchedulingGrid = (serviceCentreId: string, date: string) =>
+  api.get<SchedulingGrid>(`${BASE}/scheduling-grid`, { params: { serviceCentreId, date } }).then((r) => r.data);
 
 // === Technician field view (src/technician) ===
 const TECH_BASE = '/technician';

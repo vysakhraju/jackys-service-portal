@@ -198,3 +198,32 @@ export interface CaptureFaultSymptomInput {
   faultCode: string;
   symptomCode: string;
 }
+
+// New Appointment scheduling grid (2026-09-09) - the Redtra360-style per-technician grid of
+// tappable 15-minute chips, backed by GET /appointments/scheduling-grid. See
+// appointment-scheduling-grid.util.ts on the backend for how these are computed - hours come
+// from the selected Service Centre's own schedule for that weekday, not a fixed constant.
+export interface SchedulingGridSlot {
+  time: string; // 'HH:MM', 24h
+  iso: string;
+  available: boolean;
+}
+
+export interface SchedulingGridTechnician {
+  id: string;
+  name: string;
+  appointmentCount: number;
+  atDailyCap: boolean;
+  slots: SchedulingGridSlot[];
+}
+
+export interface SchedulingGrid {
+  date: string;
+  isOpen: boolean;
+  startTime: string | null;
+  endTime: string | null;
+  breakStart: string | null;
+  breakEnd: string | null;
+  rosterLabel: string;
+  technicians: SchedulingGridTechnician[];
+}

@@ -117,6 +117,17 @@ export class AppointmentsController {
     return this.appointmentsService.getDashboardStats(serviceCentreId);
   }
 
+  @Get('scheduling-grid')
+  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE')
+  @ApiOperation({ summary: 'Get the New Appointment scheduling grid (per-technician 15-minute slot availability) for a service centre + date' })
+  @ApiQuery({ name: 'serviceCentreId', required: true, type: String })
+  @ApiQuery({ name: 'date', required: true, type: String, description: 'YYYY-MM-DD' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Service centre not found' })
+  async getSchedulingGrid(@Query('serviceCentreId') serviceCentreId: string, @Query('date') date: string) {
+    return this.appointmentsService.getSchedulingGrid(serviceCentreId, date);
+  }
+
   @Get('service-centre/:serviceCentreId/schedule')
   @ApiOperation({ summary: 'Get service centre schedule for a date' })
   @ApiParam({ name: 'serviceCentreId', type: String })
