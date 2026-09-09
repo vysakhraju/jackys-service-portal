@@ -27,6 +27,21 @@ interface CapacityCheckResult {
   message?: string;
 }
 
+// Technician Assignment Board reassign-until-visit-start rule (2026-09-09, a the-fool
+// pre-mortem on this exact rule): a CCE can freely drag-reassign an appointment's technician
+// and/or time right up until the field technician actually starts the visit
+// (AppointmentStatus.ON_SITE, set by markOnSite()) - after that it's no longer just a plan,
+// there's a technician physically at the customer's door. The OTHER half of the user's rule
+// ("...or once a Job Card is created from it") doesn't need its own check here: creating a
+// Job Card already auto-completes the appointment (see completeFromJobCardCreation(), called
+// from JobCardsService.createFromVisit()), and COMPLETED isn't reassignable either since it's
+// not in this set - one rule covers both cutoffs.
+const REASSIGNABLE_APPOINTMENT_STATUSES: readonly AppointmentStatus[] = [
+  AppointmentStatus.SCHEDULED,
+  AppointmentStatus.CONFIRMED,
+  AppointmentStatus.TECHNICIAN_ASSIGNED,
+];
+
 @Injectable()
 export class AppointmentsService {
   constructor(
@@ -240,6 +255,23 @@ export class AppointmentsService {
   ): Promise<Appointment> {
     const appointment = await this.findById(id);
     const oldValues = { ...appointment };
+
+    // Reassign-until-visit-start rule - see REASSIGNABLE_APPOINTMENT_STATUSES's own doc
+    // comment. Scoped to only the two fields the rule is actually about (technicianId,
+    // scheduledAt) so an unrelated edit - notes, customer details - on an ON_SITE
+    // appointment is untouched by this. Checked against the freshly-fetched `appointment`
+    // above, not any client-supplied assumption of current status, so a stale drag racing
+    // against the technician's own "Start Visit" tap on mobile is always caught here.
+    const isReschedulingTime =
+      updateAppointmentDto.scheduledAt !== undefined && updateAppointmentDto.scheduledAt !== appointment.scheduledAt.toISOString();
+    const isReassigningTechnician =
+      updateAppointmentDto.technicianId !== undefined && updateAppointmentDto.technicianId !== appointment.technicianId;
+    if ((isReschedulingTime || isReassigningTechnician) && !REASSIGNABLE_APPOINTMENT_STATUSES.includes(appointment.status)) {
+      throw new BadRequestException(
+        `Cannot change the technician or time for ${appointment.appointmentNumber}: it is ${appointment.status} - the technician has ` +
+          `already started this visit (or it's since moved on). Reassignment is only available before the visit starts.`,
+      );
+    }
 
     // If rescheduling, check capacity again
     if (updateAppointmentDto.scheduledAt && updateAppointmentDto.scheduledAt !== appointment.scheduledAt.toISOString()) {

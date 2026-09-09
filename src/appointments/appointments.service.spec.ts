@@ -328,6 +328,48 @@ describe('AppointmentsService', () => {
       expect(appointmentRepository.save).not.toHaveBeenCalled();
     });
 
+    // --- Reassign-until-visit-start rule (2026-09-09, the-fool pre-mortem finding) -----
+
+    it('rejects a technician reassignment once the appointment is ON_SITE', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.ON_SITE, technicianId: 'tech-1' }));
+
+      await expect(service.update('apt-1', { technicianId: 'tech-2' } as any, 'user-1')).rejects.toThrow(BadRequestException);
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+      // Rejected before ever looking up the new technician - status is checked first.
+      expect(userRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects a reschedule (scheduledAt change) once the appointment is ON_SITE', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.ON_SITE }));
+
+      await expect(
+        service.update('apt-1', { scheduledAt: '2026-08-25T15:00:00Z' } as any, 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+      expect(serviceCentreRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('allows an unrelated field edit (e.g. notes) on an ON_SITE appointment - the rule only covers technicianId/scheduledAt', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.ON_SITE }));
+
+      const result = await service.update('apt-1', { notes: 'Customer requested a callback' } as any, 'user-1');
+
+      expect(result).toEqual(appointment({ status: AppointmentStatus.ON_SITE, notes: 'Customer requested a callback' }));
+    });
+
+    it.each([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED])(
+      'still allows reassigning a technician while status is %s',
+      async (status) => {
+        appointmentRepository.findOne.mockResolvedValue(appointment({ status, technicianId: 'tech-1' }));
+        userRepository.findOne.mockResolvedValue({ id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } });
+        appointmentRepository.createQueryBuilder.mockReturnValueOnce(buildQb({ getCount: 0 }));
+
+        await service.update('apt-1', { technicianId: 'tech-2' } as any, 'user-1');
+
+        expect(appointmentRepository.save).toHaveBeenCalledWith(expect.objectContaining({ technicianId: 'tech-2' }));
+      },
+    );
+
     // --- Mobile Phase 5 reassignment guardrail (the-fool pre-mortem finding) -----------
 
     it('blocks reassignment with ConflictException when the outgoing technician holds an open reservation on the linked Job Card', async () => {

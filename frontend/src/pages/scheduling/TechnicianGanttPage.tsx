@@ -4,9 +4,8 @@
 // appointments and workshop assignments, double-booking conflicts flagged in red by the
 // backend (technician-schedule.util.ts), an "Add crew helper" action on any workshop block
 // that's still actively assigned, an "Unassigned" panel of appointments/job cards still
-// needing a technician, and (2026-09-09, third pass) native HTML5 drag-and-drop for
-// assign/reassign - drag an unassigned card, or an existing timeline block, onto a
-// technician's row.
+// needing a technician, and native HTML5 drag-and-drop for assign/reassign - drag an
+// unassigned card, or an existing timeline block, onto a technician's row.
 //
 // This was click-to-assign for one round (see git history) on an earlier the-fool
 // pre-mortem finding that drag doesn't fire on touch devices. That finding no longer
@@ -17,8 +16,28 @@
 // freshly assigned appointment kept whatever scheduledAt it already had (frequently reading
 // as "defaults to 7am" once clamped onto this board's 07:00-21:00 axis). Drag-and-drop fixes
 // that at the root - the drop position on the timeline IS the requested time, computed by
-// computeDropTime() below (the inverse of timeToPercent()), so there's no default to get
-// wrong.
+// computeDropPreview() below (the inverse of timeToPercent()).
+//
+// Live-tested follow-up (2026-09-09, same day): a CCE reported dropping "at 10am" and having
+// it land somewhere else entirely - traced to two compounding issues, both fixed here. (1)
+// TimeAxis used to lay its 15 hour labels out as 15 equal-width flex cells for a 14-hour
+// span, which doesn't match the (h-7)/14 proportional math every block/drop actually uses -
+// the ruler the CCE was eyeballing was subtly lying about where each hour actually sits.
+// Fixed by positioning every tick (axis labels AND new per-row gridlines, via
+// hourToPercent()) at its exact proportional position, the same formula timeToPercent() and
+// computeDropPreview() use. (2) There was no feedback at all about where a drop would land
+// until after releasing - fixed with a live vertical guideline + time label that tracks the
+// cursor during dragover, snapped to the same 15-minute grid the drop itself snaps to (so
+// what's previewed is exactly what gets saved, not an unsnapped approximation of it). As a
+// side effect of needing to know the dragged item's TYPE during dragover (to decide whether
+// a time preview is even meaningful - workshop jobs have no time dimension) the single
+// DRAG_MIME type became two (APPOINTMENT_MIME/JOBCARD_MIME): dataTransfer.getData() is
+// deliberately locked down to the 'drop' event only in real browsers, but .types (which MIME
+// types are present, not their values) is readable during dragover - reading two distinct
+// type strings is how the role-compatibility check below now also gates the native drop
+// target itself (skipping preventDefault() on an incompatible row makes the browser refuse
+// the drop outright, before an API call is even attempted), not just the after-the-fact
+// toast the previous pass relied on alone (kept as a defensive fallback).
 //
 // Deliberately reuses the technician list already embedded in the Gantt response for every
 // technician picker on this page (crew helper, technician filter) instead of calling GET
@@ -45,7 +64,8 @@ import type {
 const DAY_START_HOUR = 7;
 const DAY_END_HOUR = 21; // 9pm - covers every field/workshop shift this app schedules into today
 const TOTAL_HOURS = DAY_END_HOUR - DAY_START_HOUR;
-const DRAG_MIME = 'application/x-jackys-schedule-item';
+const APPOINTMENT_MIME = 'application/x-jackys-appointment';
+const JOBCARD_MIME = 'application/x-jackys-jobcard';
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -64,6 +84,12 @@ const CREW_HELPER_ELIGIBLE_STATUSES = new Set(['WORKSHOP_ASSIGNED', 'IN_PROGRESS
 // always ends in a 400 toast.
 const WORKSHOP_JOB_REASSIGN_STATUSES = new Set(['WORKSHOP_ASSIGNED', 'IN_PROGRESS', 'SPARE_PENDING', 'READY_FOR_QC']);
 
+// Mirrors AppointmentsService.update()'s own REASSIGNABLE_APPOINTMENT_STATUSES (2026-09-09,
+// the-fool pre-mortem: reassign-until-visit-start) - once a technician has actually started
+// the visit (ON_SITE), the block simply isn't a drag source any more, same pattern as the
+// workshop_job status gate above.
+const APPOINTMENT_REASSIGN_STATUSES = new Set(['SCHEDULED', 'CONFIRMED', 'TECHNICIAN_ASSIGNED']);
+
 // What's carried in dataTransfer while dragging - an unassigned card, or an existing
 // timeline block being re-dragged. `currentTechnicianId: null` means "not assigned yet",
 // which is what tells handleDrop() whether to call the initial-assign endpoint (which also
@@ -79,17 +105,92 @@ type DropAction =
   | { kind: 'jobcard-reassign'; id: string; technicianId: string; label: string };
 
 function startDrag(payload: DragPayload) {
+  const mime = payload.entityType === 'appointment' ? APPOINTMENT_MIME : JOBCARD_MIME;
   return (e: DragEvent<HTMLElement>) => {
-    e.dataTransfer.setData(DRAG_MIME, JSON.stringify(payload));
+    e.dataTransfer.setData(mime, JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'move';
   };
+}
+
+// Where on the row a given hour sits, as a 0-100 percentage - the single source of truth for
+// every tick/guideline/block position on this board, so the axis, the per-row gridlines, and
+// the live drag preview can never drift out of sync with each other again.
+function hourToPercent(hour: number): number {
+  return ((hour - DAY_START_HOUR) / TOTAL_HOURS) * 100;
+}
+
+function timeToPercent(iso: string): number {
+  const d = new Date(iso);
+  const hours = d.getUTCHours() + d.getUTCMinutes() / 60;
+  const clamped = Math.min(Math.max(hours, DAY_START_HOUR), DAY_END_HOUR);
+  return hourToPercent(clamped);
+}
+
+function formatUtcTime(iso: string): string {
+  const d = new Date(iso);
+  const minute = d.getUTCMinutes();
+  let hour = d.getUTCHours();
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  hour = hour % 12;
+  if (hour === 0) hour = 12;
+  return `${hour}:${String(minute).padStart(2, '0')} ${ampm}`;
+}
+
+// Inverse of timeToPercent() - where on the row (in pixels, relative to the drop target's
+// own bounding box) becomes a UTC time-of-day on the board's selected date, snapped to the
+// nearest 15 minutes and clamped to the 07:00-21:00 board window. Same UTC-hours convention
+// as timeToPercent() throughout, deliberately: the board renders every time in UTC (there is
+// no per-technician timezone concept in this app), so the drop position must invert with the
+// exact same convention it was rendered with or every dropped time would be off by whatever
+// the browser's local UTC offset happens to be. Returns the SNAPPED percent alongside the
+// time (not the raw cursor percent) so a live preview guideline lands exactly where the
+// eventual drop will actually save, not at an unsnapped approximation of it.
+function computeDropPreview(dateStr: string, clientX: number, rect: DOMRect): { percent: number; iso: string; label: string } {
+  const rawPercent = rect.width > 0 ? ((clientX - rect.left) / rect.width) * 100 : 0;
+  const clampedPercent = Math.min(Math.max(rawPercent, 0), 100);
+  const hoursFloat = DAY_START_HOUR + (clampedPercent / 100) * TOTAL_HOURS;
+  const totalMinutes = Math.round((hoursFloat * 60) / 15) * 15;
+  const clampedMinutes = Math.min(Math.max(totalMinutes, DAY_START_HOUR * 60), DAY_END_HOUR * 60);
+  const hh = String(Math.floor(clampedMinutes / 60)).padStart(2, '0');
+  const mm = String(clampedMinutes % 60).padStart(2, '0');
+  const iso = `${dateStr}T${hh}:${mm}:00.000Z`;
+  const percent = hourToPercent(clampedMinutes / 60);
+  return { percent, iso, label: formatUtcTime(iso) };
+}
+
+function computeDropTime(dateStr: string, clientX: number, rect: DOMRect): string {
+  return computeDropPreview(dateStr, clientX, rect).iso;
+}
+
+interface DragOverInfo {
+  technicianId: string;
+  valid: boolean;
+  previewPercent: number | null;
+  previewLabel: string | null;
+}
+
+// Reads dataTransfer.types (readable during dragover in real browsers, unlike getData()
+// itself) to figure out what's being dragged and whether this row can accept it, without
+// needing the actual payload - see this file's top doc comment for why that split MIME type
+// exists at all.
+function evaluateDragOver(e: DragEvent<HTMLDivElement>, targetRow: TechnicianScheduleRow, date: string): DragOverInfo {
+  const isAppointment = e.dataTransfer.types.includes(APPOINTMENT_MIME);
+  const isJobCard = e.dataTransfer.types.includes(JOBCARD_MIME);
+  const valid = (isAppointment && targetRow.role === 'TECHNICIAN_FIELD') || (isJobCard && targetRow.role === 'TECHNICIAN_WORKSHOP');
+  if (!valid || !isAppointment) {
+    // Workshop jobs have no time dimension to preview - the row highlight alone is enough.
+    return { technicianId: targetRow.technicianId, valid, previewPercent: null, previewLabel: null };
+  }
+  const rect = e.currentTarget.getBoundingClientRect();
+  const { percent, label } = computeDropPreview(date, e.clientX, rect);
+  return { technicianId: targetRow.technicianId, valid, previewPercent: percent, previewLabel: label };
 }
 
 export function TechnicianGanttPage() {
   const [date, setDate] = useState(todayIsoDate());
   const [technicianFilter, setTechnicianFilter] = useState('');
   const [helperTarget, setHelperTarget] = useState<{ jobCardId: string; jobCardNumber: string } | null>(null);
-  const [dragOverTechnicianId, setDragOverTechnicianId] = useState<string | null>(null);
+  const [dragOverInfo, setDragOverInfo] = useState<DragOverInfo | null>(null);
   const queryClient = useQueryClient();
   const { push } = useToast();
 
@@ -113,15 +214,10 @@ export function TechnicianGanttPage() {
     mutationFn: async (action: DropAction) => {
       switch (action.kind) {
         case 'appointment-assign':
-          // One atomic call - assignTechnician() now optionally accepts scheduledAt (backend
-          // change, 2026-09-09) so the technician assignment and the drop-computed time land
-          // together. This used to be two sequential calls (assign, then update); a the-fool
-          // pre-mortem on this exact drag-and-drop rework flagged that as the top-severity
-          // risk - a network blip or a capacity conflict surfacing only on the second call
-          // would leave the appointment assigned to a technician but still sitting on its old
-          // (often misleading) time, with no way to tell from the toast alone. A single call
-          // means it either fully succeeds or fully fails - see AssignTechnicianDto's own doc
-          // comment on the backend side.
+          // One atomic call - assignTechnician() optionally accepts scheduledAt so the
+          // technician assignment and the drop-computed time land together (a the-fool
+          // pre-mortem on the original drag rework flagged the earlier two-call sequence as
+          // its top-severity risk - see AssignTechnicianDto's own doc comment).
           return assignTechnician(action.id, action.technicianId, action.scheduledAt);
         case 'appointment-reassign':
           return updateAppointment(action.id, { technicianId: action.technicianId, scheduledAt: action.scheduledAt });
@@ -142,8 +238,8 @@ export function TechnicianGanttPage() {
         title: 'Could not complete the drop',
         description: error?.response?.data?.message ?? 'Something went wrong.',
       });
-      // Refetch even on failure (same the-fool pre-mortem, race-condition finding): the board
-      // the user is looking at could already be stale by the time they dragged (someone else's
+      // Refetch even on failure (the-fool pre-mortem, race-condition finding): the board the
+      // user is looking at could already be stale by the time they dragged (someone else's
       // action, or the technician's own mobile-app update), which is part of why the drop was
       // rejected in the first place - re-pull the real state rather than leaving a now-known-
       // stale board on screen for the next drag attempt.
@@ -151,14 +247,41 @@ export function TechnicianGanttPage() {
     },
   });
 
+  function handleRowDragEnter(e: DragEvent<HTMLDivElement>, targetRow: TechnicianScheduleRow) {
+    setDragOverInfo(evaluateDragOver(e, targetRow, date));
+  }
+
+  function handleRowDragOver(e: DragEvent<HTMLDivElement>, targetRow: TechnicianScheduleRow) {
+    const info = evaluateDragOver(e, targetRow, date);
+    if (info.valid) {
+      // Only allow the native drop when the dragged item actually belongs on this row -
+      // skipping preventDefault() here makes the browser reject the drop outright (cursor
+      // shows "not allowed", no 'drop' event ever fires), so a role mismatch is stopped
+      // before any mutation is attempted, not just caught after the fact by a toast.
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+    setDragOverInfo(info);
+  }
+
+  function handleDragEnd() {
+    // Fires on the dragged element itself once the drag operation ends, however it ends
+    // (successful drop, dropped somewhere invalid, or cancelled with Escape) - a single
+    // reliable place to clear the preview, rather than relying on dragleave firing cleanly
+    // at every child-element boundary crossed while hovering (it doesn't, reliably).
+    setDragOverInfo(null);
+  }
+
   function handleDrop(e: DragEvent<HTMLDivElement>, targetRow: TechnicianScheduleRow) {
     e.preventDefault();
-    setDragOverTechnicianId(null);
-    const raw = e.dataTransfer.getData(DRAG_MIME);
-    if (!raw) return;
+    setDragOverInfo(null);
+    const appointmentRaw = e.dataTransfer.getData(APPOINTMENT_MIME);
+    const jobCardRaw = e.dataTransfer.getData(JOBCARD_MIME);
     let payload: DragPayload;
     try {
-      payload = JSON.parse(raw);
+      if (appointmentRaw) payload = JSON.parse(appointmentRaw);
+      else if (jobCardRaw) payload = JSON.parse(jobCardRaw);
+      else return;
     } catch {
       return;
     }
@@ -236,8 +359,8 @@ export function TechnicianGanttPage() {
 
       {boardQuery.data && (
         <div className="grid gap-4 md:grid-cols-2">
-          <UnassignedAppointmentsPanel items={boardQuery.data.unassignedAppointments} />
-          <UnassignedJobCardsPanel items={boardQuery.data.unassignedJobCards} />
+          <UnassignedAppointmentsPanel items={boardQuery.data.unassignedAppointments} onDragEnd={handleDragEnd} />
+          <UnassignedJobCardsPanel items={boardQuery.data.unassignedJobCards} onDragEnd={handleDragEnd} />
         </div>
       )}
 
@@ -254,11 +377,12 @@ export function TechnicianGanttPage() {
               <TechnicianRow
                 key={row.technicianId}
                 row={row}
-                isDragOver={dragOverTechnicianId === row.technicianId}
+                dragOverInfo={dragOverInfo?.technicianId === row.technicianId ? dragOverInfo : null}
                 onAddHelper={(t) => setHelperTarget(t)}
-                onDragEnter={() => setDragOverTechnicianId(row.technicianId)}
-                onDragLeave={() => setDragOverTechnicianId((current) => (current === row.technicianId ? null : current))}
-                onDrop={(e) => handleDrop(e, row)}
+                onDragEndSource={handleDragEnd}
+                onRowDragEnter={(e) => handleRowDragEnter(e, row)}
+                onRowDragOver={(e) => handleRowDragOver(e, row)}
+                onRowDrop={(e) => handleDrop(e, row)}
               />
             ))}
           </div>
@@ -292,7 +416,13 @@ export function TechnicianGanttPage() {
   );
 }
 
-function UnassignedAppointmentsPanel({ items }: { items: UnassignedAppointment[] }) {
+function UnassignedAppointmentsPanel({
+  items,
+  onDragEnd,
+}: {
+  items: UnassignedAppointment[];
+  onDragEnd: () => void;
+}) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <h2 className="text-sm font-semibold text-slate-900">Appointments needing a technician</h2>
@@ -305,6 +435,7 @@ function UnassignedAppointmentsPanel({ items }: { items: UnassignedAppointment[]
               key={a.id}
               draggable
               onDragStart={startDrag({ entityType: 'appointment', id: a.id, label: a.appointmentNumber, currentTechnicianId: null })}
+              onDragEnd={onDragEnd}
               className="cursor-grab rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-sm active:cursor-grabbing"
               title="Drag onto a field technician's row to assign"
             >
@@ -320,7 +451,13 @@ function UnassignedAppointmentsPanel({ items }: { items: UnassignedAppointment[]
   );
 }
 
-function UnassignedJobCardsPanel({ items }: { items: UnassignedJobCard[] }) {
+function UnassignedJobCardsPanel({
+  items,
+  onDragEnd,
+}: {
+  items: UnassignedJobCard[];
+  onDragEnd: () => void;
+}) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <h2 className="text-sm font-semibold text-slate-900">Job cards needing a workshop technician</h2>
@@ -333,6 +470,7 @@ function UnassignedJobCardsPanel({ items }: { items: UnassignedJobCard[] }) {
               key={j.id}
               draggable
               onDragStart={startDrag({ entityType: 'jobcard', id: j.id, label: j.jobCardNumber, currentTechnicianId: null })}
+              onDragEnd={onDragEnd}
               className="cursor-grab rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-sm active:cursor-grabbing"
               title="Drag onto a workshop technician's row to assign"
             >
@@ -351,12 +489,33 @@ function UnassignedJobCardsPanel({ items }: { items: UnassignedJobCard[] }) {
 function TimeAxis() {
   const hours = Array.from({ length: TOTAL_HOURS + 1 }, (_, i) => DAY_START_HOUR + i);
   return (
-    <div className="flex border-b border-slate-200 bg-slate-50 pl-48 text-[10px] text-slate-400">
+    <div className="flex border-b border-slate-200 bg-slate-50">
+      <div className="w-48 shrink-0" />
+      <div className="relative h-6 flex-1">
+        {hours.map((h) => (
+          <div
+            key={h}
+            className="absolute top-0 h-full border-l border-slate-200 pl-1 text-[10px] leading-6 text-slate-400"
+            style={{ left: `${hourToPercent(h)}%` }}
+          >
+            {h % 12 === 0 ? 12 : h % 12}
+            {h < 12 ? 'am' : 'pm'}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Per-row hour gridlines, positioned with the exact same hourToPercent() math the axis
+// labels and every block use - the CCE no longer has to eyeball alignment against a header
+// that might be scrolled out of view above a long technician list.
+function RowGridlines() {
+  const hours = Array.from({ length: TOTAL_HOURS + 1 }, (_, i) => DAY_START_HOUR + i);
+  return (
+    <div className="pointer-events-none absolute inset-0">
       {hours.map((h) => (
-        <div key={h} className="flex-1 border-l border-slate-100 py-1 text-center first:border-l-0">
-          {h % 12 === 0 ? 12 : h % 12}
-          {h < 12 ? 'am' : 'pm'}
-        </div>
+        <div key={h} className="absolute inset-y-0 border-l border-slate-100" style={{ left: `${hourToPercent(h)}%` }} />
       ))}
     </div>
   );
@@ -364,19 +523,22 @@ function TimeAxis() {
 
 function TechnicianRow({
   row,
-  isDragOver,
+  dragOverInfo,
   onAddHelper,
-  onDragEnter,
-  onDragLeave,
-  onDrop,
+  onDragEndSource,
+  onRowDragEnter,
+  onRowDragOver,
+  onRowDrop,
 }: {
   row: TechnicianScheduleRow;
-  isDragOver: boolean;
+  dragOverInfo: DragOverInfo | null;
   onAddHelper: (t: { jobCardId: string; jobCardNumber: string }) => void;
-  onDragEnter: () => void;
-  onDragLeave: () => void;
-  onDrop: (e: DragEvent<HTMLDivElement>) => void;
+  onDragEndSource: () => void;
+  onRowDragEnter: (e: DragEvent<HTMLDivElement>) => void;
+  onRowDragOver: (e: DragEvent<HTMLDivElement>) => void;
+  onRowDrop: (e: DragEvent<HTMLDivElement>) => void;
 }) {
+  const highlight = dragOverInfo ? (dragOverInfo.valid ? 'bg-sky-50' : 'bg-red-50') : '';
   return (
     <div className={`flex items-stretch ${row.hasConflict ? 'bg-red-50/50' : ''}`}>
       <div className="w-48 shrink-0 border-r border-slate-100 p-2">
@@ -386,55 +548,41 @@ function TechnicianRow({
       </div>
       <div
         data-testid={`drop-zone-${row.technicianId}`}
-        className={`relative flex-1 py-2 ${isDragOver ? 'bg-sky-50 outline-dashed outline-2 outline-sky-300' : ''}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
-        }}
-        onDragEnter={onDragEnter}
-        onDragLeave={onDragLeave}
-        onDrop={onDrop}
+        className={`relative flex-1 py-2 ${highlight}`}
+        onDragEnter={onRowDragEnter}
+        onDragOver={onRowDragOver}
+        onDrop={onRowDrop}
       >
-        {row.blocks.length === 0 && <p className="px-2 text-xs text-slate-300">No assignments today</p>}
+        <RowGridlines />
+        {dragOverInfo?.valid && dragOverInfo.previewPercent !== null && (
+          <div
+            className="pointer-events-none absolute inset-y-0 z-10"
+            style={{ left: `${dragOverInfo.previewPercent}%` }}
+            data-testid="drop-preview"
+          >
+            <div className="h-full w-0.5 bg-sky-500" />
+            <div className="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-sky-600 px-1.5 py-0.5 text-[10px] font-medium text-white shadow">
+              {dragOverInfo.previewLabel}
+            </div>
+          </div>
+        )}
+        {row.blocks.length === 0 && <p className="relative px-2 text-xs text-slate-300">No assignments today</p>}
         {row.blocks.map((block) => (
-          <BlockBar key={block.id} block={block} onAddHelper={onAddHelper} />
+          <BlockBar key={block.id} block={block} onAddHelper={onAddHelper} onDragEnd={onDragEndSource} />
         ))}
       </div>
     </div>
   );
 }
 
-function timeToPercent(iso: string): number {
-  const d = new Date(iso);
-  const hours = d.getUTCHours() + d.getUTCMinutes() / 60;
-  const clamped = Math.min(Math.max(hours, DAY_START_HOUR), DAY_END_HOUR);
-  return ((clamped - DAY_START_HOUR) / TOTAL_HOURS) * 100;
-}
-
-// Inverse of timeToPercent() - where on the row (in pixels, relative to the drop target's
-// own bounding box) becomes a UTC time-of-day on the board's selected date, snapped to the
-// nearest 15 minutes and clamped to the 07:00-21:00 board window. Same UTC-hours convention
-// as timeToPercent() throughout, deliberately: the board renders every time in UTC (there is
-// no per-technician timezone concept in this app), so the drop position must invert with the
-// exact same convention it was rendered with or every dropped time would be off by whatever
-// the browser's local UTC offset happens to be.
-function computeDropTime(dateStr: string, clientX: number, rect: DOMRect): string {
-  const rawPercent = rect.width > 0 ? ((clientX - rect.left) / rect.width) * 100 : 0;
-  const clampedPercent = Math.min(Math.max(rawPercent, 0), 100);
-  const hoursFloat = DAY_START_HOUR + (clampedPercent / 100) * TOTAL_HOURS;
-  const totalMinutes = Math.round((hoursFloat * 60) / 15) * 15;
-  const clampedMinutes = Math.min(Math.max(totalMinutes, DAY_START_HOUR * 60), DAY_END_HOUR * 60);
-  const hh = String(Math.floor(clampedMinutes / 60)).padStart(2, '0');
-  const mm = String(clampedMinutes % 60).padStart(2, '0');
-  return `${dateStr}T${hh}:${mm}:00.000Z`;
-}
-
 function BlockBar({
   block,
   onAddHelper,
+  onDragEnd,
 }: {
   block: ScheduleBlock;
   onAddHelper: (t: { jobCardId: string; jobCardNumber: string }) => void;
+  onDragEnd: () => void;
 }) {
   const left = timeToPercent(block.startAt);
   const right = timeToPercent(block.endAt);
@@ -443,7 +591,9 @@ function BlockBar({
   // Reassignment-by-drag doesn't apply to a crew_helper block (that's the "remove helper"
   // flow, out of scope for this page - see this page's own top doc comment) or to a
   // workshop_job block outside WorkshopService.reassign()'s own status guard.
-  const canDrag = block.type === 'appointment' || (block.type === 'workshop_job' && WORKSHOP_JOB_REASSIGN_STATUSES.has(block.status));
+  const canDrag =
+    (block.type === 'appointment' && APPOINTMENT_REASSIGN_STATUSES.has(block.status)) ||
+    (block.type === 'workshop_job' && WORKSHOP_JOB_REASSIGN_STATUSES.has(block.status));
   const dragPayload: DragPayload | null = canDrag
     ? block.type === 'appointment'
       ? { entityType: 'appointment', id: block.refId, label: block.refNumber, currentTechnicianId: block.technicianId }
@@ -454,6 +604,7 @@ function BlockBar({
     <div
       draggable={canDrag}
       onDragStart={dragPayload ? startDrag(dragPayload) : undefined}
+      onDragEnd={canDrag ? onDragEnd : undefined}
       className={`group relative mb-1 rounded border px-2 py-1 text-xs ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${
         block.hasConflict ? 'border-red-400 bg-red-100 text-red-900 ring-1 ring-red-400' : BLOCK_COLORS[block.type]
       }`}

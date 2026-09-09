@@ -110,6 +110,13 @@ function fakeDataTransfer() {
   return {
     setData: (type: string, value: string) => store.set(type, value),
     getData: (type: string) => store.get(type) ?? '',
+    get types() {
+      // Real browsers expose .types (which MIME types are present) during dragover, but
+      // lock getData() down to the 'drop' event only - the component relies on that split
+      // to know what's being dragged (appointment vs job card) before the actual payload is
+      // readable, so this fake needs to model it too.
+      return Array.from(store.keys());
+    },
     effectAllowed: 'none' as string,
     dropEffect: 'none' as string,
   };
@@ -134,6 +141,17 @@ function dragAndDrop(source: Element, target: Element, clientX = 500) {
   fireDrag('dragEnter', target, dataTransfer);
   fireDrag('dragOver', target, dataTransfer, clientX);
   fireDrag('drop', target, dataTransfer, clientX);
+}
+
+// Stops after dragOver, deliberately never firing 'drop' - lets a test assert on the live
+// preview UI (data-testid="drop-preview") that only exists between dragenter/dragover and the
+// eventual drop, without also triggering the drop mutation.
+function dragOverOnly(source: Element, target: Element, clientX = 500) {
+  const dataTransfer = fakeDataTransfer();
+  fireDrag('dragStart', source, dataTransfer);
+  fireDrag('dragEnter', target, dataTransfer);
+  fireDrag('dragOver', target, dataTransfer, clientX);
+  return dataTransfer;
 }
 
 beforeEach(() => {
@@ -481,13 +499,110 @@ describe('TechnicianGanttPage', () => {
     expect(bar).toHaveAttribute('draggable', 'false');
   });
 
-  it('an appointment block is always draggable regardless of status', async () => {
-    vi.mocked(getGanttBoard).mockResolvedValue(board());
+  it.each(['SCHEDULED', 'CONFIRMED', 'TECHNICIAN_ASSIGNED'])(
+    'an appointment block is draggable while status is %s',
+    async (status) => {
+      const b = board();
+      b.rows[0].blocks[0].status = status;
+      vi.mocked(getGanttBoard).mockResolvedValue(b);
+
+      renderPage();
+      const bar = await screen.findByTitle(/APT-0001/);
+
+      expect(bar).toHaveAttribute('draggable', 'true');
+    },
+  );
+
+  it('an appointment block is not draggable once the technician has started the visit (ON_SITE) - reassign-until-visit-start rule', async () => {
+    const b = board();
+    b.rows[0].blocks[0].status = 'ON_SITE';
+    vi.mocked(getGanttBoard).mockResolvedValue(b);
 
     renderPage();
     const bar = await screen.findByTitle(/APT-0001/);
 
-    expect(bar).toHaveAttribute('draggable', 'true');
+    expect(bar).toHaveAttribute('draggable', 'false');
+  });
+
+  it('shows a live drop-time preview while dragging an appointment over a field technician\'s row, snapped to 15 minutes', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(
+      board({
+        unassignedAppointments: [
+          {
+            id: 'apt-9',
+            appointmentNumber: 'APT-0009',
+            customerName: 'Amir',
+            type: 'WARRANTY',
+            scheduledAt: '2026-09-09T11:00:00.000Z',
+            estimatedDurationMinutes: 45,
+          },
+        ],
+      }),
+    );
+
+    renderPage();
+    const card = (await screen.findByText('APT-0009')).closest('li')!;
+    const dropZone = screen.getByTestId('drop-zone-tech-1'); // Ravi Kumar, field
+
+    dragOverOnly(card, dropZone, 500); // midpoint of the 07:00-21:00 axis -> 14:00 UTC
+
+    // Matches exactly what the equivalent full drop (see the "drags an unassigned appointment
+    // card..." test above) actually saves - '2026-09-09T14:00:00.000Z' - since the preview is
+    // derived from the same snapped time, not a separate unsnapped approximation of it.
+    expect(await screen.findByTestId('drop-preview')).toHaveTextContent('2:00 PM');
+    expect(assignTechnician).not.toHaveBeenCalled();
+  });
+
+  it('shows no live preview while dragging an appointment over a workshop technician\'s row (role mismatch)', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(
+      board({
+        unassignedAppointments: [
+          {
+            id: 'apt-9',
+            appointmentNumber: 'APT-0009',
+            customerName: 'Amir',
+            type: 'WARRANTY',
+            scheduledAt: '2026-09-09T11:00:00.000Z',
+            estimatedDurationMinutes: 45,
+          },
+        ],
+      }),
+    );
+
+    renderPage();
+    const card = (await screen.findByText('APT-0009')).closest('li')!;
+    const dropZone = screen.getByTestId('drop-zone-tech-2'); // Ali Hassan, workshop - wrong type for an appointment
+
+    dragOverOnly(card, dropZone, 500);
+
+    await waitFor(() => expect(screen.queryByTestId('drop-preview')).not.toBeInTheDocument());
+  });
+
+  it('shows no live preview while dragging a job card over a technician row (job cards have no time dimension)', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(
+      board({
+        unassignedJobCards: [
+          {
+            id: 'jc-9',
+            jobCardNumber: 'JC-0200',
+            faultCode: 'F002',
+            symptomCode: 'S002',
+            warrantyStatus: 'OUT_OF_WARRANTY',
+            createdAt: '2026-09-08T12:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    renderPage();
+    const card = (await screen.findByText('JC-0200')).closest('li')!;
+    const dropZone = screen.getByTestId('drop-zone-tech-3'); // Sunil Perera, workshop, idle - valid target
+
+    dragOverOnly(card, dropZone, 500);
+
+    // Row still highlights valid (bg-sky-50), but there's no meaningful "time" for a workshop
+    // job assignment, so no preview guideline/label is rendered - only appointments get one.
+    await waitFor(() => expect(screen.queryByTestId('drop-preview')).not.toBeInTheDocument());
   });
 
   it('surfaces an error toast when a drop is rejected by the backend', async () => {
