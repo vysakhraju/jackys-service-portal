@@ -9,6 +9,8 @@ describe('JobCardsService', () => {
   let service: JobCardsService;
   let jobCardRepository: any;
   let taskPauseRepository: any;
+  let crewHelperRepository: any;
+  let userRepository: any;
   let appointmentsService: any;
   let technicianService: any;
   let queryBuilder: any;
@@ -63,8 +65,10 @@ describe('JobCardsService', () => {
   beforeEach(() => {
     queryBuilder = {
       where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       getOne: jest.fn().mockResolvedValue(null),
+      getMany: jest.fn().mockResolvedValue([]),
     };
     jobCardRepository = {
       findOne: jest.fn(),
@@ -79,6 +83,22 @@ describe('JobCardsService', () => {
       create: jest.fn((data: any) => ({ id: 'pause-1', pausedAt: new Date(), resumedAt: null, ...data })),
       save: jest.fn((data: any) => Promise.resolve({ id: data.id || 'pause-1', pausedAt: data.pausedAt || new Date(), ...data })),
     };
+    const crewHelperQueryBuilder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    crewHelperRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      find: jest.fn().mockResolvedValue([]),
+      create: jest.fn((data: any) => ({ id: 'helper-1', removedAt: null, removedByUserId: null, ...data })),
+      save: jest.fn((data: any) => Promise.resolve({ id: data.id || 'helper-1', ...data })),
+      createQueryBuilder: jest.fn(() => crewHelperQueryBuilder),
+    };
+    userRepository = {
+      findOne: jest.fn(),
+    };
     appointmentsService = {
       findById: jest.fn(),
       completeFromJobCardCreation: jest.fn().mockResolvedValue(undefined),
@@ -87,7 +107,14 @@ describe('JobCardsService', () => {
       getVisit: jest.fn(),
     };
 
-    service = new JobCardsService(jobCardRepository, taskPauseRepository, appointmentsService, technicianService);
+    service = new JobCardsService(
+      jobCardRepository,
+      taskPauseRepository,
+      crewHelperRepository,
+      userRepository,
+      appointmentsService,
+      technicianService,
+    );
   });
 
   describe('create', () => {
@@ -897,6 +924,154 @@ describe('JobCardsService', () => {
       const result = await service.findByPublicToken('abc123');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('addCrewHelper', () => {
+    const workshopTechnician = { id: 'tech-2', role: { name: 'TECHNICIAN_WORKSHOP' } };
+
+    it('adds a helper to a WORKSHOP-section, actively-assigned Job Card', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }),
+      );
+      userRepository.findOne.mockResolvedValue(workshopTechnician);
+
+      const result = await service.addCrewHelper('jc-1', 'tech-2', 'lead-1');
+
+      expect(crewHelperRepository.create).toHaveBeenCalledWith({
+        jobCardId: 'jc-1',
+        technicianId: 'tech-2',
+        addedByUserId: 'lead-1',
+      });
+      expect(result.technicianId).toBe('tech-2');
+    });
+
+    it('rejects a Job Card that is not WORKSHOP section (e.g. ON_SITE_REPAIR)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.ON_SITE_REPAIR, status: JobCardStatus.SECTION_ASSIGNED }),
+      );
+
+      await expect(service.addCrewHelper('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(BadRequestException);
+      expect(crewHelperRepository.save).not.toHaveBeenCalled();
+    });
+
+    it.each([JobCardStatus.SECTION_ASSIGNED, JobCardStatus.READY_FOR_QC, JobCardStatus.QC_PASSED, JobCardStatus.CANCELLED])(
+      'rejects a WORKSHOP-section Job Card in status %s (not actively assigned/in progress)',
+      async (status) => {
+        jobCardRepository.findOne.mockResolvedValue(jobCard({ section: JobCardSection.WORKSHOP, status }));
+
+        await expect(service.addCrewHelper('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(BadRequestException);
+      },
+    );
+
+    it('rejects an unknown technician id', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS }));
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.addCrewHelper('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects a technician who is not TECHNICIAN_WORKSHOP', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS }));
+      userRepository.findOne.mockResolvedValue({ id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } });
+
+      await expect(service.addCrewHelper('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects adding the already-primary technician as a helper', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-2' }),
+      );
+      userRepository.findOne.mockResolvedValue(workshopTechnician);
+
+      await expect(service.addCrewHelper('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a technician who is already an active helper on this Job Card (409)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS }));
+      userRepository.findOne.mockResolvedValue(workshopTechnician);
+      crewHelperRepository.findOne.mockResolvedValue({ id: 'helper-existing' });
+
+      await expect(service.addCrewHelper('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('looks up the existing-helper check scoped to not-yet-removed rows only', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS }));
+      userRepository.findOne.mockResolvedValue(workshopTechnician);
+
+      await service.addCrewHelper('jc-1', 'tech-2', 'lead-1');
+
+      expect(crewHelperRepository.findOne).toHaveBeenCalledWith({
+        where: { jobCardId: 'jc-1', technicianId: 'tech-2', removedAt: IsNull() },
+      });
+    });
+  });
+
+  describe('removeCrewHelper', () => {
+    it('soft-removes an active helper, stamping who and when', async () => {
+      crewHelperRepository.findOne.mockResolvedValue({ id: 'helper-1', jobCardId: 'jc-1', removedAt: null });
+
+      const result = await service.removeCrewHelper('jc-1', 'helper-1', 'lead-1');
+
+      expect(result.removedByUserId).toBe('lead-1');
+      expect(result.removedAt).toBeInstanceOf(Date);
+    });
+
+    it('throws NotFoundException for an unknown helper id', async () => {
+      crewHelperRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.removeCrewHelper('jc-1', 'helper-x', 'lead-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when the helper was already removed', async () => {
+      crewHelperRepository.findOne.mockResolvedValue({ id: 'helper-1', jobCardId: 'jc-1', removedAt: new Date() });
+
+      await expect(service.removeCrewHelper('jc-1', 'helper-1', 'lead-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('listCrewHelpers', () => {
+    it('queries active helpers with the technician relation loaded, oldest first', async () => {
+      await service.listCrewHelpers('jc-1');
+
+      expect(crewHelperRepository.find).toHaveBeenCalledWith({
+        where: { jobCardId: 'jc-1', removedAt: IsNull() },
+        relations: { technician: true },
+        order: { addedAt: 'ASC' },
+      });
+    });
+  });
+
+  describe('findWorkshopScheduleForDate', () => {
+    it('builds a query for assigned Job Cards whose occupancy window overlaps the given day', async () => {
+      const dayStart = new Date('2026-09-09T00:00:00Z');
+      const dayEnd = new Date('2026-09-10T00:00:00Z');
+
+      await service.findWorkshopScheduleForDate(dayStart, dayEnd);
+
+      expect(jobCardRepository.createQueryBuilder).toHaveBeenCalledWith('jc');
+      expect(queryBuilder.where).toHaveBeenCalledWith('jc.assignedWorkshopTechnicianId IS NOT NULL');
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith('jc.workshopAssignedAt <= :dayEnd', { dayEnd });
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        '(jc.qcApprovedAt IS NULL OR jc.qcApprovedAt >= :dayStart)',
+        { dayStart },
+      );
+    });
+  });
+
+  describe('findCrewHelpersForDate', () => {
+    it('builds a query for crew helper rows whose window overlaps the given day, with the Job Card relation loaded', async () => {
+      const crewHelperQueryBuilder = crewHelperRepository.createQueryBuilder();
+      const dayStart = new Date('2026-09-09T00:00:00Z');
+      const dayEnd = new Date('2026-09-10T00:00:00Z');
+
+      await service.findCrewHelpersForDate(dayStart, dayEnd);
+
+      expect(crewHelperQueryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('helper.jobCard', 'jc');
+      expect(crewHelperQueryBuilder.andWhere).toHaveBeenCalledWith(
+        '(helper.removedAt IS NULL OR helper.removedAt >= :dayStart)',
+        { dayStart },
+      );
     });
   });
 });

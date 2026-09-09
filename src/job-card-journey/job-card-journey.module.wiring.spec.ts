@@ -15,6 +15,7 @@ import { DeliveryService } from '../delivery/delivery.service';
 
 import { JobCard } from '../job-cards/entities/job-card.entity';
 import { JobCardTaskPause } from '../job-cards/entities/job-card-task-pause.entity';
+import { JobCardCrewHelper } from '../job-cards/entities/job-card-crew-helper.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { ServiceCentre } from '../master-data/entities/service-centre.entity';
 import { User } from '../auth/entities/user.entity';
@@ -71,6 +72,11 @@ describe('JobCardJourneyModule wiring', () => {
     const entities = [
       JobCard,
       JobCardTaskPause,
+      // Added 2026-09-09 - JobCardsModule now also registers this for
+      // JobCardsService.addCrewHelper()/removeCrewHelper()/listCrewHelpers() (the Gantt
+      // board's "add crew helper" action), pulled in transitively the same way every
+      // other JobCardsModule-registered entity here is.
+      JobCardCrewHelper,
       Appointment,
       ServiceCentre,
       User,

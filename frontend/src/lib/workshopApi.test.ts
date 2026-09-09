@@ -5,7 +5,16 @@ vi.mock('./api', () => ({
 }));
 
 import { api } from './api';
-import { assignWorkshopTechnician, completeWorkshop, getWorkshopState, requestSpare, startWip } from './workshopApi';
+import {
+  addCrewHelper,
+  assignWorkshopTechnician,
+  completeWorkshop,
+  getWorkshopState,
+  listCrewHelpers,
+  removeCrewHelper,
+  requestSpare,
+  startWip,
+} from './workshopApi';
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
@@ -42,5 +51,23 @@ describe('workshopApi', () => {
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { jobCard: {}, staleReservations: [] } });
     await getWorkshopState('jc1');
     expect(api.get).toHaveBeenCalledWith('/workshop/jc1');
+  });
+
+  it('addCrewHelper posts to /workshop/:jobCardId/crew-helpers', async () => {
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'helper-1', technicianId: 'tech-2' } });
+    await addCrewHelper('jc1', { technicianId: 'tech-2' });
+    expect(api.post).toHaveBeenCalledWith('/workshop/jc1/crew-helpers', { technicianId: 'tech-2' });
+  });
+
+  it('listCrewHelpers fetches GET /workshop/:jobCardId/crew-helpers', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await listCrewHelpers('jc1');
+    expect(api.get).toHaveBeenCalledWith('/workshop/jc1/crew-helpers');
+  });
+
+  it('removeCrewHelper posts to /workshop/:jobCardId/crew-helpers/:helperId/remove', async () => {
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'helper-1', removedAt: '2026-09-09T10:00:00Z' } });
+    await removeCrewHelper('jc1', 'helper-1');
+    expect(api.post).toHaveBeenCalledWith('/workshop/jc1/crew-helpers/helper-1/remove');
   });
 });

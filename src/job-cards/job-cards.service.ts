@@ -4,6 +4,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { JobCardTaskPause, TaskPauseReason } from './entities/job-card-task-pause.entity';
+import { JobCardCrewHelper } from './entities/job-card-crew-helper.entity';
+import { User } from '../auth/entities/user.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { getJobCardProgressFields, JobCardProgressFields } from './job-card-progress.util';
 import { AppointmentsService } from '../appointments/appointments.service';
@@ -37,9 +39,24 @@ export class JobCardsService {
     private jobCardRepository: Repository<JobCard>,
     @InjectRepository(JobCardTaskPause)
     private taskPauseRepository: Repository<JobCardTaskPause>,
+    @InjectRepository(JobCardCrewHelper)
+    private crewHelperRepository: Repository<JobCardCrewHelper>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     private appointmentsService: AppointmentsService,
     private technicianService: TechnicianService,
   ) {}
+
+  // A helper only makes sense while the job is actively being worked in the workshop -
+  // before WORKSHOP_ASSIGNED there's no primary technician yet to help, and READY_FOR_QC+
+  // is already "work is done" (also covered by job-card-edit-lock.util.ts's late-stage
+  // lock, but this check is what actually stops it - see that util's own doc comment on
+  // why it's display-only, not enforcement).
+  private static readonly CREW_HELPER_ELIGIBLE_STATUSES: ReadonlySet<JobCardStatus> = new Set([
+    JobCardStatus.WORKSHOP_ASSIGNED,
+    JobCardStatus.IN_PROGRESS,
+    JobCardStatus.SPARE_PENDING,
+  ]);
 
   private async generateJobCardNumber(): Promise<string> {
     const prefix = 'JC-';
@@ -609,5 +626,102 @@ export class JobCardsService {
     jobCard.lastQcRejectionReason = reason;
 
     return this.jobCardRepository.save(jobCard);
+  }
+
+  /**
+   * Gantt board's "add crew helper" action (2026-09-09). Adds an extra technician on top
+   * of the job's single `assignedWorkshopTechnicianId`, without displacing them - see
+   * JobCardCrewHelper's own doc comment for why this is a separate table rather than a
+   * second FK column.
+   */
+  async addCrewHelper(jobCardId: string, technicianId: string, addedByUserId: string): Promise<JobCardCrewHelper> {
+    const jobCard = await this.findEntityById(jobCardId);
+
+    if (jobCard.section !== JobCardSection.WORKSHOP) {
+      throw new BadRequestException('Crew helpers can only be added to WORKSHOP-section Job Cards.');
+    }
+    if (!JobCardsService.CREW_HELPER_ELIGIBLE_STATUSES.has(jobCard.status)) {
+      throw new BadRequestException(
+        `Cannot add a crew helper: Job Card must be actively assigned/in progress (current: ${jobCard.status}).`,
+      );
+    }
+
+    const technician = await this.userRepository.findOne({ where: { id: technicianId }, relations: { role: true } });
+    if (!technician) {
+      throw new NotFoundException(`Technician ${technicianId} not found.`);
+    }
+    if (technician.role.name !== 'TECHNICIAN_WORKSHOP') {
+      throw new BadRequestException('A crew helper must hold the TECHNICIAN_WORKSHOP role.');
+    }
+    if (technicianId === jobCard.assignedWorkshopTechnicianId) {
+      throw new BadRequestException('This technician is already the primary assignee on this Job Card.');
+    }
+
+    const existingActive = await this.crewHelperRepository.findOne({
+      where: { jobCardId, technicianId, removedAt: IsNull() },
+    });
+    if (existingActive) {
+      throw new ConflictException('This technician is already an active crew helper on this Job Card.');
+    }
+
+    const helper = this.crewHelperRepository.create({ jobCardId, technicianId, addedByUserId });
+    return this.crewHelperRepository.save(helper);
+  }
+
+  /** Soft-removal (see JobCardCrewHelper's doc comment) - kept as a row so the Journey
+   * page/audit trail can still show who helped on this job and for how long. */
+  async removeCrewHelper(jobCardId: string, helperId: string, removedByUserId: string): Promise<JobCardCrewHelper> {
+    const helper = await this.crewHelperRepository.findOne({ where: { id: helperId, jobCardId } });
+    if (!helper) {
+      throw new NotFoundException(`Crew helper ${helperId} not found on Job Card ${jobCardId}.`);
+    }
+    if (helper.removedAt) {
+      throw new BadRequestException('This crew helper has already been removed from this Job Card.');
+    }
+
+    helper.removedAt = new Date();
+    helper.removedByUserId = removedByUserId;
+    return this.crewHelperRepository.save(helper);
+  }
+
+  /** Active (not-yet-removed) crew helpers on a Job Card, technician relation loaded for
+   * display (name, role) rather than making every caller do a second lookup. */
+  async listCrewHelpers(jobCardId: string): Promise<JobCardCrewHelper[]> {
+    return this.crewHelperRepository.find({
+      where: { jobCardId, removedAt: IsNull() },
+      relations: { technician: true },
+      order: { addedAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Gantt board (2026-09-09): every WORKSHOP-section Job Card whose workshop-occupancy
+   * window overlaps [dayStart, dayEnd) - assigned before the day ends, and either still
+   * unfinished (qcApprovedAt IS NULL - open-ended, still occupying the technician) or
+   * finished on/after the day starts. Deliberately a fresh query rather than reusing
+   * `findAll`-style filters (there is no general list-all for Job Cards - see this
+   * class's own "no list-all, paste an id" precedent elsewhere in this codebase) since
+   * this is the first caller that ever needs "every Job Card active on a given day".
+   */
+  async findWorkshopScheduleForDate(dayStart: Date, dayEnd: Date): Promise<JobCard[]> {
+    return this.jobCardRepository
+      .createQueryBuilder('jc')
+      .where('jc.assignedWorkshopTechnicianId IS NOT NULL')
+      .andWhere('jc.workshopAssignedAt <= :dayEnd', { dayEnd })
+      .andWhere('(jc.qcApprovedAt IS NULL OR jc.qcApprovedAt >= :dayStart)', { dayStart })
+      .getMany();
+  }
+
+  /** Same overlap logic as findWorkshopScheduleForDate, for crew helper rows instead of
+   * the primary assignment - addedAt/removedAt stand in for workshopAssignedAt/
+   * qcApprovedAt. jobCard relation loaded for its number/status/qcApprovedAt (a helper's
+   * block ends when the job itself does, same as the primary assignee's). */
+  async findCrewHelpersForDate(dayStart: Date, dayEnd: Date): Promise<JobCardCrewHelper[]> {
+    return this.crewHelperRepository
+      .createQueryBuilder('helper')
+      .leftJoinAndSelect('helper.jobCard', 'jc')
+      .where('helper.addedAt <= :dayEnd', { dayEnd })
+      .andWhere('(helper.removedAt IS NULL OR helper.removedAt >= :dayStart)', { dayStart })
+      .getMany();
   }
 }

@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { WorkshopService } from './workshop.service';
 import { AssignWorkshopDto } from './dto/assign-workshop.dto';
 import { RequestSpareDto } from './dto/request-spare.dto';
+import { AddCrewHelperDto } from './dto/add-crew-helper.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -91,5 +92,57 @@ export class WorkshopController {
   @ApiResponse({ status: 200 })
   async getState(@Param('jobCardId', ParseUUIDPipe) jobCardId: string) {
     return this.workshopService.getWorkshopState(jobCardId);
+  }
+
+  // Gantt board's "add crew helper" action (2026-09-09) - same ASSIGN_ROLES as assign()
+  // above, since adding an extra technician to a job is the same kind of planning
+  // decision as assigning the primary one.
+  @Post(':jobCardId/crew-helpers')
+  @Roles(...ASSIGN_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'JobCardCrewHelper',
+    getEntityId: (args) => args.params.jobCardId,
+    getNewValues: (result) => ({ id: result?.id, technicianId: result?.technicianId }),
+  })
+  @ApiOperation({ summary: 'Add a crew helper (extra technician) to a WORKSHOP_ASSIGNED/IN_PROGRESS/SPARE_PENDING Job Card, without displacing the primary assignee' })
+  @ApiResponse({ status: 201 })
+  @ApiResponse({ status: 400, description: 'Wrong section/status, not a TECHNICIAN_WORKSHOP, or already the primary assignee' })
+  @ApiResponse({ status: 409, description: 'Already an active crew helper on this Job Card' })
+  async addCrewHelper(
+    @Param('jobCardId', ParseUUIDPipe) jobCardId: string,
+    @Body() dto: AddCrewHelperDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.workshopService.addCrewHelper(jobCardId, dto.technicianId, user.id);
+  }
+
+  @Get(':jobCardId/crew-helpers')
+  @Roles(...ACTION_ROLES, 'CCE')
+  @ApiOperation({ summary: 'List active (not-yet-removed) crew helpers on a Job Card' })
+  @ApiResponse({ status: 200 })
+  async listCrewHelpers(@Param('jobCardId', ParseUUIDPipe) jobCardId: string) {
+    return this.workshopService.listCrewHelpers(jobCardId);
+  }
+
+  @Post(':jobCardId/crew-helpers/:helperId/remove')
+  @Roles(...ASSIGN_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'JobCardCrewHelper',
+    getEntityId: (args) => args.params.helperId,
+  })
+  @ApiOperation({ summary: 'Take a crew helper off a Job Card (soft-removal - kept for the audit trail)' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'Already removed' })
+  @ApiResponse({ status: 404 })
+  async removeCrewHelper(
+    @Param('jobCardId', ParseUUIDPipe) jobCardId: string,
+    @Param('helperId', ParseUUIDPipe) helperId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.workshopService.removeCrewHelper(jobCardId, helperId, user.id);
   }
 }

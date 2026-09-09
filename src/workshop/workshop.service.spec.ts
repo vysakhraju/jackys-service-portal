@@ -28,6 +28,9 @@ describe('WorkshopService', () => {
       setSparePending: jest.fn(),
       resumeFromSparePending: jest.fn(),
       completeWorkshop: jest.fn(),
+      addCrewHelper: jest.fn(),
+      removeCrewHelper: jest.fn(),
+      listCrewHelpers: jest.fn(),
     };
     inventoryService = {
       hasUnresolvedStaleReservation: jest.fn().mockResolvedValue(null),
@@ -287,6 +290,23 @@ describe('WorkshopService', () => {
 
       expect(result.staleReservations).toHaveLength(1);
       expect(result.staleReservations[0].id).toBe('res-1');
+    });
+  });
+
+  describe('crew helper passthroughs', () => {
+    it('addCrewHelper delegates straight to JobCardsService', async () => {
+      await service.addCrewHelper('jc-1', 'tech-2', 'lead-1');
+      expect(jobCardsService.addCrewHelper).toHaveBeenCalledWith('jc-1', 'tech-2', 'lead-1');
+    });
+
+    it('removeCrewHelper delegates straight to JobCardsService', async () => {
+      await service.removeCrewHelper('jc-1', 'helper-1', 'lead-1');
+      expect(jobCardsService.removeCrewHelper).toHaveBeenCalledWith('jc-1', 'helper-1', 'lead-1');
+    });
+
+    it('listCrewHelpers delegates straight to JobCardsService', async () => {
+      await service.listCrewHelpers('jc-1');
+      expect(jobCardsService.listCrewHelpers).toHaveBeenCalledWith('jc-1');
     });
   });
 });

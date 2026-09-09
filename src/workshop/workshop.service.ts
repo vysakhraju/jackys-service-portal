@@ -163,4 +163,18 @@ export class WorkshopService {
     const relevantStale = stale.filter((r) => r.jobCardId === jobCardId);
     return { jobCard, staleReservations: relevantStale };
   }
+
+  // Thin passthroughs, same "every mutation goes through JobCardsService" convention as
+  // assign()/startWip()/complete() above - Gantt board's "add crew helper" action.
+  async addCrewHelper(jobCardId: string, technicianId: string, addedByUserId: string) {
+    return this.jobCardsService.addCrewHelper(jobCardId, technicianId, addedByUserId);
+  }
+
+  async removeCrewHelper(jobCardId: string, helperId: string, removedByUserId: string) {
+    return this.jobCardsService.removeCrewHelper(jobCardId, helperId, removedByUserId);
+  }
+
+  async listCrewHelpers(jobCardId: string) {
+    return this.jobCardsService.listCrewHelpers(jobCardId);
+  }
 }

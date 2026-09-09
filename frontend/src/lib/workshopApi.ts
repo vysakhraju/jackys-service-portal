@@ -4,7 +4,7 @@
 // workshop job is always reached by pasting its Job Card id (from the Job Cards screen's
 // "Go to Workshop →" link, or directly).
 import { api } from './api';
-import type { AssignWorkshopInput, RequestSpareInput, WorkshopState } from './workshopTypes';
+import type { AddCrewHelperInput, AssignWorkshopInput, JobCardCrewHelper, RequestSpareInput, WorkshopState } from './workshopTypes';
 import type { InventoryReservation } from './inventoryTypes';
 import type { JobCard } from './jobCardsTypes';
 
@@ -21,3 +21,13 @@ export const requestSpare = (jobCardId: string, data: RequestSpareInput) =>
 export const completeWorkshop = (jobCardId: string) => api.post<JobCard>(`${BASE}/${jobCardId}/complete`).then((r) => r.data);
 
 export const getWorkshopState = (jobCardId: string) => api.get<WorkshopState>(`${BASE}/${jobCardId}`).then((r) => r.data);
+
+// Gantt board's "add crew helper" action, 2026-09-09.
+export const addCrewHelper = (jobCardId: string, data: AddCrewHelperInput) =>
+  api.post<JobCardCrewHelper>(`${BASE}/${jobCardId}/crew-helpers`, data).then((r) => r.data);
+
+export const listCrewHelpers = (jobCardId: string) =>
+  api.get<JobCardCrewHelper[]>(`${BASE}/${jobCardId}/crew-helpers`).then((r) => r.data);
+
+export const removeCrewHelper = (jobCardId: string, helperId: string) =>
+  api.post<JobCardCrewHelper>(`${BASE}/${jobCardId}/crew-helpers/${helperId}/remove`).then((r) => r.data);

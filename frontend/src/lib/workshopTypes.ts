@@ -26,3 +26,19 @@ export interface RequestSpareInput {
   verbalOverrideBy?: string;
   verbalOverrideNotes?: string;
 }
+
+// Mirrors JobCardCrewHelper - the Gantt board's "add crew helper" action, 2026-09-09.
+export interface JobCardCrewHelper {
+  id: string;
+  jobCardId: string;
+  technicianId: string;
+  technician?: { id: string; firstName: string; lastName: string };
+  addedByUserId: string;
+  addedAt: string;
+  removedByUserId: string | null;
+  removedAt: string | null;
+}
+
+export interface AddCrewHelperInput {
+  technicianId: string;
+}
