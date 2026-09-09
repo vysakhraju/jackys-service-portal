@@ -138,9 +138,19 @@ async function main(): Promise<void> {
       const keep = active.slice(0, keepCount);
       const rest = active.slice(keepCount);
       const label = role.displayName || role.name;
-      keep.forEach((u, i) => {
+      let renameCounter = 0;
+      keep.forEach((u) => {
+        // Only overwrite the placeholder names this cleanup exists to fix. An account that
+        // already has a real, distinct name (someone typed it in by hand instead of using the
+        // seed script's default) is left completely alone - renaming it to "<Role> N" would
+        // erase a real name for no reason.
+        if (u.firstName.trim().toLowerCase() !== 'test') {
+          console.log(`  Keeping (already named, left as-is): ${u.firstName} ${u.lastName}  (${u.email})`);
+          return;
+        }
+        renameCounter += 1;
         const newFirst = label;
-        const newLast = String(i + 1);
+        const newLast = String(renameCounter);
         console.log(`  Keeping + renaming: ${u.firstName} ${u.lastName} -> "${newFirst} ${newLast}"  (${u.email})`);
         toRename.push({ id: u.id, firstName: newFirst, lastName: newLast });
       });
