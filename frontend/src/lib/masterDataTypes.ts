@@ -95,6 +95,7 @@ export interface CreateServiceCentreInput {
   address?: string;
   city?: string;
   schedule?: Record<string, DaySchedule>;
+  assignedTechnicianIds?: string[];
   isActive?: boolean;
   vatRate?: number;
 }

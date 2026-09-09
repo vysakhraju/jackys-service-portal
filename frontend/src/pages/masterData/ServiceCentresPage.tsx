@@ -5,6 +5,7 @@ import { ActiveBadge, DataTable, ErrorNotice, type Column } from '../../componen
 import { Checkbox, Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { createServiceCentre, deleteServiceCentre, listServiceCentres, updateServiceCentre } from '../../lib/masterDataApi';
+import { listUsers } from '../../lib/usersApi';
 import {
   COUNTRIES,
   WEEKDAYS,
@@ -31,8 +32,15 @@ export function ServiceCentresPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ServiceCentre | null>(null);
   const [schedule, setSchedule] = useState<Record<string, DaySchedule>>(defaultWeekSchedule());
+  // Who this centre's technicians are - feeds ServiceCentre.assignedTechnicianIds, which the
+  // New Appointment scheduling grid (GET /appointments/scheduling-grid) reads to decide which
+  // technicians even show up for this centre. There was previously no UI anywhere to set this
+  // at all - the field existed on the backend DTO but nothing here rendered it.
+  const [assignedTechnicianIds, setAssignedTechnicianIds] = useState<string[]>([]);
 
   const { data, isLoading, error } = useQuery({ queryKey: ['service-centres'], queryFn: () => listServiceCentres() });
+  const { data: users, isLoading: usersLoading, error: usersError } = useQuery({ queryKey: ['users'], queryFn: () => listUsers() });
+  const fieldTechnicians = (users ?? []).filter((u) => u.role.name === 'TECHNICIAN_FIELD' && u.status === 'ACTIVE');
 
   const {
     register,
@@ -73,6 +81,7 @@ export function ServiceCentresPage() {
     setMutationError(null);
     reset({ code: '', name: '', country: 'UAE', city: '', address: '', vatRate: 5, isActive: true });
     setSchedule(defaultWeekSchedule());
+    setAssignedTechnicianIds([]);
     setModalOpen(true);
   }
 
@@ -93,7 +102,12 @@ export function ServiceCentresPage() {
       if (centre.schedule?.[day]) merged[day] = centre.schedule[day];
     }
     setSchedule(merged);
+    setAssignedTechnicianIds(centre.assignedTechnicianIds ?? []);
     setModalOpen(true);
+  }
+
+  function toggleTechnician(id: string) {
+    setAssignedTechnicianIds((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
   }
 
   function closeModal() {
@@ -110,6 +124,7 @@ export function ServiceCentresPage() {
       vatRate: Number(values.vatRate),
       isActive: values.isActive,
       schedule,
+      assignedTechnicianIds,
     };
     if (editing) {
       updateMutation.mutate({ id: editing.id, data: payload });
@@ -124,6 +139,16 @@ export function ServiceCentresPage() {
     { key: 'country', label: 'Country', render: (r) => r.country },
     { key: 'city', label: 'City', render: (r) => r.city ?? '—' },
     { key: 'vatRate', label: 'VAT %', render: (r) => Number(r.vatRate).toFixed(2) },
+    {
+      key: 'technicians',
+      label: 'Field techs',
+      render: (r) =>
+        (r.assignedTechnicianIds?.length ?? 0) > 0 ? (
+          r.assignedTechnicianIds.length
+        ) : (
+          <span className="text-amber-600">None assigned</span>
+        ),
+    },
     { key: 'status', label: 'Status', render: (r) => <ActiveBadge active={r.isActive} /> },
   ];
 
@@ -211,6 +236,38 @@ export function ServiceCentresPage() {
                   onChange={(next) => setSchedule((prev) => ({ ...prev, [day]: next }))}
                 />
               ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-sm font-medium text-slate-700">Field technicians</p>
+            <p className="mb-2 text-xs text-slate-400">
+              Who's available to be booked here from the New Appointment scheduling grid. Only active Field
+              Technicians can be assigned — workshop technicians don't work off an appointment calendar.
+            </p>
+            <div className="rounded-md border border-slate-200 p-3">
+              {usersError && <ErrorNotice error={usersError} />}
+              {usersLoading && <p className="text-xs text-slate-400">Loading technicians…</p>}
+              {!usersLoading && !usersError && fieldTechnicians.length === 0 && (
+                <p className="text-xs text-slate-400">
+                  No active Field Technicians exist yet — create one from Users first.
+                </p>
+              )}
+              {fieldTechnicians.length > 0 && (
+                <div className="grid grid-cols-2 gap-1.5">
+                  {fieldTechnicians.map((tech) => (
+                    <label key={tech.id} className="flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={assignedTechnicianIds.includes(tech.id)}
+                        onChange={() => toggleTechnician(tech.id)}
+                        className="h-3.5 w-3.5 rounded border-slate-300"
+                      />
+                      {tech.firstName} {tech.lastName}
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
