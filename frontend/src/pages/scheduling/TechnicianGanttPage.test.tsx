@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, createEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -88,11 +88,52 @@ function board(overrides: Partial<GanttBoard> = {}): GanttBoard {
         hasConflict: false,
         blocks: [],
       },
+      {
+        technicianId: 'tech-4',
+        technicianName: 'Fahad Noor',
+        role: 'TECHNICIAN_FIELD',
+        hasConflict: false,
+        blocks: [],
+      },
     ],
     unassignedAppointments: [],
     unassignedJobCards: [],
     ...overrides,
   };
+}
+
+// jsdom implements DataTransfer.setData/getData poorly (and DragEvent's dataTransfer isn't
+// wired up at all in some versions) - a small backing Map stands in for the real thing, same
+// as the pattern testing-library's own docs use for HTML5 drag-and-drop.
+function fakeDataTransfer() {
+  const store = new Map<string, string>();
+  return {
+    setData: (type: string, value: string) => store.set(type, value),
+    getData: (type: string) => store.get(type) ?? '',
+    effectAllowed: 'none' as string,
+    dropEffect: 'none' as string,
+  };
+}
+
+// jsdom has no real DragEvent constructor (confirmed: window.DragEvent is undefined), so
+// testing-library's fireEvent.drop({..., clientX}) silently falls back to a plain Event and
+// drops any MouseEvent-only init keys like clientX - only createEvent()'s special-cased
+// dataTransfer/clipboardData survive that fallback. Building the event via createEvent and
+// setting clientX directly on it before dispatch works around that.
+function fireDrag(type: 'dragStart' | 'dragEnter' | 'dragOver' | 'drop', target: Element, dataTransfer: unknown, clientX?: number) {
+  const event = createEvent[type](target, { dataTransfer });
+  if (clientX !== undefined) {
+    Object.defineProperty(event, 'clientX', { value: clientX, configurable: true });
+  }
+  fireEvent(target, event);
+}
+
+function dragAndDrop(source: Element, target: Element, clientX = 500) {
+  const dataTransfer = fakeDataTransfer();
+  fireDrag('dragStart', source, dataTransfer);
+  fireDrag('dragEnter', target, dataTransfer);
+  fireDrag('dragOver', target, dataTransfer, clientX);
+  fireDrag('drop', target, dataTransfer, clientX);
 }
 
 beforeEach(() => {
@@ -102,6 +143,21 @@ beforeEach(() => {
   vi.mocked(reassignWorkshopTechnician).mockReset();
   vi.mocked(assignTechnician).mockReset();
   vi.mocked(updateAppointment).mockReset();
+
+  // The board's timeline spans 07:00-21:00 UTC across the drop zone's full width - mocked
+  // here to a clean 1000px so a given clientX maps to an exact, easy-to-assert time.
+  // clientX 500 (the default dragAndDrop() uses) lands exactly on the midpoint, 14:00 UTC.
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    left: 0,
+    right: 1000,
+    width: 1000,
+    top: 0,
+    bottom: 40,
+    height: 40,
+    x: 0,
+    y: 0,
+    toJSON: () => {},
+  } as DOMRect);
 });
 
 describe('TechnicianGanttPage', () => {
@@ -110,8 +166,10 @@ describe('TechnicianGanttPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('Ravi Kumar')).toBeInTheDocument();
-    expect(screen.getByText('Ali Hassan')).toBeInTheDocument();
+    // { selector: 'p' } disambiguates from the technician filter dropdown's own <option>
+    // text, which now also reads e.g. "Ravi Kumar" for every technician on the board.
+    expect(await screen.findByText('Ravi Kumar', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Ali Hassan', { selector: 'p' })).toBeInTheDocument();
     expect(screen.getByText('APT-0001')).toBeInTheDocument();
     expect(screen.getByText('JC-0100')).toBeInTheDocument();
   });
@@ -121,8 +179,8 @@ describe('TechnicianGanttPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('Sunil Perera')).toBeInTheDocument();
-    expect(screen.getByText('No assignments today')).toBeInTheDocument();
+    expect(await screen.findByText('Sunil Perera', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getAllByText('No assignments today').length).toBeGreaterThan(0);
   });
 
   it('surfaces a conflict summary and flags the double-booked technician row', async () => {
@@ -140,11 +198,26 @@ describe('TechnicianGanttPage', () => {
   it('re-fetches the board when the date changes', async () => {
     vi.mocked(getGanttBoard).mockResolvedValue(board());
     renderPage();
-    await screen.findByText('Ravi Kumar');
+    await screen.findByText('Ravi Kumar', { selector: 'p' });
 
     fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-09-10' } });
 
     await waitFor(() => expect(getGanttBoard).toHaveBeenCalledWith('2026-09-10'));
+  });
+
+  it('narrows the visible technician rows via the technician filter dropdown', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+
+    renderPage();
+    await screen.findByText('Ravi Kumar', { selector: 'p' });
+    expect(screen.getByText('Ali Hassan', { selector: 'p' })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Technician'), 'tech-1');
+
+    expect(screen.getByText('Ravi Kumar', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.queryByText('Ali Hassan', { selector: 'p' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Sunil Perera', { selector: 'p' })).not.toBeInTheDocument();
   });
 
   it('offers "+ Helper" only on an actively-assigned workshop_job block, not an appointment block', async () => {
@@ -183,11 +256,14 @@ describe('TechnicianGanttPage', () => {
     await screen.findByText('JC-0100');
 
     await user.click(screen.getByRole('button', { name: '+ Helper' }));
-    expect(await screen.findByText('Add crew helper — JC-0100')).toBeInTheDocument();
+    const heading = await screen.findByText('Add crew helper — JC-0100');
+    // Scope to the modal itself - the page's own technician filter dropdown is also a
+    // combobox, and would otherwise make getByRole('combobox') ambiguous.
+    const modal = heading.closest('.w-full')!;
 
     // tech-2 (the primary assignee on jc-1) must not be offered as a helper candidate;
     // tech-3 (the other workshop technician, currently idle) should be.
-    const select = screen.getByRole('combobox');
+    const select = within(modal).getByRole('combobox');
     const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
     expect(optionLabels).not.toContain('Ali Hassan');
     expect(optionLabels).toContain('Sunil Perera');
@@ -244,8 +320,7 @@ describe('TechnicianGanttPage', () => {
     expect(screen.getByText('No workshop job cards are waiting on a technician.')).toBeInTheDocument();
   });
 
-  it('lists unassigned appointments and job cards, and assigns an unassigned appointment to a field technician', async () => {
-    const user = userEvent.setup();
+  it('drags an unassigned appointment card onto a field technician\'s row, assigning it at the dropped time', async () => {
     vi.mocked(getGanttBoard).mockResolvedValue(
       board({
         unassignedAppointments: [
@@ -258,45 +333,49 @@ describe('TechnicianGanttPage', () => {
             estimatedDurationMinutes: 45,
           },
         ],
-        unassignedJobCards: [
-          {
-            id: 'jc-9',
-            jobCardNumber: 'JC-0200',
-            faultCode: 'F002',
-            symptomCode: 'S002',
-            warrantyStatus: 'OUT_OF_WARRANTY',
-            createdAt: '2026-09-08T12:00:00.000Z',
-          },
-        ],
       }),
     );
     vi.mocked(assignTechnician).mockResolvedValue({ id: 'apt-9', technicianId: 'tech-1' } as any);
 
     renderPage();
-    expect(await screen.findByText('APT-0009')).toBeInTheDocument();
-    expect(screen.getByText('JC-0200')).toBeInTheDocument();
+    const card = (await screen.findByText('APT-0009')).closest('li')!;
+    const dropZone = screen.getByTestId('drop-zone-tech-1'); // Ravi Kumar, field
 
-    // Only one "Assign →" button belongs to the appointment panel - scope to its row.
-    const appointmentRow = screen.getByText('APT-0009').closest('li')!;
-    await user.click(within(appointmentRow).getByRole('button', { name: 'Assign →' }));
+    dragAndDrop(card, dropZone, 500); // midpoint of the 07:00-21:00 axis -> 14:00 UTC
 
-    expect(await screen.findByText('Assign technician — APT-0009')).toBeInTheDocument();
-    const select = screen.getByRole('combobox');
-    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
-    // Field technicians only - the workshop-only technicians should not appear.
-    expect(optionLabels).toContain('Ravi Kumar');
-    expect(optionLabels).not.toContain('Ali Hassan');
-    expect(optionLabels).not.toContain('Sunil Perera');
-
-    await user.selectOptions(select, 'tech-1');
-    await user.click(screen.getByRole('button', { name: 'Confirm' }));
-
-    await waitFor(() => expect(assignTechnician).toHaveBeenCalledWith('apt-9', 'tech-1'));
-    await waitFor(() => expect(screen.queryByText('Assign technician — APT-0009')).not.toBeInTheDocument());
+    // One atomic call - technician + the drop-computed time together (see the-fool
+    // pre-mortem note in the source: this used to be two sequential calls).
+    await waitFor(() => expect(assignTechnician).toHaveBeenCalledWith('apt-9', 'tech-1', '2026-09-09T14:00:00.000Z'));
+    expect(await screen.findByText('Technician assigned')).toBeInTheDocument();
   });
 
-  it('assigns an unassigned job card to a workshop technician', async () => {
-    const user = userEvent.setup();
+  it('rejects dropping an appointment card onto a workshop technician\'s row, without calling the API', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(
+      board({
+        unassignedAppointments: [
+          {
+            id: 'apt-9',
+            appointmentNumber: 'APT-0009',
+            customerName: 'Amir',
+            type: 'WARRANTY',
+            scheduledAt: '2026-09-09T11:00:00.000Z',
+            estimatedDurationMinutes: 45,
+          },
+        ],
+      }),
+    );
+
+    renderPage();
+    const card = (await screen.findByText('APT-0009')).closest('li')!;
+    const dropZone = screen.getByTestId('drop-zone-tech-2'); // Ali Hassan, workshop
+
+    dragAndDrop(card, dropZone);
+
+    expect(await screen.findByText('Wrong technician type')).toBeInTheDocument();
+    expect(assignTechnician).not.toHaveBeenCalled();
+  });
+
+  it('drags an unassigned job card onto a workshop technician\'s row, assigning it', async () => {
     vi.mocked(getGanttBoard).mockResolvedValue(
       board({
         unassignedJobCards: [
@@ -314,92 +393,115 @@ describe('TechnicianGanttPage', () => {
     vi.mocked(assignWorkshopTechnician).mockResolvedValue({ id: 'jc-9', assignedWorkshopTechnicianId: 'tech-3' } as any);
 
     renderPage();
-    const jobCardRow = (await screen.findByText('JC-0200')).closest('li')!;
-    await user.click(within(jobCardRow).getByRole('button', { name: 'Assign →' }));
+    const card = (await screen.findByText('JC-0200')).closest('li')!;
+    const dropZone = screen.getByTestId('drop-zone-tech-3'); // Sunil Perera, workshop, idle
 
-    expect(await screen.findByText('Assign technician — JC-0200')).toBeInTheDocument();
-    await user.selectOptions(screen.getByRole('combobox'), 'tech-3');
-    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    dragAndDrop(card, dropZone);
 
     await waitFor(() => expect(assignWorkshopTechnician).toHaveBeenCalledWith('jc-9', { technicianId: 'tech-3' }));
+    expect(await screen.findByText('Technician assigned')).toBeInTheDocument();
   });
 
-  it('reassigns an already-assigned appointment block, excluding its current technician from the picker', async () => {
-    const user = userEvent.setup();
-    vi.mocked(getGanttBoard).mockResolvedValue(board());
-    vi.mocked(updateAppointment).mockResolvedValue({ id: 'apt-1', technicianId: 'tech-2' } as any);
+  it('rejects dropping a job card onto a field technician\'s row, without calling the API', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(
+      board({
+        unassignedJobCards: [
+          {
+            id: 'jc-9',
+            jobCardNumber: 'JC-0200',
+            faultCode: 'F002',
+            symptomCode: 'S002',
+            warrantyStatus: 'OUT_OF_WARRANTY',
+            createdAt: '2026-09-08T12:00:00.000Z',
+          },
+        ],
+      }),
+    );
 
     renderPage();
-    await screen.findByText('APT-0001');
-    // Both the appointment block and the workshop_job block offer their own "Reassign"
-    // trigger button - scope to the appointment bar specifically.
-    const appointmentBar = screen.getByTitle(/APT-0001/);
-    await user.click(within(appointmentBar).getByRole('button', { name: 'Reassign' }));
+    const card = (await screen.findByText('JC-0200')).closest('li')!;
+    const dropZone = screen.getByTestId('drop-zone-tech-1'); // Ravi Kumar, field
 
-    expect(await screen.findByText('Reassign technician — APT-0001')).toBeInTheDocument();
-    // Ravi Kumar (tech-1) is the current assignee - must not be offered as a target.
-    const select = screen.getByRole('combobox');
-    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
-    expect(optionLabels).not.toContain('Ravi Kumar');
+    dragAndDrop(card, dropZone);
 
-    // No other field technician exists in this fixture, so the empty-pool message shows.
-    expect(screen.getByText(/No other field technicians are available/)).toBeInTheDocument();
+    expect(await screen.findByText('Wrong technician type')).toBeInTheDocument();
+    expect(assignWorkshopTechnician).not.toHaveBeenCalled();
   });
 
-  it('reassigns an in-progress workshop job to a different workshop technician', async () => {
-    const user = userEvent.setup();
+  it('drags an existing appointment block onto a different field technician\'s row, reassigning it at the dropped time', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+    vi.mocked(updateAppointment).mockResolvedValue({ id: 'apt-1', technicianId: 'tech-4' } as any);
+
+    renderPage();
+    const bar = await screen.findByTitle(/APT-0001/);
+    const dropZone = screen.getByTestId('drop-zone-tech-4'); // Fahad Noor, field, idle
+
+    dragAndDrop(bar, dropZone, 500);
+
+    await waitFor(() =>
+      expect(updateAppointment).toHaveBeenCalledWith('apt-1', { technicianId: 'tech-4', scheduledAt: '2026-09-09T14:00:00.000Z' }),
+    );
+  });
+
+  it('drags an eligible workshop_job block onto a different workshop technician\'s row, reassigning it', async () => {
     vi.mocked(getGanttBoard).mockResolvedValue(board());
     vi.mocked(reassignWorkshopTechnician).mockResolvedValue({ id: 'jc-1', assignedWorkshopTechnicianId: 'tech-3' } as any);
 
     renderPage();
-    await screen.findByText('JC-0100');
-    // The workshop_job block is the only one offering "Reassign" alongside "+ Helper" -
-    // getAllByRole would also match the appointment block's own Reassign button, so scope
-    // to the JC-0100 bar specifically via its title attribute.
-    const jobCardBar = screen.getByTitle(/JC-0100/);
-    await user.click(within(jobCardBar).getByRole('button', { name: 'Reassign' }));
+    const bar = await screen.findByTitle(/JC-0100/);
+    const dropZone = screen.getByTestId('drop-zone-tech-3'); // Sunil Perera, workshop, idle
 
-    expect(await screen.findByText('Reassign technician — JC-0100')).toBeInTheDocument();
-    const select = screen.getByRole('combobox');
-    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
-    expect(optionLabels).not.toContain('Ali Hassan'); // current assignee, excluded
-    expect(optionLabels).toContain('Sunil Perera');
-
-    await user.selectOptions(select, 'tech-3');
-    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    dragAndDrop(bar, dropZone);
 
     await waitFor(() => expect(reassignWorkshopTechnician).toHaveBeenCalledWith('jc-1', { technicianId: 'tech-3' }));
   });
 
-  it('does not offer "Reassign" on a workshop_job block outside the reassignable statuses (e.g. DELIVERED)', async () => {
+  it('treats dropping a workshop_job block back onto its own current technician as a no-op', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+
+    renderPage();
+    const bar = await screen.findByTitle(/JC-0100/);
+    const dropZone = screen.getByTestId('drop-zone-tech-2'); // its own current technician
+
+    dragAndDrop(bar, dropZone);
+
+    expect(await screen.findByText('Already assigned')).toBeInTheDocument();
+    expect(reassignWorkshopTechnician).not.toHaveBeenCalled();
+    expect(assignWorkshopTechnician).not.toHaveBeenCalled();
+  });
+
+  it('a workshop_job block outside the reassignable statuses (e.g. DELIVERED) is not draggable', async () => {
     const b = board();
     b.rows[1].blocks[0].status = 'DELIVERED';
     vi.mocked(getGanttBoard).mockResolvedValue(b);
 
     renderPage();
-    await screen.findByText('JC-0100');
+    const bar = await screen.findByTitle(/JC-0100/);
 
-    const jobCardBar = screen.getByTitle(/JC-0100/);
-    expect(within(jobCardBar).queryByRole('button', { name: 'Reassign' })).not.toBeInTheDocument();
+    expect(bar).toHaveAttribute('draggable', 'false');
   });
 
-  it('surfaces a toast-worthy error message and keeps the modal open when a reassignment is rejected', async () => {
-    const user = userEvent.setup();
+  it('an appointment block is always draggable regardless of status', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+
+    renderPage();
+    const bar = await screen.findByTitle(/APT-0001/);
+
+    expect(bar).toHaveAttribute('draggable', 'true');
+  });
+
+  it('surfaces an error toast when a drop is rejected by the backend', async () => {
     vi.mocked(getGanttBoard).mockResolvedValue(board());
     vi.mocked(reassignWorkshopTechnician).mockRejectedValue({
       response: { data: { message: 'Current technician still holds an open spare-parts reservation.' } },
     });
 
     renderPage();
-    await screen.findByText('JC-0100');
-    const jobCardBar = screen.getByTitle(/JC-0100/);
-    await user.click(within(jobCardBar).getByRole('button', { name: 'Reassign' }));
-    await screen.findByText('Reassign technician — JC-0100');
-    await user.selectOptions(screen.getByRole('combobox'), 'tech-3');
-    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    const bar = await screen.findByTitle(/JC-0100/);
+    const dropZone = screen.getByTestId('drop-zone-tech-3');
 
-    await waitFor(() => expect(reassignWorkshopTechnician).toHaveBeenCalled());
-    // The modal stays open on failure (only onSuccess closes it) so the user can retry.
-    expect(screen.getByText('Reassign technician — JC-0100')).toBeInTheDocument();
+    dragAndDrop(bar, dropZone);
+
+    expect(await screen.findByText('Current technician still holds an open spare-parts reservation.')).toBeInTheDocument();
   });
 });

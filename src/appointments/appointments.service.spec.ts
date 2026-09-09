@@ -316,6 +316,18 @@ describe('AppointmentsService', () => {
       expect(result).toEqual(appointment({ technicianId: 'tech-2' }));
     });
 
+    // Technician Assignment Board drag-and-drop (2026-09-09, the-fool pre-mortem finding):
+    // update() previously accepted ANY user id as the new technicianId with no role check
+    // at all - a gap that mattered far more once drag-driven reassignment started calling
+    // this method routinely. Same check assignTechnician() has always had.
+    it('throws BadRequestException when the new technicianId does not belong to a technician', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+      userRepository.findOne.mockResolvedValue({ id: 'user-9', role: { name: 'CCE' } });
+
+      await expect(service.update('apt-1', { technicianId: 'user-9' } as any, 'user-1')).rejects.toThrow(BadRequestException);
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+    });
+
     // --- Mobile Phase 5 reassignment guardrail (the-fool pre-mortem finding) -----------
 
     it('blocks reassignment with ConflictException when the outgoing technician holds an open reservation on the linked Job Card', async () => {
@@ -470,6 +482,67 @@ describe('AppointmentsService', () => {
       expect(appointmentRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ technicianId: 'tech-1', status: AppointmentStatus.TECHNICIAN_ASSIGNED }),
       );
+    });
+
+    // Optional scheduledAt (2026-09-09, Technician Assignment Board drag-and-drop) - one
+    // atomic call for a fresh drag-assign instead of assignTechnician() then a follow-up
+    // update() call, see AssignTechnicianDto's own doc comment for why that matters.
+    describe('optional scheduledAt', () => {
+      it('does not touch scheduledAt or re-check capacity when scheduledAt is omitted', async () => {
+        appointmentRepository.findOne.mockResolvedValue(appointment());
+        userRepository.findOne.mockResolvedValue({ id: 'tech-1', role: { name: 'TECHNICIAN_FIELD' } });
+        appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+
+        await service.assignTechnician('apt-1', 'tech-1', 'user-1');
+
+        expect(serviceCentreRepository.findOne).not.toHaveBeenCalled();
+        expect(appointmentRepository.save).toHaveBeenCalledWith(
+          expect.objectContaining({ scheduledAt: appointment().scheduledAt }),
+        );
+      });
+
+      it('sets scheduledAt to the given time when capacity and technician availability both allow it', async () => {
+        appointmentRepository.findOne.mockResolvedValue(appointment());
+        userRepository.findOne.mockResolvedValue({ id: 'tech-1', role: { name: 'TECHNICIAN_FIELD' } });
+        serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 10 } }));
+        appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+
+        await service.assignTechnician('apt-1', 'tech-1', 'user-1', undefined, '2026-08-25T11:30:00Z');
+
+        expect(appointmentRepository.save).toHaveBeenCalledWith(
+          expect.objectContaining({ technicianId: 'tech-1', scheduledAt: new Date('2026-08-25T11:30:00Z') }),
+        );
+      });
+
+      it('throws ConflictException and never saves when the drop-computed time is at capacity', async () => {
+        appointmentRepository.findOne.mockResolvedValue(appointment());
+        userRepository.findOne.mockResolvedValue({ id: 'tech-1', role: { name: 'TECHNICIAN_FIELD' } });
+        serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 1 } }));
+        appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 1 }));
+
+        await expect(
+          service.assignTechnician('apt-1', 'tech-1', 'user-1', undefined, '2026-08-25T11:30:00Z'),
+        ).rejects.toThrow(ConflictException);
+        expect(appointmentRepository.save).not.toHaveBeenCalled();
+      });
+
+      it('checks the new technician\'s availability against the given time, not the appointment\'s old time', async () => {
+        appointmentRepository.findOne.mockResolvedValue(appointment({ scheduledAt: new Date('2026-08-25T09:00:00Z') }));
+        userRepository.findOne.mockResolvedValue({ id: 'tech-1', role: { name: 'TECHNICIAN_FIELD' } });
+        serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 10 } }));
+        const qb = buildQb({ getCount: 0 });
+        appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+        await service.assignTechnician('apt-1', 'tech-1', 'user-1', undefined, '2026-08-25T15:00:00Z');
+
+        // checkTechnicianAvailability's own 15-min buffer (distinct from checkCapacity's
+        // 30-min buffer, also called here) - confirms the NEW time drives this check, not
+        // the appointment's original 09:00 scheduledAt.
+        expect(qb.andWhere).toHaveBeenCalledWith('apt.scheduledAt BETWEEN :start AND :end', {
+          start: new Date('2026-08-25T14:45:00Z'),
+          end: new Date('2026-08-25T16:15:00Z'),
+        });
+      });
     });
   });
 

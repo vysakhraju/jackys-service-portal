@@ -24,9 +24,10 @@ export interface TechnicianScheduleRow {
   hasConflict: boolean;
 }
 
-// Click-to-assign panel (2026-09-09): the "needs a technician" pools the board renders
-// above the timeline, one section each - see TechnicianScheduleService.getGanttBoard's own
-// doc comment for why Job Cards have no date scoping the way Appointments do.
+// Unassigned-item panel (2026-09-09): the "needs a technician" pools the board renders
+// above the timeline, one section each, both drag sources - see
+// TechnicianScheduleService.getGanttBoard's own doc comment for why Job Cards have no date
+// scoping the way Appointments do.
 export interface UnassignedAppointment {
   id: string;
   appointmentNumber: string;

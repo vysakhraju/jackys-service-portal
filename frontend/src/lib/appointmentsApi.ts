@@ -56,8 +56,13 @@ export const updateAppointment = (id: string, data: Partial<CreateAppointmentInp
 export const cancelAppointment = (id: string, reason: string) =>
   api.put<Appointment>(`${BASE}/${id}/cancel`, { reason }).then((r) => r.data);
 
-export const assignTechnician = (id: string, technicianId: string) =>
-  api.put<Appointment>(`${BASE}/${id}/assign-technician`, { technicianId }).then((r) => r.data);
+// scheduledAt is optional (2026-09-09, Technician Assignment Board drag-and-drop) - passing
+// it sets the appointment's time in the SAME call as the technician assignment, so a fresh
+// drag-assign is one atomic backend call rather than assign-then-update, which could
+// otherwise leave an appointment assigned to a technician but still on its old time if the
+// second call failed.
+export const assignTechnician = (id: string, technicianId: string, scheduledAt?: string) =>
+  api.put<Appointment>(`${BASE}/${id}/assign-technician`, { technicianId, scheduledAt }).then((r) => r.data);
 
 export const confirmAppointment = (id: string) => api.put<Appointment>(`${BASE}/${id}/confirm`).then((r) => r.data);
 

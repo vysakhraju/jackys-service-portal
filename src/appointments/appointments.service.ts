@@ -279,6 +279,13 @@ export class AppointmentsService {
       if (!technician) {
         throw new NotFoundException('Technician not found');
       }
+      // Same role check assignTechnician() has always had (2026-09-09: added here too, a
+      // the-fool pre-mortem finding on the Technician Assignment Board's drag-and-drop -
+      // update() previously accepted ANY user id as technicianId with no role check at all,
+      // and reassignment-by-drag now goes through this method far more often than before).
+      if (!['TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP'].includes(technician.role.name)) {
+        throw new BadRequestException('Invalid technician');
+      }
       const newDate = updateAppointmentDto.scheduledAt ? new Date(updateAppointmentDto.scheduledAt) : appointment.scheduledAt;
       const duration = updateAppointmentDto.estimatedDurationMinutes || appointment.estimatedDurationMinutes || 60;
       const techAvailable = await this.checkTechnicianAvailability(updateAppointmentDto.technicianId, newDate, duration);
@@ -349,7 +356,7 @@ export class AppointmentsService {
     return this.findById(id);
   }
 
-  async assignTechnician(id: string, technicianId: string, userId: string, req?: any): Promise<Appointment> {
+  async assignTechnician(id: string, technicianId: string, userId: string, req?: any, scheduledAt?: string): Promise<Appointment> {
     const appointment = await this.findById(id);
 
     if (appointment.status !== AppointmentStatus.SCHEDULED && appointment.status !== AppointmentStatus.CONFIRMED) {
@@ -364,18 +371,32 @@ export class AppointmentsService {
       throw new BadRequestException('Invalid technician');
     }
 
-    const techAvailable = await this.checkTechnicianAvailability(
-      technicianId,
-      appointment.scheduledAt,
-      appointment.estimatedDurationMinutes || 60,
-      id,
-    );
+    // Optional (2026-09-09, Technician Assignment Board drag-and-drop) - the whole point of
+    // accepting scheduledAt here rather than making the caller do a follow-up update() call
+    // is atomicity: a technician's assignment and the time it's assigned to land in one
+    // save(), so there's no window where the appointment is assigned to someone but still
+    // sitting on its old (often stale/misleading) time - see this DTO's own doc comment.
+    const effectiveScheduledAt = scheduledAt ? new Date(scheduledAt) : appointment.scheduledAt;
+    const duration = appointment.estimatedDurationMinutes || 60;
+
+    if (scheduledAt) {
+      const capacityCheck = await this.checkCapacity(appointment.serviceCentreId, effectiveScheduledAt, duration);
+      if (!capacityCheck.available) {
+        throw new ConflictException(capacityCheck.message || 'Service centre at capacity for new time slot');
+      }
+    }
+
+    const techAvailable = await this.checkTechnicianAvailability(technicianId, effectiveScheduledAt, duration, id);
     if (!techAvailable) {
       throw new ConflictException('Technician not available at this time');
     }
 
+    const oldValues = { technicianId: appointment.technicianId, status: appointment.status, scheduledAt: appointment.scheduledAt };
     appointment.technicianId = technicianId;
     appointment.status = AppointmentStatus.TECHNICIAN_ASSIGNED;
+    if (scheduledAt) {
+      appointment.scheduledAt = effectiveScheduledAt;
+    }
     const saved = await this.appointmentRepository.save(appointment);
 
     await this.logAudit(
@@ -383,8 +404,8 @@ export class AppointmentsService {
       AuditAction.UPDATE,
       'Appointment',
       id,
-      { technicianId: appointment.technicianId, status: appointment.status },
-      { technicianId, status: AppointmentStatus.TECHNICIAN_ASSIGNED },
+      oldValues,
+      { technicianId: saved.technicianId, status: saved.status, scheduledAt: saved.scheduledAt },
       req,
     );
 

@@ -221,7 +221,7 @@ export class AppointmentsController {
     @CurrentUser() user: User,
     @Request() req: any,
   ) {
-    return this.appointmentsService.assignTechnician(id, body.technicianId, user.id, req);
+    return this.appointmentsService.assignTechnician(id, body.technicianId, user.id, req, body.scheduledAt);
   }
 
   @Put(':id/confirm')

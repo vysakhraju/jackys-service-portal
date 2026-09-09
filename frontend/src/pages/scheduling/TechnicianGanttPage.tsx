@@ -3,17 +3,29 @@
 // TECHNICIAN_FIELD/TECHNICIAN_WORKSHOP user, a horizontal timeline of their day's field
 // appointments and workshop assignments, double-booking conflicts flagged in red by the
 // backend (technician-schedule.util.ts), an "Add crew helper" action on any workshop block
-// that's still actively assigned, and (2026-09-09, second pass) an "Unassigned" panel plus
-// Assign/Reassign actions that make this the one place both an Appointment's field
-// technician and a Job Card's workshop technician get assigned - see AssignTechnicianModal
-// below for why this is a click-to-assign flow rather than drag-and-drop.
+// that's still actively assigned, an "Unassigned" panel of appointments/job cards still
+// needing a technician, and (2026-09-09, third pass) native HTML5 drag-and-drop for
+// assign/reassign - drag an unassigned card, or an existing timeline block, onto a
+// technician's row.
+//
+// This was click-to-assign for one round (see git history) on an earlier the-fool
+// pre-mortem finding that drag doesn't fire on touch devices. That finding no longer
+// applies: this board is desktop-web-only - Customer Care Executives and Team Leaders use
+// it from a desk, never a phone/tablet, and the mobile app is technician-only for their own
+// separate on-the-job workflow (receiving/updating their own assignments, not making them).
+// Click-to-assign also had a real bug: it never let the user set an appointment's time, so a
+// freshly assigned appointment kept whatever scheduledAt it already had (frequently reading
+// as "defaults to 7am" once clamped onto this board's 07:00-21:00 axis). Drag-and-drop fixes
+// that at the root - the drop position on the timeline IS the requested time, computed by
+// computeDropTime() below (the inverse of timeToPercent()), so there's no default to get
+// wrong.
 //
 // Deliberately reuses the technician list already embedded in the Gantt response for every
-// technician picker on this page (crew helper, assign, reassign) instead of calling GET
+// technician picker on this page (crew helper, technician filter) instead of calling GET
 // /users: that endpoint is restricted to SUPER_ADMIN/SERVICE_HEAD (UsersController's
 // USER_ADMIN_ROLES), but this board is also open to TECHNICAL_TEAM_LEADER, who would
 // otherwise hit a 403 trying to populate any of these pickers.
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ErrorNotice } from '../../components/DataTable';
@@ -33,6 +45,7 @@ import type {
 const DAY_START_HOUR = 7;
 const DAY_END_HOUR = 21; // 9pm - covers every field/workshop shift this app schedules into today
 const TOTAL_HOURS = DAY_END_HOUR - DAY_START_HOUR;
+const DRAG_MIME = 'application/x-jackys-schedule-item';
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -46,25 +59,39 @@ const BLOCK_COLORS: Record<ScheduleBlock['type'], string> = {
 
 const CREW_HELPER_ELIGIBLE_STATUSES = new Set(['WORKSHOP_ASSIGNED', 'IN_PROGRESS', 'SPARE_PENDING']);
 
-// Mirrors WorkshopService.reassign()'s own status guard - only show a Reassign button when
-// the backend would actually accept the call, rather than a button that always 400s.
+// Mirrors WorkshopService.reassign()'s own status guard - only let a block be dragged for
+// reassignment when the backend would actually accept the call, rather than a drag that
+// always ends in a 400 toast.
 const WORKSHOP_JOB_REASSIGN_STATUSES = new Set(['WORKSHOP_ASSIGNED', 'IN_PROGRESS', 'SPARE_PENDING', 'READY_FOR_QC']);
 
-// What's currently being assigned/reassigned via AssignTechnicianModal - one shape covers
-// both entity kinds (Appointment/Job Card) and both actions (initial assign / reassign),
-// since the modal itself only differs by which mutation it calls and which technician
-// pool + exclusion it shows.
-type AssignTarget =
-  | { kind: 'appointment-assign'; id: string; label: string }
-  | { kind: 'appointment-reassign'; id: string; label: string; currentTechnicianId: string }
-  | { kind: 'jobcard-assign'; id: string; label: string }
-  | { kind: 'jobcard-reassign'; id: string; label: string; currentTechnicianId: string };
+// What's carried in dataTransfer while dragging - an unassigned card, or an existing
+// timeline block being re-dragged. `currentTechnicianId: null` means "not assigned yet",
+// which is what tells handleDrop() whether to call the initial-assign endpoint (which also
+// transitions status) or the plain update/reassign endpoint (status already progressed).
+type DragPayload =
+  | { entityType: 'appointment'; id: string; label: string; currentTechnicianId: string | null }
+  | { entityType: 'jobcard'; id: string; label: string; currentTechnicianId: string | null };
+
+type DropAction =
+  | { kind: 'appointment-assign'; id: string; technicianId: string; scheduledAt: string; label: string }
+  | { kind: 'appointment-reassign'; id: string; technicianId: string; scheduledAt: string; label: string }
+  | { kind: 'jobcard-assign'; id: string; technicianId: string; label: string }
+  | { kind: 'jobcard-reassign'; id: string; technicianId: string; label: string };
+
+function startDrag(payload: DragPayload) {
+  return (e: DragEvent<HTMLElement>) => {
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+}
 
 export function TechnicianGanttPage() {
   const [date, setDate] = useState(todayIsoDate());
+  const [technicianFilter, setTechnicianFilter] = useState('');
   const [helperTarget, setHelperTarget] = useState<{ jobCardId: string; jobCardNumber: string } | null>(null);
-  const [assignTarget, setAssignTarget] = useState<AssignTarget | null>(null);
+  const [dragOverTechnicianId, setDragOverTechnicianId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const { push } = useToast();
 
   const boardQuery = useQuery({
     queryKey: ['technician-schedule', 'gantt', date],
@@ -73,8 +100,103 @@ export function TechnicianGanttPage() {
 
   const conflictCount = boardQuery.data?.rows.filter((r) => r.hasConflict).length ?? 0;
 
+  const visibleRows = useMemo(() => {
+    const rows = boardQuery.data?.rows ?? [];
+    return technicianFilter ? rows.filter((r) => r.technicianId === technicianFilter) : rows;
+  }, [boardQuery.data, technicianFilter]);
+
   function invalidateBoard() {
     queryClient.invalidateQueries({ queryKey: ['technician-schedule', 'gantt', date] });
+  }
+
+  const dropMutation = useMutation({
+    mutationFn: async (action: DropAction) => {
+      switch (action.kind) {
+        case 'appointment-assign':
+          // One atomic call - assignTechnician() now optionally accepts scheduledAt (backend
+          // change, 2026-09-09) so the technician assignment and the drop-computed time land
+          // together. This used to be two sequential calls (assign, then update); a the-fool
+          // pre-mortem on this exact drag-and-drop rework flagged that as the top-severity
+          // risk - a network blip or a capacity conflict surfacing only on the second call
+          // would leave the appointment assigned to a technician but still sitting on its old
+          // (often misleading) time, with no way to tell from the toast alone. A single call
+          // means it either fully succeeds or fully fails - see AssignTechnicianDto's own doc
+          // comment on the backend side.
+          return assignTechnician(action.id, action.technicianId, action.scheduledAt);
+        case 'appointment-reassign':
+          return updateAppointment(action.id, { technicianId: action.technicianId, scheduledAt: action.scheduledAt });
+        case 'jobcard-assign':
+          return assignWorkshopTechnician(action.id, { technicianId: action.technicianId });
+        case 'jobcard-reassign':
+          return reassignWorkshopTechnician(action.id, { technicianId: action.technicianId });
+      }
+    },
+    onSuccess: (_data, action) => {
+      const title =
+        action.kind === 'appointment-assign' || action.kind === 'jobcard-assign' ? 'Technician assigned' : 'Reassigned';
+      push({ title, description: action.label });
+      invalidateBoard();
+    },
+    onError: (error: any) => {
+      push({
+        title: 'Could not complete the drop',
+        description: error?.response?.data?.message ?? 'Something went wrong.',
+      });
+      // Refetch even on failure (same the-fool pre-mortem, race-condition finding): the board
+      // the user is looking at could already be stale by the time they dragged (someone else's
+      // action, or the technician's own mobile-app update), which is part of why the drop was
+      // rejected in the first place - re-pull the real state rather than leaving a now-known-
+      // stale board on screen for the next drag attempt.
+      invalidateBoard();
+    },
+  });
+
+  function handleDrop(e: DragEvent<HTMLDivElement>, targetRow: TechnicianScheduleRow) {
+    e.preventDefault();
+    setDragOverTechnicianId(null);
+    const raw = e.dataTransfer.getData(DRAG_MIME);
+    if (!raw) return;
+    let payload: DragPayload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (payload.entityType === 'appointment') {
+      if (targetRow.role !== 'TECHNICIAN_FIELD') {
+        push({
+          title: 'Wrong technician type',
+          description: `${payload.label} is a field appointment - drop it on a field technician's row.`,
+        });
+        return;
+      }
+      const rect = e.currentTarget.getBoundingClientRect();
+      const scheduledAt = computeDropTime(date, e.clientX, rect);
+      dropMutation.mutate(
+        payload.currentTechnicianId
+          ? { kind: 'appointment-reassign', id: payload.id, technicianId: targetRow.technicianId, scheduledAt, label: payload.label }
+          : { kind: 'appointment-assign', id: payload.id, technicianId: targetRow.technicianId, scheduledAt, label: payload.label },
+      );
+      return;
+    }
+
+    if (targetRow.role !== 'TECHNICIAN_WORKSHOP') {
+      push({
+        title: 'Wrong technician type',
+        description: `${payload.label} is a workshop job card - drop it on a workshop technician's row.`,
+      });
+      return;
+    }
+    if (payload.currentTechnicianId === targetRow.technicianId) {
+      push({ title: 'Already assigned', description: `${payload.label} is already on ${targetRow.technicianName}.` });
+      return;
+    }
+    dropMutation.mutate(
+      payload.currentTechnicianId
+        ? { kind: 'jobcard-reassign', id: payload.id, technicianId: targetRow.technicianId, label: payload.label }
+        : { kind: 'jobcard-assign', id: payload.id, technicianId: targetRow.technicianId, label: payload.label },
+    );
   }
 
   return (
@@ -82,14 +204,25 @@ export function TechnicianGanttPage() {
       <div>
         <h1 className="text-lg font-semibold text-slate-900">Technician Assignment Board</h1>
         <p className="mt-1 max-w-2xl text-sm text-slate-500">
-          One day, every technician - field appointments and workshop assignments on one timeline, plus
-          appointments and job cards still waiting on a technician below. Double bookings are flagged in red.
+          One day, every technician - field appointments and workshop assignments on one timeline, plus appointments
+          and job cards still waiting on a technician below. Drag a card onto a technician's row to assign it; drag
+          an existing block to a different row to reassign it. Double bookings are flagged in red.
         </p>
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
         <Field label="Date">
           <input type="date" className={inputClass} value={date} onChange={(e) => setDate(e.target.value)} />
+        </Field>
+        <Field label="Technician">
+          <select className={inputClass} value={technicianFilter} onChange={(e) => setTechnicianFilter(e.target.value)}>
+            <option value="">All technicians</option>
+            {(boardQuery.data?.rows ?? []).map((r) => (
+              <option key={r.technicianId} value={r.technicianId}>
+                {r.technicianName}
+              </option>
+            ))}
+          </select>
         </Field>
         {conflictCount > 0 && (
           <p className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700">
@@ -103,14 +236,8 @@ export function TechnicianGanttPage() {
 
       {boardQuery.data && (
         <div className="grid gap-4 md:grid-cols-2">
-          <UnassignedAppointmentsPanel
-            items={boardQuery.data.unassignedAppointments}
-            onAssign={(a) => setAssignTarget({ kind: 'appointment-assign', id: a.id, label: a.appointmentNumber })}
-          />
-          <UnassignedJobCardsPanel
-            items={boardQuery.data.unassignedJobCards}
-            onAssign={(j) => setAssignTarget({ kind: 'jobcard-assign', id: j.id, label: j.jobCardNumber })}
-          />
+          <UnassignedAppointmentsPanel items={boardQuery.data.unassignedAppointments} />
+          <UnassignedJobCardsPanel items={boardQuery.data.unassignedJobCards} />
         </div>
       )}
 
@@ -118,11 +245,21 @@ export function TechnicianGanttPage() {
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
           <TimeAxis />
           <div className="divide-y divide-slate-100">
-            {boardQuery.data.rows.length === 0 && (
-              <p className="p-4 text-sm text-slate-400">No active field or workshop technicians found.</p>
+            {visibleRows.length === 0 && (
+              <p className="p-4 text-sm text-slate-400">
+                {boardQuery.data.rows.length === 0 ? 'No active field or workshop technicians found.' : 'No technician matches this filter.'}
+              </p>
             )}
-            {boardQuery.data.rows.map((row) => (
-              <TechnicianRow key={row.technicianId} row={row} onAddHelper={(t) => setHelperTarget(t)} onReassign={(t) => setAssignTarget(t)} />
+            {visibleRows.map((row) => (
+              <TechnicianRow
+                key={row.technicianId}
+                row={row}
+                isDragOver={dragOverTechnicianId === row.technicianId}
+                onAddHelper={(t) => setHelperTarget(t)}
+                onDragEnter={() => setDragOverTechnicianId(row.technicianId)}
+                onDragLeave={() => setDragOverTechnicianId((current) => (current === row.technicianId ? null : current))}
+                onDrop={(e) => handleDrop(e, row)}
+              />
             ))}
           </div>
         </div>
@@ -151,34 +288,11 @@ export function TechnicianGanttPage() {
           }}
         />
       )}
-
-      {assignTarget && (
-        <AssignTechnicianModal
-          target={assignTarget}
-          fieldCandidates={
-            boardQuery.data?.rows.filter((r) => r.role === 'TECHNICIAN_FIELD').map((r) => ({ id: r.technicianId, name: r.technicianName })) ?? []
-          }
-          workshopCandidates={
-            boardQuery.data?.rows.filter((r) => r.role === 'TECHNICIAN_WORKSHOP').map((r) => ({ id: r.technicianId, name: r.technicianName })) ?? []
-          }
-          onClose={() => setAssignTarget(null)}
-          onAssigned={() => {
-            setAssignTarget(null);
-            invalidateBoard();
-          }}
-        />
-      )}
     </div>
   );
 }
 
-function UnassignedAppointmentsPanel({
-  items,
-  onAssign,
-}: {
-  items: UnassignedAppointment[];
-  onAssign: (a: UnassignedAppointment) => void;
-}) {
+function UnassignedAppointmentsPanel({ items }: { items: UnassignedAppointment[] }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <h2 className="text-sm font-semibold text-slate-900">Appointments needing a technician</h2>
@@ -187,19 +301,17 @@ function UnassignedAppointmentsPanel({
       ) : (
         <ul className="mt-2 space-y-2">
           {items.map((a) => (
-            <li key={a.id} className="flex items-center justify-between gap-2 rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <p className="truncate font-medium text-slate-900">
-                  {a.appointmentNumber} <span className="font-normal text-slate-500">· {a.customerName}</span>
-                </p>
-                <p className="text-xs text-slate-400">{new Date(a.scheduledAt).toLocaleString()}</p>
-              </div>
-              <button
-                onClick={() => onAssign(a)}
-                className="shrink-0 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-white"
-              >
-                Assign →
-              </button>
+            <li
+              key={a.id}
+              draggable
+              onDragStart={startDrag({ entityType: 'appointment', id: a.id, label: a.appointmentNumber, currentTechnicianId: null })}
+              className="cursor-grab rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-sm active:cursor-grabbing"
+              title="Drag onto a field technician's row to assign"
+            >
+              <p className="truncate font-medium text-slate-900">
+                {a.appointmentNumber} <span className="font-normal text-slate-500">· {a.customerName}</span>
+              </p>
+              <p className="text-xs text-slate-400">{new Date(a.scheduledAt).toLocaleString()}</p>
             </li>
           ))}
         </ul>
@@ -208,7 +320,7 @@ function UnassignedAppointmentsPanel({
   );
 }
 
-function UnassignedJobCardsPanel({ items, onAssign }: { items: UnassignedJobCard[]; onAssign: (j: UnassignedJobCard) => void }) {
+function UnassignedJobCardsPanel({ items }: { items: UnassignedJobCard[] }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <h2 className="text-sm font-semibold text-slate-900">Job cards needing a workshop technician</h2>
@@ -217,19 +329,17 @@ function UnassignedJobCardsPanel({ items, onAssign }: { items: UnassignedJobCard
       ) : (
         <ul className="mt-2 space-y-2">
           {items.map((j) => (
-            <li key={j.id} className="flex items-center justify-between gap-2 rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <p className="truncate font-medium text-slate-900">{j.jobCardNumber}</p>
-                <p className="text-xs text-slate-400">
-                  {j.faultCode}/{j.symptomCode} · {j.warrantyStatus.replaceAll('_', ' ')}
-                </p>
-              </div>
-              <button
-                onClick={() => onAssign(j)}
-                className="shrink-0 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-white"
-              >
-                Assign →
-              </button>
+            <li
+              key={j.id}
+              draggable
+              onDragStart={startDrag({ entityType: 'jobcard', id: j.id, label: j.jobCardNumber, currentTechnicianId: null })}
+              className="cursor-grab rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-sm active:cursor-grabbing"
+              title="Drag onto a workshop technician's row to assign"
+            >
+              <p className="truncate font-medium text-slate-900">{j.jobCardNumber}</p>
+              <p className="text-xs text-slate-400">
+                {j.faultCode}/{j.symptomCode} · {j.warrantyStatus.replaceAll('_', ' ')}
+              </p>
             </li>
           ))}
         </ul>
@@ -254,12 +364,18 @@ function TimeAxis() {
 
 function TechnicianRow({
   row,
+  isDragOver,
   onAddHelper,
-  onReassign,
+  onDragEnter,
+  onDragLeave,
+  onDrop,
 }: {
   row: TechnicianScheduleRow;
+  isDragOver: boolean;
   onAddHelper: (t: { jobCardId: string; jobCardNumber: string }) => void;
-  onReassign: (t: AssignTarget) => void;
+  onDragEnter: () => void;
+  onDragLeave: () => void;
+  onDrop: (e: DragEvent<HTMLDivElement>) => void;
 }) {
   return (
     <div className={`flex items-stretch ${row.hasConflict ? 'bg-red-50/50' : ''}`}>
@@ -268,10 +384,20 @@ function TechnicianRow({
         <p className="text-xs text-slate-400">{row.role === 'TECHNICIAN_FIELD' ? 'Field' : 'Workshop'}</p>
         {row.hasConflict && <p className="mt-1 text-xs font-medium text-red-600">Double-booked</p>}
       </div>
-      <div className="relative flex-1 py-2">
+      <div
+        data-testid={`drop-zone-${row.technicianId}`}
+        className={`relative flex-1 py-2 ${isDragOver ? 'bg-sky-50 outline-dashed outline-2 outline-sky-300' : ''}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+        }}
+        onDragEnter={onDragEnter}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
         {row.blocks.length === 0 && <p className="px-2 text-xs text-slate-300">No assignments today</p>}
         {row.blocks.map((block) => (
-          <BlockBar key={block.id} block={block} onAddHelper={onAddHelper} onReassign={onReassign} />
+          <BlockBar key={block.id} block={block} onAddHelper={onAddHelper} />
         ))}
       </div>
     </div>
@@ -285,61 +411,67 @@ function timeToPercent(iso: string): number {
   return ((clamped - DAY_START_HOUR) / TOTAL_HOURS) * 100;
 }
 
+// Inverse of timeToPercent() - where on the row (in pixels, relative to the drop target's
+// own bounding box) becomes a UTC time-of-day on the board's selected date, snapped to the
+// nearest 15 minutes and clamped to the 07:00-21:00 board window. Same UTC-hours convention
+// as timeToPercent() throughout, deliberately: the board renders every time in UTC (there is
+// no per-technician timezone concept in this app), so the drop position must invert with the
+// exact same convention it was rendered with or every dropped time would be off by whatever
+// the browser's local UTC offset happens to be.
+function computeDropTime(dateStr: string, clientX: number, rect: DOMRect): string {
+  const rawPercent = rect.width > 0 ? ((clientX - rect.left) / rect.width) * 100 : 0;
+  const clampedPercent = Math.min(Math.max(rawPercent, 0), 100);
+  const hoursFloat = DAY_START_HOUR + (clampedPercent / 100) * TOTAL_HOURS;
+  const totalMinutes = Math.round((hoursFloat * 60) / 15) * 15;
+  const clampedMinutes = Math.min(Math.max(totalMinutes, DAY_START_HOUR * 60), DAY_END_HOUR * 60);
+  const hh = String(Math.floor(clampedMinutes / 60)).padStart(2, '0');
+  const mm = String(clampedMinutes % 60).padStart(2, '0');
+  return `${dateStr}T${hh}:${mm}:00.000Z`;
+}
+
 function BlockBar({
   block,
   onAddHelper,
-  onReassign,
 }: {
   block: ScheduleBlock;
   onAddHelper: (t: { jobCardId: string; jobCardNumber: string }) => void;
-  onReassign: (t: AssignTarget) => void;
 }) {
   const left = timeToPercent(block.startAt);
   const right = timeToPercent(block.endAt);
   const width = Math.max(right - left, 2);
   const canAddHelper = block.type === 'workshop_job' && CREW_HELPER_ELIGIBLE_STATUSES.has(block.status);
-  // Reassignment doesn't apply to a crew_helper block (that's the "remove helper" flow,
-  // out of scope for this page today - see this page's own top doc comment) or to a
+  // Reassignment-by-drag doesn't apply to a crew_helper block (that's the "remove helper"
+  // flow, out of scope for this page - see this page's own top doc comment) or to a
   // workshop_job block outside WorkshopService.reassign()'s own status guard.
-  const canReassign =
-    block.type === 'appointment' || (block.type === 'workshop_job' && WORKSHOP_JOB_REASSIGN_STATUSES.has(block.status));
-
-  function handleReassign() {
-    if (block.type === 'appointment') {
-      onReassign({ kind: 'appointment-reassign', id: block.refId, label: block.refNumber, currentTechnicianId: block.technicianId });
-    } else if (block.type === 'workshop_job') {
-      onReassign({ kind: 'jobcard-reassign', id: block.refId, label: block.refNumber, currentTechnicianId: block.technicianId });
-    }
-  }
+  const canDrag = block.type === 'appointment' || (block.type === 'workshop_job' && WORKSHOP_JOB_REASSIGN_STATUSES.has(block.status));
+  const dragPayload: DragPayload | null = canDrag
+    ? block.type === 'appointment'
+      ? { entityType: 'appointment', id: block.refId, label: block.refNumber, currentTechnicianId: block.technicianId }
+      : { entityType: 'jobcard', id: block.refId, label: block.refNumber, currentTechnicianId: block.technicianId }
+    : null;
 
   return (
     <div
-      className={`group relative mb-1 rounded border px-2 py-1 text-xs ${
+      draggable={canDrag}
+      onDragStart={dragPayload ? startDrag(dragPayload) : undefined}
+      className={`group relative mb-1 rounded border px-2 py-1 text-xs ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${
         block.hasConflict ? 'border-red-400 bg-red-100 text-red-900 ring-1 ring-red-400' : BLOCK_COLORS[block.type]
       }`}
       style={{ marginLeft: `${left}%`, width: `${width}%` }}
-      title={`${block.refNumber} · ${block.detail} · ${block.status}`}
+      title={`${block.refNumber} · ${block.detail} · ${block.status}${canDrag ? ' · drag to reassign' : ''}`}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="truncate font-medium">{block.refNumber}</span>
-        <span className="flex shrink-0 gap-1 opacity-0 group-hover:opacity-100">
-          {canReassign && (
-            <button
-              onClick={handleReassign}
-              className="rounded border border-current px-1 text-[10px] font-medium"
-            >
-              Reassign
-            </button>
-          )}
-          {canAddHelper && (
+        {canAddHelper && (
+          <span className="flex shrink-0 gap-1 opacity-0 group-hover:opacity-100">
             <button
               onClick={() => onAddHelper({ jobCardId: block.refId, jobCardNumber: block.refNumber })}
               className="rounded border border-current px-1 text-[10px] font-medium"
             >
               + Helper
             </button>
-          )}
-        </span>
+          </span>
+        )}
       </div>
       <p className="truncate text-[10px] opacity-80">
         {block.detail}
@@ -414,108 +546,6 @@ function AddCrewHelperModal({
         <Link to={`/job-cards/journey?jobCardId=${jobCardId}`} className="block text-xs text-slate-400 underline underline-offset-2">
           View full job card journey →
         </Link>
-      </div>
-    </Modal>
-  );
-}
-
-// Click-to-assign (2026-09-09, the-fool pre-mortem finding): the Redtra reference screenshot
-// this feature was modelled on is itself tap-a-chip, not drag-and-drop - native HTML5 drag
-// doesn't fire on touch devices at all (a real concern for a Team Leader on a tablet in the
-// workshop) and needs a keyboard/click fallback regardless, so this is built as that fallback
-// directly rather than as a thin wrapper around a drag interaction. One modal handles all four
-// assign/reassign combinations (see AssignTarget's own doc comment) since they only differ in
-// which technician pool to offer, whether to exclude the current assignee, and which mutation
-// to call - the backend's own guards (availability, reservation custody, late-stage edit-lock)
-// are the real source of truth either way, so a failed assign/reassign surfaces as a toast
-// here rather than being pre-validated client-side.
-function AssignTechnicianModal({
-  target,
-  fieldCandidates,
-  workshopCandidates,
-  onClose,
-  onAssigned,
-}: {
-  target: AssignTarget;
-  fieldCandidates: { id: string; name: string }[];
-  workshopCandidates: { id: string; name: string }[];
-  onClose: () => void;
-  onAssigned: () => void;
-}) {
-  const [technicianId, setTechnicianId] = useState('');
-  const { push } = useToast();
-
-  const isAppointment = target.kind === 'appointment-assign' || target.kind === 'appointment-reassign';
-  const isReassign = target.kind === 'appointment-reassign' || target.kind === 'jobcard-reassign';
-  const pool = isAppointment ? fieldCandidates : workshopCandidates;
-  const excludeId = isReassign ? (target as { currentTechnicianId: string }).currentTechnicianId : undefined;
-  const available = useMemo(() => pool.filter((c) => c.id !== excludeId), [pool, excludeId]);
-
-  const mutation = useMutation({
-    mutationFn: () => {
-      switch (target.kind) {
-        case 'appointment-assign':
-          return assignTechnician(target.id, technicianId);
-        case 'appointment-reassign':
-          return updateAppointment(target.id, { technicianId });
-        case 'jobcard-assign':
-          return assignWorkshopTechnician(target.id, { technicianId });
-        case 'jobcard-reassign':
-          return reassignWorkshopTechnician(target.id, { technicianId });
-      }
-    },
-    onSuccess: () => {
-      push({ title: isReassign ? 'Technician reassigned' : 'Technician assigned', description: target.label });
-      onAssigned();
-    },
-    onError: (error: any) => {
-      push({
-        title: isReassign ? 'Could not reassign technician' : 'Could not assign technician',
-        description: error?.response?.data?.message ?? 'Something went wrong.',
-      });
-    },
-  });
-
-  const title = `${isReassign ? 'Reassign' : 'Assign'} technician — ${target.label}`;
-
-  return (
-    <Modal open onClose={onClose} title={title}>
-      <div className="space-y-4">
-        <Field
-          label="Technician"
-          hint={
-            isAppointment
-              ? 'Active field technicians on this board.'
-              : 'Active workshop technicians on this board.'
-          }
-        >
-          <select className={inputClass} value={technicianId} onChange={(e) => setTechnicianId(e.target.value)}>
-            <option value="">Select a technician…</option>
-            {available.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {available.length === 0 && (
-          <p className="text-xs text-slate-400">No other {isAppointment ? 'field' : 'workshop'} technicians are available on this board today.</p>
-        )}
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
-            Cancel
-          </button>
-          <button
-            disabled={!technicianId || mutation.isPending}
-            onClick={() => mutation.mutate()}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            {/* Deliberately "Confirm", not "Assign"/"Reassign" - those labels are already
-                used by the trigger button on the block/unassigned-card that opened this
-                modal, and both can be visible in the DOM at once. */}
-            {mutation.isPending ? 'Saving…' : 'Confirm'}
-          </button>
-        </div>
       </div>
     </Modal>
   );
