@@ -1,4 +1,5 @@
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { In } from 'typeorm';
 import { AppointmentsService } from './appointments.service';
 import { AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType } from './entities/appointment.entity';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -811,9 +812,12 @@ describe('AppointmentsService', () => {
   });
 
   describe('getSchedulingGrid', () => {
-    const centreWithTechs = (schedule: any) => ({
+    const TECH_1 = '11111111-1111-4111-8111-111111111111';
+    const TECH_2 = '22222222-2222-4222-8222-222222222222';
+
+    const centreWithTechs = (schedule: any, assignedTechnicianIds: string[] = [TECH_1, TECH_2]) => ({
       id: 'sc-1',
-      assignedTechnicianIds: ['tech-1', 'tech-2'],
+      assignedTechnicianIds,
       schedule,
     });
 
@@ -838,14 +842,36 @@ describe('AppointmentsService', () => {
       expect(appointmentRepository.find).not.toHaveBeenCalled();
     });
 
+    // The exact bug that produced a bare "Internal server error" on the New Appointment
+    // scheduling grid: ServiceCentre.assignedTechnicianIds has no per-item format validation
+    // at the DTO level (only @IsArray()), so a hand-edited or legacy row can contain a
+    // non-UUID entry. Handing that straight to TypeORM's In() on a uuid column makes Postgres
+    // throw "invalid input syntax for type uuid" - an unhandled 500. Malformed entries must be
+    // filtered out instead, so one bad id degrades gracefully rather than taking down the
+    // whole grid for every technician at that service centre.
+    it('drops malformed (non-UUID) technician ids instead of letting them reach the database', async () => {
+      serviceCentreRepository.findOne.mockResolvedValue(
+        centreWithTechs({ monday: { isOpen: true, startTime: '08:00', endTime: '09:00' } }, [TECH_1, 'not-a-uuid', '  ', '']),
+      );
+      userRepository.find.mockResolvedValue([{ id: TECH_1, fullName: 'Ravi Kumar' }]);
+      appointmentRepository.find.mockResolvedValue([]);
+
+      const result = await service.getSchedulingGrid('sc-1', '2026-09-14');
+
+      expect(userRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: In([TECH_1]) }) }),
+      );
+      expect(result.technicians.map((t) => t.id)).toEqual([TECH_1]);
+    });
+
     it('looks up field technicians assigned to the centre and only their appointments for that date', async () => {
       // 2026-09-14 is a Monday.
       serviceCentreRepository.findOne.mockResolvedValue(
         centreWithTechs({ monday: { isOpen: true, startTime: '08:00', endTime: '09:00' } }),
       );
       userRepository.find.mockResolvedValue([
-        { id: 'tech-1', fullName: 'Ravi Kumar' },
-        { id: 'tech-2', fullName: 'Fahad Noor' },
+        { id: TECH_1, fullName: 'Ravi Kumar' },
+        { id: TECH_2, fullName: 'Fahad Noor' },
       ]);
       appointmentRepository.find.mockResolvedValue([]);
 
@@ -870,9 +896,9 @@ describe('AppointmentsService', () => {
         centreWithTechs({
           sunday: { isOpen: false, startTime: '00:00', endTime: '00:00' },
           monday: { isOpen: true, startTime: '08:00', endTime: '08:30' },
-        }),
+        }, [TECH_1]),
       );
-      userRepository.find.mockResolvedValue([{ id: 'tech-1', fullName: 'Ravi Kumar' }]);
+      userRepository.find.mockResolvedValue([{ id: TECH_1, fullName: 'Ravi Kumar' }]);
       appointmentRepository.find.mockResolvedValue([]);
 
       const result = await service.getSchedulingGrid('sc-1', '2026-09-14');
@@ -880,7 +906,7 @@ describe('AppointmentsService', () => {
       expect(result.isOpen).toBe(true);
       expect(result.technicians).toEqual([
         {
-          id: 'tech-1',
+          id: TECH_1,
           name: 'Ravi Kumar',
           appointmentCount: 0,
           atDailyCap: false,
@@ -897,17 +923,17 @@ describe('AppointmentsService', () => {
         centreWithTechs({ monday: { isOpen: true, startTime: '08:00', endTime: '09:00' } }),
       );
       userRepository.find.mockResolvedValue([
-        { id: 'tech-1', fullName: 'Ravi Kumar' },
-        { id: 'tech-2', fullName: 'Fahad Noor' },
+        { id: TECH_1, fullName: 'Ravi Kumar' },
+        { id: TECH_2, fullName: 'Fahad Noor' },
       ]);
       appointmentRepository.find.mockResolvedValue([
-        { technicianId: 'tech-1', scheduledAt: new Date('2026-09-14T08:00:00.000Z'), estimatedDurationMinutes: 60 },
+        { technicianId: TECH_1, scheduledAt: new Date('2026-09-14T08:00:00.000Z'), estimatedDurationMinutes: 60 },
       ]);
 
       const result = await service.getSchedulingGrid('sc-1', '2026-09-14');
 
-      const tech1 = result.technicians.find((t) => t.id === 'tech-1')!;
-      const tech2 = result.technicians.find((t) => t.id === 'tech-2')!;
+      const tech1 = result.technicians.find((t) => t.id === TECH_1)!;
+      const tech2 = result.technicians.find((t) => t.id === TECH_2)!;
       expect(tech1.slots.every((s) => !s.available)).toBe(true);
       expect(tech2.slots.every((s) => s.available)).toBe(true);
     });

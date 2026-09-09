@@ -1,5 +1,5 @@
 import { ApiProperty, PartialType } from '@nestjs/swagger';
-import { IsString, IsEnum, IsOptional, IsBoolean, IsNumber, IsArray, IsObject, MaxLength } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsBoolean, IsNumber, IsArray, IsObject, IsUUID, MaxLength } from 'class-validator';
 import { Country } from '../entities/service-centre.entity';
 
 class DayScheduleDto {
@@ -53,6 +53,11 @@ export class CreateServiceCentreDto {
   @ApiProperty({ required: false, type: [String] })
   @IsOptional()
   @IsArray()
+  // Catches the exact bug class that crashed the New Appointment scheduling grid with a bare
+  // "Internal server error": a non-UUID value saved here reaches TypeORM's In() on a uuid
+  // column and Postgres throws "invalid input syntax for type uuid". Reject it at the door
+  // instead of letting it get stored and blow up a read path later.
+  @IsUUID('4', { each: true })
   assignedTechnicianIds?: string[];
 
   @ApiProperty({ required: false, default: true })

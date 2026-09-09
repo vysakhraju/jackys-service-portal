@@ -46,6 +46,16 @@ const REASSIGNABLE_APPOINTMENT_STATUSES: readonly AppointmentStatus[] = [
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+// ServiceCentre.assignedTechnicianIds is a jsonb string[] with no per-item format validation
+// at the DTO level (only @IsArray()) - so a service centre saved before that gap is closed, or
+// edited by hand, can already contain a non-UUID entry (a stray space, a pasted name, a typo).
+// Handing a malformed value straight to TypeORM's In() on a uuid column makes Postgres throw
+// "invalid input syntax for type uuid", which surfaces to the New Appointment scheduling grid
+// as a bare 500 with no useful message. Filtering to well-formed UUIDs here means one bad
+// entry just gets silently skipped instead of taking down the whole grid for every technician
+// at that service centre.
+const UUID_V4_ISH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Sunday-indexed to match Date.getUTCDay() directly (0 = Sunday) - used by getSchedulingGrid()
 // below to look up ServiceCentre.schedule's per-weekday entry for a bare 'YYYY-MM-DD' date
 // without going through toLocaleDateString() (locale/timezone-dependent, and this call site
@@ -601,7 +611,7 @@ export class AppointmentsService {
       throw new NotFoundException(`Service centre ${serviceCentreId} not found.`);
     }
 
-    const technicianIds = serviceCentre.assignedTechnicianIds ?? [];
+    const technicianIds = (serviceCentre.assignedTechnicianIds ?? []).filter((id) => UUID_V4_ISH.test(id));
     const technicians = technicianIds.length
       ? await this.userRepository.find({
           where: { id: In(technicianIds), role: { name: RoleName.TECHNICIAN_FIELD }, status: UserStatus.ACTIVE },
