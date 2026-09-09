@@ -1828,6 +1828,12 @@ which).
 
 ## 20. Frontend — Appointment Scheduling + Technician Field View (Frontend Phase 3)
 
+> **b below is superseded — see Section 35a instead.** New Appointment now uses a
+> per-technician time-chip grid (technician + time + duration picked together, hours
+> pulled from the real Service Centre schedule), not a create-then-paste-id-to-assign
+> flow. The rest of this section (confirm/on-site/complete lifecycle, filters, Field
+> View) is still accurate.
+
 Adds an **Appointments** section to the sidebar nav, with two tabs: **Schedule** (the
 admin/CCE console) and **My Field Visits** (the technician's own day). Both call the real
 backend directly.
@@ -2858,6 +2864,69 @@ not a mobile-app bug, an appointment-setup trap that affects Swagger testing too
 Full step-by-step walkthrough with more detail and Windows-specific troubleshooting
 (Wi-Fi/firewall issues connecting a phone, stuck ports, etc.): `mobile/README.md`.
 
+---
+
+## 35. Frontend — Today's updates (2026-09-09): New Appointment grid, Assignment Board fixes, technician-to-service-centre assignment
+
+Four changes landed today, all on top of the Appointments/Master Data screens from
+Sections 19-20. **This section supersedes Section 20b's old "paste a technician user id"
+instructions for creating an appointment** — that flow no longer exists; see 35a below for
+the real one now.
+
+**a. New Appointment — the redesigned chip grid**: sign in as `admin@jackys.com` /
+`Admin123!` (Section 1a), open **Appointments**, click **New Appointment**. Pick a
+**Service Centre** first — the grid below it fills in with that centre's real open hours
+(from its Master Data schedule, Section 3a), not a fixed 9-to-5. Each active field
+technician assigned to that centre gets their own row of 15-minute chips across the day.
+Tap a chip to start, then tap further chips to extend the duration — the whole thing
+(technician + start time + duration) is picked in one motion, no separate technician
+dropdown or manual id-pasting anymore. Chips already covered by another appointment are
+disabled. Fill in the customer details and save — it should appear in the table with
+status `SCHEDULED` and the technician already assigned (no separate "Assign Technician"
+step needed for a fresh appointment created this way).
+  - **If the grid comes up empty** ("No field technicians are assigned to this service
+    centre yet"): that centre has no field technicians assigned — go do 35c first, then
+    come back.
+  - **Two bugs from earlier today are fixed and worth re-confirming**: creating an
+    appointment no longer throws a raw "Internal server error" (it was a bad technician-id
+    entry reaching Postgres, filtered out now), and clicking anywhere outside the New
+    Appointment form — including an accidental click while a browser autofill or date-picker
+    overlay is open — no longer closes the modal and discards what you typed. Only the
+    **✕** or **Cancel** button closes it now. Try both deliberately: start filling the form,
+    click well outside the modal box, and confirm your entries are still there.
+
+**b. Technician Assignment Board fixes**: open the **Technician Assignment Board** (the
+Gantt-style drag-and-drop view). Three things were fixed today, worth spot-checking:
+  - Dragging an appointment or job card bar to a new slot now drops it at the time you
+    actually released it on (a previous drop-accuracy bug could land it a slot or two off).
+  - While dragging, a live preview of the drop time now follows your cursor, so you can see
+    where it'll land before you let go.
+  - A workshop job card that's been reassigned can no longer be dragged again after the
+    technician's visit has already started — that gap is now closed (found via a
+    `/the-fool` pre-mortem before it could cause a real double-booking).
+
+**c. Assign a field technician to a Service Centre**: open **Master Data → Service
+Centres**, create or edit a centre, and look for the new **Field technicians** checklist —
+every active `TECHNICIAN_FIELD` user shows up here with a checkbox. Check the ones this
+centre should offer, save, and confirm the list table's new **Field techs** column shows
+the count (or an amber "None assigned" if you leave it empty). This is what feeds 35a's
+grid — a centre with nobody checked here is exactly the empty-grid case above.
+
+**d. Test accounts, after today's cleanup**: `admin@jackys.com` / `Admin123!` is
+completely unaffected — use it as always for anything above. For any other role, don't
+reuse an old test login you remember — most were deactivated today (see
+`claude/STATUS_TRACKER.md`'s "Today" section for the full count). Two ways to get a
+working non-admin login:
+  - **Field/workshop technician**: run `npm run seed:technician` again (Section 4) — it
+    always creates a brand-new account, so this is unaffected either way.
+  - **Any other role** (CCE, Team Leader, QC Officer, Accountant, etc.): sign in as admin,
+    open **Users**, and either create a fresh one (Section 32b) or find one of the
+    survivors renamed today (e.g. "CCE 1", "CCE 2") and click **Reset password** on their
+    row (Section 32's Users screen — sets a new password and signs out any existing
+    session immediately) rather than guessing at a password you were never told.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2902,10 +2971,11 @@ Estimates + the public customer approval link (Section 22), Workshop + Inventory
 Finance + Customer Portal (Section 26), AMC Management (Section 27), Dismantling
 (Section 28), Reports/Dashboards (Section 29), and the small additions since (GL
 Postings within Section 26, the Schedule tab's dashboard-stats widget, the POD
-signature pad, and the new User Management and Extra Role Access screens, Sections
-32-33) - all 12 frontend phases are built, plus this session's admin-capability
-additions, and all are test-covered (321/321 automated frontend tests as of Section 33,
-run isolated ahead of each device merge, 43 test files). Sections 18-29 are all live-verified against
+signature pad, the User Management and Extra Role Access screens (Sections 32-33), and
+today's New Appointment chip grid + Technician Assignment Board fixes + Service Centre
+field-technician assignment (Section 35)) - all 12 frontend phases are built, plus
+this session's admin-capability additions, and all are test-covered (512/512 automated
+frontend tests as of today, run isolated ahead of each device merge). Sections 18-29 are all live-verified against
 the real backend (Section 26's `verify-phase9.ps1` run: 143/143 checks passed, 0 failed;
 Section 27's `verify-phase10.ps1` run: 66/66 checks passed, 0 failed; Section 28's
 `verify-phase11.ps1` run: 51/51 checks passed, 0 failed; Section 29's `verify-phase12.ps1`
