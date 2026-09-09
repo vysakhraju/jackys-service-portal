@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { WorkshopService } from './workshop.service';
 import { JobCardStatus, JobCardSection } from '../job-cards/entities/job-card.entity';
 import { ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
@@ -24,6 +24,7 @@ describe('WorkshopService', () => {
     jobCardsService = {
       findById: jest.fn(),
       assignWorkshopTechnician: jest.fn(),
+      reassignWorkshopTechnician: jest.fn(),
       startWip: jest.fn(),
       setSparePending: jest.fn(),
       resumeFromSparePending: jest.fn(),
@@ -37,6 +38,7 @@ describe('WorkshopService', () => {
       reserve: jest.fn(),
       getStaleReservations: jest.fn().mockResolvedValue([]),
       hasPriorReservationForPart: jest.fn().mockResolvedValue(false),
+      hasActiveReservationInCustody: jest.fn().mockResolvedValue(false),
     };
     permissionsService = {
       requireActiveGrant: jest.fn().mockResolvedValue(undefined),
@@ -52,6 +54,53 @@ describe('WorkshopService', () => {
 
       expect(jobCardsService.assignWorkshopTechnician).toHaveBeenCalledWith('jc-1', 'tech-1');
       expect(result.status).toBe(JobCardStatus.WORKSHOP_ASSIGNED);
+    });
+  });
+
+  describe('reassign', () => {
+    it('delegates to JobCardsService.reassignWorkshopTechnician when there is no custody/lock issue', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }));
+      jobCardsService.reassignWorkshopTechnician.mockResolvedValue(jobCard({ assignedWorkshopTechnicianId: 'tech-2' }));
+
+      const result = await service.reassign('jc-1', 'tech-2', 'lead-1', 'TECHNICAL_TEAM_LEADER');
+
+      expect(inventoryService.hasActiveReservationInCustody).toHaveBeenCalledWith('jc-1', 'tech-1');
+      expect(jobCardsService.reassignWorkshopTechnician).toHaveBeenCalledWith('jc-1', 'tech-2', 'lead-1');
+      expect(result.assignedWorkshopTechnicianId).toBe('tech-2');
+    });
+
+    it('the-fool finding: blocks reassignment while the current technician holds an open spare-parts reservation in custody', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }));
+      inventoryService.hasActiveReservationInCustody.mockResolvedValue(true);
+
+      await expect(service.reassign('jc-1', 'tech-2', 'lead-1', 'TECHNICAL_TEAM_LEADER')).rejects.toThrow(ConflictException);
+      expect(jobCardsService.reassignWorkshopTechnician).not.toHaveBeenCalled();
+    });
+
+    it('the-fool finding: reuses the late-stage edit-lock rule - a normally-assigned role cannot reassign a READY_FOR_QC job', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC, assignedWorkshopTechnicianId: 'tech-1' }));
+
+      await expect(service.reassign('jc-1', 'tech-2', 'tech-1', 'TECHNICIAN_WORKSHOP')).rejects.toThrow(ForbiddenException);
+      expect(jobCardsService.reassignWorkshopTechnician).not.toHaveBeenCalled();
+      expect(inventoryService.hasActiveReservationInCustody).not.toHaveBeenCalled();
+    });
+
+    it('an edit-lock override role (e.g. Service Head) can still reassign a READY_FOR_QC job', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC, assignedWorkshopTechnicianId: 'tech-1' }));
+      jobCardsService.reassignWorkshopTechnician.mockResolvedValue(jobCard({ status: JobCardStatus.READY_FOR_QC, assignedWorkshopTechnicianId: 'tech-2' }));
+
+      const result = await service.reassign('jc-1', 'tech-2', 'head-1', 'SERVICE_HEAD');
+
+      expect(result.assignedWorkshopTechnicianId).toBe('tech-2');
+    });
+
+    it('does not check reservation custody when the job has no current assignee (defensive - should not normally be reachable via reassign)', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: null }));
+      jobCardsService.reassignWorkshopTechnician.mockResolvedValue(jobCard({ assignedWorkshopTechnicianId: 'tech-2' }));
+
+      await service.reassign('jc-1', 'tech-2', 'lead-1', 'TECHNICAL_TEAM_LEADER');
+
+      expect(inventoryService.hasActiveReservationInCustody).not.toHaveBeenCalled();
     });
   });
 

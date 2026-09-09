@@ -13,6 +13,11 @@ const BASE = '/workshop';
 export const assignWorkshopTechnician = (jobCardId: string, data: AssignWorkshopInput) =>
   api.post<JobCard>(`${BASE}/${jobCardId}/assign`, data).then((r) => r.data);
 
+// Technician Assignment Board's reassign action (2026-09-09) - only valid once a job
+// already has a workshop technician; use assignWorkshopTechnician above for the first one.
+export const reassignWorkshopTechnician = (jobCardId: string, data: AssignWorkshopInput) =>
+  api.post<JobCard>(`${BASE}/${jobCardId}/reassign`, data).then((r) => r.data);
+
 export const startWip = (jobCardId: string) => api.post<JobCard>(`${BASE}/${jobCardId}/start-wip`).then((r) => r.data);
 
 export const requestSpare = (jobCardId: string, data: RequestSpareInput) =>

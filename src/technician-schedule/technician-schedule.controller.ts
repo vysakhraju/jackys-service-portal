@@ -19,7 +19,7 @@ export class TechnicianScheduleController {
 
   @Get('gantt')
   @Roles(...GANTT_ROLES)
-  @ApiOperation({ summary: 'Per-technician Gantt board for one day - field appointments + workshop assignments + crew helpers, with double-booking conflicts flagged' })
+  @ApiOperation({ summary: 'Per-technician Gantt board for one day - field appointments + workshop assignments + crew helpers, with double-booking conflicts flagged, plus the unassigned-appointment/unassigned-job-card pools for the click-to-assign panel' })
   @ApiQuery({ name: 'date', required: true, example: '2026-09-09', description: 'YYYY-MM-DD' })
   async getGanttBoard(@Query('date') date: string) {
     return this.scheduleService.getGanttBoard(date);

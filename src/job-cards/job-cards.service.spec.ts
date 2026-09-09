@@ -529,6 +529,92 @@ describe('JobCardsService', () => {
     });
   });
 
+  describe('reassignWorkshopTechnician', () => {
+    it('reassigns a WORKSHOP_ASSIGNED job to a different technician, preserving status and workshopAssignedAt', async () => {
+      const originalAssignedAt = new Date('2026-09-09T08:00:00Z');
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({
+          section: JobCardSection.WORKSHOP,
+          status: JobCardStatus.WORKSHOP_ASSIGNED,
+          assignedWorkshopTechnicianId: 'tech-1',
+          workshopAssignedAt: originalAssignedAt,
+        }),
+      );
+
+      const result = await service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1');
+
+      expect(result.assignedWorkshopTechnicianId).toBe('tech-2');
+      expect(result.status).toBe(JobCardStatus.WORKSHOP_ASSIGNED);
+      expect(result.workshopAssignedAt).toBe(originalAssignedAt);
+      expect(crewHelperRepository.save).not.toHaveBeenCalled();
+    });
+
+    it.each([JobCardStatus.IN_PROGRESS, JobCardStatus.SPARE_PENDING, JobCardStatus.READY_FOR_QC])(
+      'allows reassignment from status %s',
+      async (status) => {
+        jobCardRepository.findOne.mockResolvedValue(
+          jobCard({ section: JobCardSection.WORKSHOP, status, assignedWorkshopTechnicianId: 'tech-1' }),
+        );
+
+        const result = await service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1');
+
+        expect(result.assignedWorkshopTechnicianId).toBe('tech-2');
+      },
+    );
+
+    it.each([JobCardStatus.QC_PASSED, JobCardStatus.DELIVERED, JobCardStatus.CANCELLED, JobCardStatus.SECTION_ASSIGNED])(
+      'rejects reassignment from status %s',
+      async (status) => {
+        jobCardRepository.findOne.mockResolvedValue(
+          jobCard({ section: JobCardSection.WORKSHOP, status, assignedWorkshopTechnicianId: 'tech-1' }),
+        );
+
+        await expect(service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(BadRequestException);
+      },
+    );
+
+    it('rejects when the job has never had a workshop technician assigned yet', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.SECTION_ASSIGNED, assignedWorkshopTechnicianId: null }),
+      );
+
+      await expect(service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects reassigning to the technician already assigned', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }),
+      );
+
+      await expect(service.reassignWorkshopTechnician('jc-1', 'tech-1', 'lead-1')).rejects.toThrow(BadRequestException);
+      expect(jobCardRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a job routed to ON_SITE_REPAIR (crew/workshop reassignment does not apply)', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.ON_SITE_REPAIR, status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }),
+      );
+
+      await expect(service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it("the-fool finding: soft-removes the incoming technician's active crew-helper row so they aren't double-counted on the board", async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }),
+      );
+      crewHelperRepository.findOne.mockResolvedValue({ id: 'helper-1', jobCardId: 'jc-1', technicianId: 'tech-2', removedAt: null });
+
+      await service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1');
+
+      expect(crewHelperRepository.findOne).toHaveBeenCalledWith({
+        where: { jobCardId: 'jc-1', technicianId: 'tech-2', removedAt: IsNull() },
+      });
+      expect(crewHelperRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'helper-1', removedByUserId: 'lead-1', removedAt: expect.any(Date) }),
+      );
+    });
+  });
+
   describe('startWip / setSparePending / resumeFromSparePending / completeWorkshop', () => {
     it('startWip moves WORKSHOP_ASSIGNED -> IN_PROGRESS', async () => {
       jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.WORKSHOP_ASSIGNED }));
@@ -1072,6 +1158,21 @@ describe('JobCardsService', () => {
         '(helper.removedAt IS NULL OR helper.removedAt >= :dayStart)',
         { dayStart },
       );
+    });
+  });
+
+  describe('findUnassignedWorkshopJobs', () => {
+    it('queries SECTION_ASSIGNED WORKSHOP Job Cards with no technician yet, oldest first', async () => {
+      await service.findUnassignedWorkshopJobs();
+
+      expect(jobCardRepository.find).toHaveBeenCalledWith({
+        where: {
+          status: JobCardStatus.SECTION_ASSIGNED,
+          section: JobCardSection.WORKSHOP,
+          assignedWorkshopTechnicianId: IsNull(),
+        },
+        order: { createdAt: 'ASC' },
+      });
     });
   });
 });

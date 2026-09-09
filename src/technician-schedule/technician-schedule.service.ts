@@ -22,6 +22,26 @@ const TECHNICIAN_ROLES = ['TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP'];
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+// The board's click-to-assign panel (2026-09-09) - just enough per row for a card + the
+// "Assign" action's own request, not the full Appointment/JobCard shape.
+export interface UnassignedAppointment {
+  id: string;
+  appointmentNumber: string;
+  customerName: string;
+  type: string;
+  scheduledAt: Date;
+  estimatedDurationMinutes: number | null;
+}
+
+export interface UnassignedJobCard {
+  id: string;
+  jobCardNumber: string;
+  faultCode: string;
+  symptomCode: string;
+  warrantyStatus: string;
+  createdAt: Date;
+}
+
 /**
  * Backs the Gantt-style technician assignment board (2026-09-09) - a per-technician,
  * per-day timeline spanning two independent assignment tracks that don't otherwise share
@@ -41,7 +61,12 @@ export class TechnicianScheduleService {
     private jobCardsService: JobCardsService,
   ) {}
 
-  async getGanttBoard(date: string): Promise<{ date: string; rows: TechnicianScheduleRow[] }> {
+  async getGanttBoard(date: string): Promise<{
+    date: string;
+    rows: TechnicianScheduleRow[];
+    unassignedAppointments: UnassignedAppointment[];
+    unassignedJobCards: UnassignedJobCard[];
+  }> {
     if (!DATE_ONLY.test(date)) {
       throw new BadRequestException('date must be in YYYY-MM-DD format.');
     }
@@ -49,7 +74,7 @@ export class TechnicianScheduleService {
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
     const now = new Date();
 
-    const [technicians, appointmentsPage, workshopJobs, crewHelpers] = await Promise.all([
+    const [technicians, appointmentsPage, workshopJobs, crewHelpers, unassignedAppointmentsPage, unassignedJobCardEntities] = await Promise.all([
       this.userRepository.find({
         where: { role: { name: In(TECHNICIAN_ROLES) }, status: UserStatus.ACTIVE },
         relations: { role: true },
@@ -61,6 +86,12 @@ export class TechnicianScheduleService {
       this.appointmentsService.findAll({ dateFrom: dayStart, dateTo: dayEnd, limit: 500 }),
       this.jobCardsService.findWorkshopScheduleForDate(dayStart, dayEnd),
       this.jobCardsService.findCrewHelpersForDate(dayStart, dayEnd),
+      // The board's click-to-assign panel (2026-09-09) - scheduled-but-technicianless
+      // appointments for this same day, and every WORKSHOP job still waiting on its first
+      // technician (no date scoping possible for those - see
+      // findUnassignedWorkshopJobs()'s own doc comment).
+      this.appointmentsService.findAll({ dateFrom: dayStart, dateTo: dayEnd, unassigned: true, limit: 500 }),
+      this.jobCardsService.findUnassignedWorkshopJobs(),
     ]);
 
     const rows = buildTechnicianSchedule({
@@ -97,6 +128,24 @@ export class TechnicianScheduleService {
       now,
     });
 
-    return { date, rows };
+    const unassignedAppointments: UnassignedAppointment[] = unassignedAppointmentsPage.data.map((a) => ({
+      id: a.id,
+      appointmentNumber: a.appointmentNumber,
+      customerName: a.customerName,
+      type: a.type,
+      scheduledAt: a.scheduledAt,
+      estimatedDurationMinutes: a.estimatedDurationMinutes,
+    }));
+
+    const unassignedJobCards: UnassignedJobCard[] = unassignedJobCardEntities.map((j) => ({
+      id: j.id,
+      jobCardNumber: j.jobCardNumber,
+      faultCode: j.faultCode,
+      symptomCode: j.symptomCode,
+      warrantyStatus: j.warrantyStatus,
+      createdAt: j.createdAt,
+    }));
+
+    return { date, rows, unassignedAppointments, unassignedJobCards };
   }
 }

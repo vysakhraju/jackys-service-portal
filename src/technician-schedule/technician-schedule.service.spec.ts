@@ -26,6 +26,7 @@ describe('TechnicianScheduleService', () => {
     jobCardsService = {
       findWorkshopScheduleForDate: jest.fn().mockResolvedValue([]),
       findCrewHelpersForDate: jest.fn().mockResolvedValue([]),
+      findUnassignedWorkshopJobs: jest.fn().mockResolvedValue([]),
     };
     service = new TechnicianScheduleService(userRepository, appointmentsService, jobCardsService);
   });
@@ -157,5 +158,82 @@ describe('TechnicianScheduleService', () => {
   it('returns the requested date on the result', async () => {
     const result = await service.getGanttBoard('2026-09-09');
     expect(result.date).toBe('2026-09-09');
+  });
+
+  describe('click-to-assign panel: unassignedAppointments / unassignedJobCards', () => {
+    it('queries appointments a second time with unassigned=true for the same day window', async () => {
+      await service.getGanttBoard('2026-09-09');
+
+      expect(appointmentsService.findAll).toHaveBeenCalledWith({
+        dateFrom: new Date('2026-09-09T00:00:00.000Z'),
+        dateTo: new Date('2026-09-10T00:00:00.000Z'),
+        unassigned: true,
+        limit: 500,
+      });
+    });
+
+    it('maps unassigned appointments and unassigned workshop job cards onto the result', async () => {
+      appointmentsService.findAll.mockImplementation((filters: any) =>
+        Promise.resolve(
+          filters?.unassigned
+            ? {
+                data: [
+                  {
+                    id: 'apt-9',
+                    appointmentNumber: 'APT-0009',
+                    customerName: 'Amir',
+                    type: 'WARRANTY',
+                    scheduledAt: new Date('2026-09-09T11:00:00Z'),
+                    estimatedDurationMinutes: 45,
+                  },
+                ],
+                total: 1,
+                page: 1,
+                limit: 500,
+              }
+            : { data: [], total: 0, page: 1, limit: 500 },
+        ),
+      );
+      jobCardsService.findUnassignedWorkshopJobs.mockResolvedValue([
+        {
+          id: 'jc-9',
+          jobCardNumber: 'JC-0200',
+          faultCode: 'F002',
+          symptomCode: 'S002',
+          warrantyStatus: 'OUT_OF_WARRANTY',
+          createdAt: new Date('2026-09-08T12:00:00Z'),
+        },
+      ]);
+
+      const result = await service.getGanttBoard('2026-09-09');
+
+      expect(result.unassignedAppointments).toEqual([
+        {
+          id: 'apt-9',
+          appointmentNumber: 'APT-0009',
+          customerName: 'Amir',
+          type: 'WARRANTY',
+          scheduledAt: new Date('2026-09-09T11:00:00Z'),
+          estimatedDurationMinutes: 45,
+        },
+      ]);
+      expect(result.unassignedJobCards).toEqual([
+        {
+          id: 'jc-9',
+          jobCardNumber: 'JC-0200',
+          faultCode: 'F002',
+          symptomCode: 'S002',
+          warrantyStatus: 'OUT_OF_WARRANTY',
+          createdAt: new Date('2026-09-08T12:00:00Z'),
+        },
+      ]);
+    });
+
+    it('returns empty arrays when nothing is unassigned', async () => {
+      const result = await service.getGanttBoard('2026-09-09');
+
+      expect(result.unassignedAppointments).toEqual([]);
+      expect(result.unassignedJobCards).toEqual([]);
+    });
   });
 });

@@ -146,6 +146,11 @@ export class AppointmentsService {
     channel?: AppointmentChannel;
     dateFrom?: Date;
     dateTo?: Date;
+    // Technician Assignment Board (2026-09-09): the "unassigned" pool for a given day -
+    // mutually exclusive with technicianId above (a specific id and "has none" can't both
+    // apply), so a caller passing both gets technicianId's narrower behaviour; TechnicianScheduleService
+    // never does.
+    unassigned?: boolean;
     page?: number;
     limit?: number;
   }): Promise<{ data: Appointment[]; total: number; page: number; limit: number }> {
@@ -172,6 +177,8 @@ export class AppointmentsService {
       query.andWhere('apt.technicianId = :technicianId', {
         technicianId: filters.technicianId,
       });
+    } else if (filters?.unassigned) {
+      query.andWhere('apt.technicianId IS NULL');
     }
 
     if (filters?.status) {

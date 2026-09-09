@@ -1,15 +1,24 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '../../lib/toast';
 
 vi.mock('../../lib/technicianScheduleApi', () => ({ getGanttBoard: vi.fn() }));
-vi.mock('../../lib/workshopApi', () => ({ addCrewHelper: vi.fn() }));
+vi.mock('../../lib/workshopApi', () => ({
+  addCrewHelper: vi.fn(),
+  assignWorkshopTechnician: vi.fn(),
+  reassignWorkshopTechnician: vi.fn(),
+}));
+vi.mock('../../lib/appointmentsApi', () => ({
+  assignTechnician: vi.fn(),
+  updateAppointment: vi.fn(),
+}));
 
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
-import { addCrewHelper } from '../../lib/workshopApi';
+import { addCrewHelper, assignWorkshopTechnician, reassignWorkshopTechnician } from '../../lib/workshopApi';
+import { assignTechnician, updateAppointment } from '../../lib/appointmentsApi';
 import { TechnicianGanttPage } from './TechnicianGanttPage';
 import type { GanttBoard } from '../../lib/technicianScheduleTypes';
 
@@ -80,6 +89,8 @@ function board(overrides: Partial<GanttBoard> = {}): GanttBoard {
         blocks: [],
       },
     ],
+    unassignedAppointments: [],
+    unassignedJobCards: [],
     ...overrides,
   };
 }
@@ -87,6 +98,10 @@ function board(overrides: Partial<GanttBoard> = {}): GanttBoard {
 beforeEach(() => {
   vi.mocked(getGanttBoard).mockReset();
   vi.mocked(addCrewHelper).mockReset();
+  vi.mocked(assignWorkshopTechnician).mockReset();
+  vi.mocked(reassignWorkshopTechnician).mockReset();
+  vi.mocked(assignTechnician).mockReset();
+  vi.mocked(updateAppointment).mockReset();
 });
 
 describe('TechnicianGanttPage', () => {
@@ -218,5 +233,173 @@ describe('TechnicianGanttPage', () => {
     await user.click(screen.getByRole('button', { name: '+ Helper' }));
 
     expect(await screen.findByText(/No other workshop technicians are available/)).toBeInTheDocument();
+  });
+
+  it('shows empty-state messages for both unassigned panels when nothing is waiting', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+
+    renderPage();
+
+    expect(await screen.findByText('Every scheduled appointment today has a technician.')).toBeInTheDocument();
+    expect(screen.getByText('No workshop job cards are waiting on a technician.')).toBeInTheDocument();
+  });
+
+  it('lists unassigned appointments and job cards, and assigns an unassigned appointment to a field technician', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getGanttBoard).mockResolvedValue(
+      board({
+        unassignedAppointments: [
+          {
+            id: 'apt-9',
+            appointmentNumber: 'APT-0009',
+            customerName: 'Amir',
+            type: 'WARRANTY',
+            scheduledAt: '2026-09-09T11:00:00.000Z',
+            estimatedDurationMinutes: 45,
+          },
+        ],
+        unassignedJobCards: [
+          {
+            id: 'jc-9',
+            jobCardNumber: 'JC-0200',
+            faultCode: 'F002',
+            symptomCode: 'S002',
+            warrantyStatus: 'OUT_OF_WARRANTY',
+            createdAt: '2026-09-08T12:00:00.000Z',
+          },
+        ],
+      }),
+    );
+    vi.mocked(assignTechnician).mockResolvedValue({ id: 'apt-9', technicianId: 'tech-1' } as any);
+
+    renderPage();
+    expect(await screen.findByText('APT-0009')).toBeInTheDocument();
+    expect(screen.getByText('JC-0200')).toBeInTheDocument();
+
+    // Only one "Assign →" button belongs to the appointment panel - scope to its row.
+    const appointmentRow = screen.getByText('APT-0009').closest('li')!;
+    await user.click(within(appointmentRow).getByRole('button', { name: 'Assign →' }));
+
+    expect(await screen.findByText('Assign technician — APT-0009')).toBeInTheDocument();
+    const select = screen.getByRole('combobox');
+    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    // Field technicians only - the workshop-only technicians should not appear.
+    expect(optionLabels).toContain('Ravi Kumar');
+    expect(optionLabels).not.toContain('Ali Hassan');
+    expect(optionLabels).not.toContain('Sunil Perera');
+
+    await user.selectOptions(select, 'tech-1');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(assignTechnician).toHaveBeenCalledWith('apt-9', 'tech-1'));
+    await waitFor(() => expect(screen.queryByText('Assign technician — APT-0009')).not.toBeInTheDocument());
+  });
+
+  it('assigns an unassigned job card to a workshop technician', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getGanttBoard).mockResolvedValue(
+      board({
+        unassignedJobCards: [
+          {
+            id: 'jc-9',
+            jobCardNumber: 'JC-0200',
+            faultCode: 'F002',
+            symptomCode: 'S002',
+            warrantyStatus: 'OUT_OF_WARRANTY',
+            createdAt: '2026-09-08T12:00:00.000Z',
+          },
+        ],
+      }),
+    );
+    vi.mocked(assignWorkshopTechnician).mockResolvedValue({ id: 'jc-9', assignedWorkshopTechnicianId: 'tech-3' } as any);
+
+    renderPage();
+    const jobCardRow = (await screen.findByText('JC-0200')).closest('li')!;
+    await user.click(within(jobCardRow).getByRole('button', { name: 'Assign →' }));
+
+    expect(await screen.findByText('Assign technician — JC-0200')).toBeInTheDocument();
+    await user.selectOptions(screen.getByRole('combobox'), 'tech-3');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(assignWorkshopTechnician).toHaveBeenCalledWith('jc-9', { technicianId: 'tech-3' }));
+  });
+
+  it('reassigns an already-assigned appointment block, excluding its current technician from the picker', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+    vi.mocked(updateAppointment).mockResolvedValue({ id: 'apt-1', technicianId: 'tech-2' } as any);
+
+    renderPage();
+    await screen.findByText('APT-0001');
+    // Both the appointment block and the workshop_job block offer their own "Reassign"
+    // trigger button - scope to the appointment bar specifically.
+    const appointmentBar = screen.getByTitle(/APT-0001/);
+    await user.click(within(appointmentBar).getByRole('button', { name: 'Reassign' }));
+
+    expect(await screen.findByText('Reassign technician — APT-0001')).toBeInTheDocument();
+    // Ravi Kumar (tech-1) is the current assignee - must not be offered as a target.
+    const select = screen.getByRole('combobox');
+    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(optionLabels).not.toContain('Ravi Kumar');
+
+    // No other field technician exists in this fixture, so the empty-pool message shows.
+    expect(screen.getByText(/No other field technicians are available/)).toBeInTheDocument();
+  });
+
+  it('reassigns an in-progress workshop job to a different workshop technician', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+    vi.mocked(reassignWorkshopTechnician).mockResolvedValue({ id: 'jc-1', assignedWorkshopTechnicianId: 'tech-3' } as any);
+
+    renderPage();
+    await screen.findByText('JC-0100');
+    // The workshop_job block is the only one offering "Reassign" alongside "+ Helper" -
+    // getAllByRole would also match the appointment block's own Reassign button, so scope
+    // to the JC-0100 bar specifically via its title attribute.
+    const jobCardBar = screen.getByTitle(/JC-0100/);
+    await user.click(within(jobCardBar).getByRole('button', { name: 'Reassign' }));
+
+    expect(await screen.findByText('Reassign technician — JC-0100')).toBeInTheDocument();
+    const select = screen.getByRole('combobox');
+    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(optionLabels).not.toContain('Ali Hassan'); // current assignee, excluded
+    expect(optionLabels).toContain('Sunil Perera');
+
+    await user.selectOptions(select, 'tech-3');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(reassignWorkshopTechnician).toHaveBeenCalledWith('jc-1', { technicianId: 'tech-3' }));
+  });
+
+  it('does not offer "Reassign" on a workshop_job block outside the reassignable statuses (e.g. DELIVERED)', async () => {
+    const b = board();
+    b.rows[1].blocks[0].status = 'DELIVERED';
+    vi.mocked(getGanttBoard).mockResolvedValue(b);
+
+    renderPage();
+    await screen.findByText('JC-0100');
+
+    const jobCardBar = screen.getByTitle(/JC-0100/);
+    expect(within(jobCardBar).queryByRole('button', { name: 'Reassign' })).not.toBeInTheDocument();
+  });
+
+  it('surfaces a toast-worthy error message and keeps the modal open when a reassignment is rejected', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+    vi.mocked(reassignWorkshopTechnician).mockRejectedValue({
+      response: { data: { message: 'Current technician still holds an open spare-parts reservation.' } },
+    });
+
+    renderPage();
+    await screen.findByText('JC-0100');
+    const jobCardBar = screen.getByTitle(/JC-0100/);
+    await user.click(within(jobCardBar).getByRole('button', { name: 'Reassign' }));
+    await screen.findByText('Reassign technician — JC-0100');
+    await user.selectOptions(screen.getByRole('combobox'), 'tech-3');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(reassignWorkshopTechnician).toHaveBeenCalled());
+    // The modal stays open on failure (only onSuccess closes it) so the user can retry.
+    expect(screen.getByText('Reassign technician — JC-0100')).toBeInTheDocument();
   });
 });

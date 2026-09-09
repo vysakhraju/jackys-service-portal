@@ -24,7 +24,30 @@ export interface TechnicianScheduleRow {
   hasConflict: boolean;
 }
 
+// Click-to-assign panel (2026-09-09): the "needs a technician" pools the board renders
+// above the timeline, one section each - see TechnicianScheduleService.getGanttBoard's own
+// doc comment for why Job Cards have no date scoping the way Appointments do.
+export interface UnassignedAppointment {
+  id: string;
+  appointmentNumber: string;
+  customerName: string;
+  type: string;
+  scheduledAt: string;
+  estimatedDurationMinutes: number | null;
+}
+
+export interface UnassignedJobCard {
+  id: string;
+  jobCardNumber: string;
+  faultCode: string;
+  symptomCode: string;
+  warrantyStatus: string;
+  createdAt: string;
+}
+
 export interface GanttBoard {
   date: string;
   rows: TechnicianScheduleRow[];
+  unassignedAppointments: UnassignedAppointment[];
+  unassignedJobCards: UnassignedJobCard[];
 }

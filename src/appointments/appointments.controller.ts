@@ -69,6 +69,7 @@ export class AppointmentsController {
   @ApiQuery({ name: 'channel', required: false, enum: AppointmentChannel })
   @ApiQuery({ name: 'dateFrom', required: false, type: String, description: 'ISO date string' })
   @ApiQuery({ name: 'dateTo', required: false, type: String, description: 'ISO date string' })
+  @ApiQuery({ name: 'unassigned', required: false, type: Boolean, description: 'Only appointments with no technicianId - ignored if technicianId is also given' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200 })
@@ -80,6 +81,7 @@ export class AppointmentsController {
     @Query('channel') channel?: AppointmentChannel,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('unassigned') unassigned?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
@@ -91,6 +93,7 @@ export class AppointmentsController {
       channel,
       dateFrom: dateFrom ? new Date(dateFrom) : undefined,
       dateTo: dateTo ? new Date(dateTo) : undefined,
+      unassigned: unassigned === 'true',
       page,
       limit,
     });

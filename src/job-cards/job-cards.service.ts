@@ -397,6 +397,62 @@ export class JobCardsService {
     return this.jobCardRepository.save(jobCard);
   }
 
+  /**
+   * Technician Assignment Board (2026-09-09) - hand a WORKSHOP job off from its current
+   * assignee to a different workshop technician, once past the initial assignment. Split
+   * out from assignWorkshopTechnician() above rather than reused for it: that method's
+   * whole guard is "must not be assigned yet"; this one's is the opposite ("must already
+   * be assigned"), and the two shouldn't silently accept each other's precondition.
+   *
+   * Deliberately does NOT touch workshopAssignedAt - that timestamp means "workshop work
+   * began at X" for turnaround-time purposes, not "the current assignee's start", so
+   * resetting it on a mid-job handoff would understate how long the job has actually been
+   * in the workshop. The reassignment itself is captured by the @Audit() interceptor on
+   * WorkshopController's endpoint (old/new technicianId), not a dedicated column.
+   *
+   * The-fool pre-mortem finding (2026-09-09): if the incoming technician is currently
+   * listed as an active crew helper on this same job, promoting them to primary and
+   * leaving that helper row active would double-count them - two overlapping blocks for
+   * the same person on the Gantt board, which the conflict detector would then flag as a
+   * false double-booking. Soft-remove that row as part of the same operation.
+   *
+   * Reservation-custody (does the outgoing technician still physically hold a reserved
+   * spare?) and late-stage edit-lock checks both happen in WorkshopService.reassign()
+   * before this is ever called - same "every mutation goes through JobCardsService, cross-
+   * module composition lives in WorkshopService" split as requestSpare()/addCrewHelper().
+   */
+  async reassignWorkshopTechnician(id: string, newTechnicianId: string, callerId: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(id);
+
+    if (jobCard.section !== JobCardSection.WORKSHOP || !jobCard.assignedWorkshopTechnicianId) {
+      throw new BadRequestException(
+        `Cannot reassign a workshop technician: Job Card has no current workshop assignment yet (current: status=${jobCard.status}, section=${jobCard.section}) - use assign-technician instead.`,
+      );
+    }
+    if (
+      ![JobCardStatus.WORKSHOP_ASSIGNED, JobCardStatus.IN_PROGRESS, JobCardStatus.SPARE_PENDING, JobCardStatus.READY_FOR_QC].includes(
+        jobCard.status,
+      )
+    ) {
+      throw new BadRequestException(`Cannot reassign a workshop technician from status ${jobCard.status}.`);
+    }
+    if (newTechnicianId === jobCard.assignedWorkshopTechnicianId) {
+      throw new BadRequestException('This technician is already assigned to this Job Card.');
+    }
+
+    const activeHelperRow = await this.crewHelperRepository.findOne({
+      where: { jobCardId: id, technicianId: newTechnicianId, removedAt: IsNull() },
+    });
+    if (activeHelperRow) {
+      activeHelperRow.removedAt = new Date();
+      activeHelperRow.removedByUserId = callerId;
+      await this.crewHelperRepository.save(activeHelperRow);
+    }
+
+    jobCard.assignedWorkshopTechnicianId = newTechnicianId;
+    return this.jobCardRepository.save(jobCard);
+  }
+
   async startWip(id: string): Promise<JobCard> {
     const jobCard = await this.findEntityById(id);
 
@@ -723,5 +779,23 @@ export class JobCardsService {
       .where('helper.addedAt <= :dayEnd', { dayEnd })
       .andWhere('(helper.removedAt IS NULL OR helper.removedAt >= :dayStart)', { dayStart })
       .getMany();
+  }
+
+  /**
+   * Technician Assignment Board (2026-09-09): every WORKSHOP-section Job Card that's
+   * reached SECTION_ASSIGNED but still has no workshop technician - the "unassigned" pool
+   * the board's click-to-assign panel offers. No date scoping (unlike
+   * findWorkshopScheduleForDate above) - a Job Card has no scheduled date the way an
+   * Appointment does, so "needs a technician" is a standing list, not a per-day one.
+   */
+  async findUnassignedWorkshopJobs(): Promise<JobCard[]> {
+    return this.jobCardRepository.find({
+      where: {
+        status: JobCardStatus.SECTION_ASSIGNED,
+        section: JobCardSection.WORKSHOP,
+        assignedWorkshopTechnicianId: IsNull(),
+      },
+      order: { createdAt: 'ASC' },
+    });
   }
 }

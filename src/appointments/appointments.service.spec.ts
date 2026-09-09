@@ -216,6 +216,25 @@ describe('AppointmentsService', () => {
       expect(qb.take).toHaveBeenCalledWith(20);
       expect(result).toEqual({ data: [], total: 0, page: 1, limit: 20 });
     });
+
+    it('Technician Assignment Board: unassigned=true filters to appointments with no technicianId', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ unassigned: true });
+
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.technicianId IS NULL');
+    });
+
+    it('a specific technicianId takes priority over unassigned=true if both are somehow given', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ technicianId: 'tech-1', unassigned: true });
+
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.technicianId = :technicianId', { technicianId: 'tech-1' });
+      expect(qb.andWhere).not.toHaveBeenCalledWith('apt.technicianId IS NULL');
+    });
   });
 
   describe('findById / findByAppointmentNumber', () => {

@@ -40,6 +40,31 @@ export class WorkshopController {
     return this.workshopService.assign(jobCardId, dto.technicianId);
   }
 
+  // Technician Assignment Board's reassign action (2026-09-09) - same ASSIGN_ROLES as
+  // assign() above; reuses AssignWorkshopDto since the body shape is identical.
+  @Post(':jobCardId/reassign')
+  @Roles(...ASSIGN_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params.jobCardId,
+    getNewValues: (result) => ({ status: result?.status, assignedWorkshopTechnicianId: result?.assignedWorkshopTechnicianId }),
+  })
+  @ApiOperation({ summary: 'Reassign a WORKSHOP Job Card to a different workshop technician (past its initial assignment)' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'Not yet assigned, or in a status reassignment does not apply to' })
+  @ApiResponse({ status: 403, description: 'Job Card is late-stage and caller does not hold an override role' })
+  @ApiResponse({ status: 409, description: 'Current technician still holds an open spare-parts reservation' })
+  async reassign(
+    @Param('jobCardId', ParseUUIDPipe) jobCardId: string,
+    @Body() dto: AssignWorkshopDto,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.workshopService.reassign(jobCardId, dto.technicianId, user.id, req.user.role?.name);
+  }
+
   @Post(':jobCardId/start-wip')
   @Roles(...ACTION_ROLES)
   @ApiOperation({ summary: 'Start work-in-progress on a WORKSHOP_ASSIGNED Job Card' })

@@ -1,10 +1,11 @@
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { JobCardsService } from '../job-cards/job-cards.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
 import { PermissionsService } from '../permissions/permissions.service';
 import { PermissionType } from '../permissions/entities/user-permission-grant.entity';
+import { canEditLateStageJobCard } from '../job-cards/job-card-edit-lock.util';
 
 @Injectable()
 export class WorkshopService {
@@ -32,6 +33,49 @@ export class WorkshopService {
 
   async assign(jobCardId: string, technicianId: string): Promise<JobCard> {
     return this.jobCardsService.assignWorkshopTechnician(jobCardId, technicianId);
+  }
+
+  /**
+   * Technician Assignment Board (2026-09-09) - hand a WORKSHOP job off to a different
+   * technician once it's past its initial assignment. Two guards live here rather than in
+   * JobCardsService.reassignWorkshopTechnician(), matching this file's existing split
+   * (requestSpare()/addCrewHelper() both compose JobCardsService with another module's
+   * checks the same way):
+   *
+   * 1. Late-stage edit-lock (the-fool finding, 2026-09-09): reassignment is the kind of
+   *    edit job-card-edit-lock.util.ts exists to gate once a job hits READY_FOR_QC or
+   *    later - reusing it here rather than letting this brand-new mutation path reopen
+   *    the exact hole that feature was built to close. In practice this never actually
+   *    blocks anyone today, since WorkshopController's ASSIGN_ROLES (who can even call
+   *    this) is already a subset of the lock's own override roles - kept explicit anyway
+   *    so that stays true if either role list ever changes independently.
+   * 2. Reservation custody (the-fool finding): mirrors AppointmentsService.update()'s own
+   *    guard for the identical problem on the field-visit side - don't let the outgoing
+   *    technician get silently swapped out while they still physically hold a reserved
+   *    spare part for this job.
+   */
+  async reassign(jobCardId: string, newTechnicianId: string, callerId: string, callerRoleName: string): Promise<JobCard> {
+    const jobCard = await this.findEntityById(jobCardId);
+
+    if (!canEditLateStageJobCard(jobCard.status, callerRoleName)) {
+      throw new ForbiddenException(
+        `Job Card ${jobCard.jobCardNumber} is ${jobCard.status} - reassigning its workshop technician needs Super Admin, Service Head, Technical Team Leader, Accountant, or Finance Manager.`,
+      );
+    }
+
+    if (jobCard.assignedWorkshopTechnicianId) {
+      const hasOpenReservation = await this.inventoryService.hasActiveReservationInCustody(
+        jobCardId,
+        jobCard.assignedWorkshopTechnicianId,
+      );
+      if (hasOpenReservation) {
+        throw new ConflictException(
+          `Cannot reassign this Job Card: the current technician still holds an open spare-parts reservation (PENDING_REVIEW/HELD/PARTIALLY_RESERVED) on it. Release it first via POST /inventory/reservations/:id/release, then reassign.`,
+        );
+      }
+    }
+
+    return this.jobCardsService.reassignWorkshopTechnician(jobCardId, newTechnicianId, callerId);
   }
 
   async startWip(jobCardId: string, callerId: string, isPrivilegedRole: boolean): Promise<JobCard> {
