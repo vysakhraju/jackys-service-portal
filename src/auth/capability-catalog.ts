@@ -262,10 +262,10 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
   },
 
   // --- Warranty Claims --- replaces CLERK_ROLES/VIEW_ROLES on warranty-claims.controller.ts
-  // (2026-09-10). CREDIT_NOTE_ROLES is deliberately NOT here - see that controller's own
-  // comment: it's the one role-set in the app that includes SUPER_ADMIN but not
-  // SERVICE_HEAD, and the matrix's SUPER_ADMIN+SERVICE_HEAD bypass can't preserve that
-  // asymmetry, so migrating it would silently widen SERVICE_HEAD's financial access.
+  // (2026-09-10). CREDIT_NOTE_POST (below) was originally excluded on the same date - the
+  // one role-set in the app that included SUPER_ADMIN but not SERVICE_HEAD - then migrated
+  // once the business explicitly decided (2026-09-10, same day) that SERVICE_HEAD should
+  // get that access too, which made the array symmetric.
   {
     key: 'WARRANTY_CLAIMS_CLERK',
     label: 'Aggregate, submit & cancel a warranty claim',
@@ -278,6 +278,13 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     label: 'View warranty claims & recovery rate',
     module: 'Warranty Claims',
     defaultRoles: [RoleName.WARRANTY_CLERK, RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
+  {
+    key: 'CREDIT_NOTE_POST',
+    label: "Record a vendor's credit note & post its GL entry (BRD 12.4)",
+    module: 'Warranty Claims',
+    defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
     migrated: true,
   },
 

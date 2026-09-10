@@ -3,7 +3,6 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@ne
 import { WarrantyClaimsService } from './warranty-claims.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
 import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
@@ -28,18 +27,15 @@ import { CancelWarrantyClaimDto } from './dto/cancel-warranty-claim.dto';
 // WARRANTY_CLAIMS_CLERK/WARRANTY_CLAIMS_VIEW - see capability-catalog.ts's "Warranty
 // Claims" section, same membership.
 //
-// CREDIT_NOTE_ROLES is DELIBERATELY NOT migrated, and stays on this plain hardcoded
-// @Roles() below. It's the only role-set in the whole app found so far that includes
-// SUPER_ADMIN but not SERVICE_HEAD - a real, considered restriction (recording a vendor
-// credit note posts a GL entry; SERVICE_HEAD is deliberately kept out of that finance-only
-// step, unlike every other action in this file). RolesGuard.checkCapability()'s
-// MATRIX_LOCKED_ROLES bypass (auth/guards/roles.guard.ts) is unconditional - SUPER_ADMIN
-// AND SERVICE_HEAD always pass ANY @RequiresCapability() gate, with no way to admit one and
-// not the other. Migrating this endpoint would silently hand SERVICE_HEAD a financial
-// write-permission it does not have today. Left as the one remaining hardcoded @Roles() in
-// this controller until/unless the business explicitly decides SERVICE_HEAD should get it.
+// CREDIT_NOTE_ROLES was originally left un-migrated (2026-09-10): it was the only role-set
+// in the app found missing SERVICE_HEAD while keeping SUPER_ADMIN, which the matrix's
+// unconditional SUPER_ADMIN+SERVICE_HEAD bypass couldn't safely absorb without silently
+// widening access. Business decision (2026-09-10, same day): SERVICE_HEAD should get this
+// access too - recording a vendor credit note/posting the GL entry is now open to
+// SERVICE_HEAD the same as every other action in this file. With that decision made the
+// array is symmetric, so it's migrated onto the matrix as CREDIT_NOTE_POST below, same
+// pattern as CLERK_ROLES/VIEW_ROLES.
 const CLERK_ROLES = ['WARRANTY_CLERK', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-const CREDIT_NOTE_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN'];
 const VIEW_ROLES = ['WARRANTY_CLERK', 'ACCOUNTANT', 'FINANCE_MANAGER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
 
 @ApiTags('warranty-claims')
@@ -120,7 +116,7 @@ export class WarrantyClaimsController {
   }
 
   @Post(':id/credit-note')
-  @Roles(...CREDIT_NOTE_ROLES)
+  @RequiresCapability('CREDIT_NOTE_POST')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
