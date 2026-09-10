@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@ne
 import { DismantlingService } from './dismantling.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -20,10 +20,15 @@ import { CancelDismantlingRecordDto } from './dto/cancel-dismantling-record.dto'
 // "Service Manager" for the BOM-to-spare/pricing/posting step. This codebase has no
 // dedicated "Service Manager" role (RoleName has 14 members, none named that) - mapped to
 // SERVICE_HEAD, the same assumption AMC's contract-management endpoints already make.
-const HARVEST_ROLES = ['TECHNICIAN_WORKSHOP', 'TECHNICIAN_FIELD', 'TECHNICAL_TEAM_LEADER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-const VERIFY_ROLES = ['TECHNICAL_TEAM_LEADER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-const MANAGER_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN'];
-const VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER', 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP', 'ACCOUNTANT', 'FINANCE_MANAGER'];
+//
+// HARVEST_ROLES/VERIFY_ROLES/MANAGER_ROLES/VIEW_ROLES all migrated onto the designation
+// permission matrix (2026-09-10) as DISMANTLING_HARVEST/DISMANTLING_VERIFY/
+// DISMANTLING_MANAGE/DISMANTLING_VIEW - see capability-catalog.ts's "Dismantling" section.
+// MANAGER_ROLES was SERVICE_HEAD+SUPER_ADMIN only - both MATRIX_LOCKED_ROLES - so
+// DISMANTLING_MANAGE seeds with an EMPTY defaultRoles (zero behavior change: still nobody
+// but those two by default) but, unlike the old hardcoded array, an admin can now choose to
+// extend BOM-to-spare/pricing/posting to another role via the matrix UI if the business
+// ever wants that - the first capability in this catalog where that's true.
 
 @ApiTags('dismantling')
 @Controller('dismantling')
@@ -33,7 +38,7 @@ export class DismantlingController {
   constructor(private dismantlingService: DismantlingService) {}
 
   @Post()
-  @Roles(...HARVEST_ROLES)
+  @RequiresCapability('DISMANTLING_HARVEST')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -47,7 +52,7 @@ export class DismantlingController {
   }
 
   @Get()
-  @Roles(...VIEW_ROLES)
+  @RequiresCapability('DISMANTLING_VIEW')
   @ApiQuery({ name: 'status', enum: DismantlingStatus, required: false })
   @ApiOperation({ summary: 'List dismantling records, optionally filtered by status' })
   async findAll(@Query('status') status?: DismantlingStatus) {
@@ -55,14 +60,14 @@ export class DismantlingController {
   }
 
   @Get('serial/:applianceSerialNumber')
-  @Roles(...VIEW_ROLES)
+  @RequiresCapability('DISMANTLING_VIEW')
   @ApiOperation({ summary: 'List dismantling records for a given appliance serial number' })
   async findByApplianceSerial(@Param('applianceSerialNumber') applianceSerialNumber: string) {
     return this.dismantlingService.findByApplianceSerial(applianceSerialNumber);
   }
 
   @Get(':id')
-  @Roles(...VIEW_ROLES)
+  @RequiresCapability('DISMANTLING_VIEW')
   @ApiOperation({ summary: 'Get one dismantling record by id' })
   @ApiResponse({ status: 404, description: 'Not found' })
   async findById(@Param('id', ParseUUIDPipe) id: string) {
@@ -70,7 +75,7 @@ export class DismantlingController {
   }
 
   @Post(':id/harvest')
-  @Roles(...HARVEST_ROLES)
+  @RequiresCapability('DISMANTLING_HARVEST')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -85,7 +90,7 @@ export class DismantlingController {
   }
 
   @Post(':id/verify')
-  @Roles(...VERIFY_ROLES)
+  @RequiresCapability('DISMANTLING_VERIFY')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -100,7 +105,7 @@ export class DismantlingController {
   }
 
   @Post(':id/price-and-post')
-  @Roles(...MANAGER_ROLES)
+  @RequiresCapability('DISMANTLING_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -116,7 +121,7 @@ export class DismantlingController {
   }
 
   @Post(':id/cancel')
-  @Roles(...HARVEST_ROLES)
+  @RequiresCapability('DISMANTLING_HARVEST')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CANCEL,

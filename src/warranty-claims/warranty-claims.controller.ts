@@ -4,6 +4,7 @@ import { WarrantyClaimsService } from './warranty-claims.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -22,6 +23,21 @@ import { CancelWarrantyClaimDto } from './dto/cancel-warranty-claim.dto';
 // SERVICE_HEAD). FINANCE_MANAGER already carries 'manage:vendor-claims' per
 // auth.service.ts's seedRoles(), so it's included alongside ACCOUNTANT for the
 // credit-note step.
+//
+// CLERK_ROLES/VIEW_ROLES migrated onto the designation permission matrix (2026-09-10) as
+// WARRANTY_CLAIMS_CLERK/WARRANTY_CLAIMS_VIEW - see capability-catalog.ts's "Warranty
+// Claims" section, same membership.
+//
+// CREDIT_NOTE_ROLES is DELIBERATELY NOT migrated, and stays on this plain hardcoded
+// @Roles() below. It's the only role-set in the whole app found so far that includes
+// SUPER_ADMIN but not SERVICE_HEAD - a real, considered restriction (recording a vendor
+// credit note posts a GL entry; SERVICE_HEAD is deliberately kept out of that finance-only
+// step, unlike every other action in this file). RolesGuard.checkCapability()'s
+// MATRIX_LOCKED_ROLES bypass (auth/guards/roles.guard.ts) is unconditional - SUPER_ADMIN
+// AND SERVICE_HEAD always pass ANY @RequiresCapability() gate, with no way to admit one and
+// not the other. Migrating this endpoint would silently hand SERVICE_HEAD a financial
+// write-permission it does not have today. Left as the one remaining hardcoded @Roles() in
+// this controller until/unless the business explicitly decides SERVICE_HEAD should get it.
 const CLERK_ROLES = ['WARRANTY_CLERK', 'SERVICE_HEAD', 'SUPER_ADMIN'];
 const CREDIT_NOTE_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN'];
 const VIEW_ROLES = ['WARRANTY_CLERK', 'ACCOUNTANT', 'FINANCE_MANAGER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
@@ -34,7 +50,7 @@ export class WarrantyClaimsController {
   constructor(private warrantyClaimsService: WarrantyClaimsService) {}
 
   @Post('aggregate')
-  @Roles(...CLERK_ROLES)
+  @RequiresCapability('WARRANTY_CLAIMS_CLERK')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -49,7 +65,7 @@ export class WarrantyClaimsController {
   }
 
   @Get()
-  @Roles(...VIEW_ROLES)
+  @RequiresCapability('WARRANTY_CLAIMS_VIEW')
   @ApiQuery({ name: 'supplier', required: false })
   @ApiQuery({ name: 'status', enum: WarrantyClaimStatus, required: false })
   @ApiOperation({ summary: 'List warranty claims, optionally filtered by supplier and/or status' })
@@ -58,7 +74,7 @@ export class WarrantyClaimsController {
   }
 
   @Get('recovery-rate')
-  @Roles(...VIEW_ROLES)
+  @RequiresCapability('WARRANTY_CLAIMS_VIEW')
   @ApiQuery({ name: 'supplier', required: false })
   @ApiOperation({ summary: 'Recovery Rate = Amount Recovered / Total Warranty Spares Cost * 100 (BRD 12.5), optionally scoped to one vendor' })
   async recoveryRate(@Query('supplier') supplier?: string) {
@@ -66,7 +82,7 @@ export class WarrantyClaimsController {
   }
 
   @Get(':id')
-  @Roles(...VIEW_ROLES)
+  @RequiresCapability('WARRANTY_CLAIMS_VIEW')
   @ApiOperation({ summary: 'Get one warranty claim with its line items' })
   @ApiResponse({ status: 404, description: 'Not found' })
   async findById(@Param('id', ParseUUIDPipe) id: string) {
@@ -74,7 +90,7 @@ export class WarrantyClaimsController {
   }
 
   @Post(':id/submit')
-  @Roles(...CLERK_ROLES)
+  @RequiresCapability('WARRANTY_CLAIMS_CLERK')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -89,7 +105,7 @@ export class WarrantyClaimsController {
   }
 
   @Post(':id/cancel')
-  @Roles(...CLERK_ROLES)
+  @RequiresCapability('WARRANTY_CLAIMS_CLERK')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CANCEL,

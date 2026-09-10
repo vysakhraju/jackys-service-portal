@@ -227,6 +227,59 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER, RoleName.LOGISTICS_DISPATCHER, RoleName.DRIVER],
     migrated: true,
   },
+
+  // --- Dismantling --- replaces HARVEST_ROLES/VERIFY_ROLES/MANAGER_ROLES/VIEW_ROLES on
+  // dismantling.controller.ts (2026-09-10).
+  {
+    key: 'DISMANTLING_HARVEST',
+    label: 'Open a dismantling record, log harvested components, cancel',
+    module: 'Dismantling',
+    defaultRoles: [RoleName.TECHNICIAN_WORKSHOP, RoleName.TECHNICIAN_FIELD, RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'DISMANTLING_VERIFY',
+    label: 'Verify a harvested component log (must differ from whoever harvested)',
+    module: 'Dismantling',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'DISMANTLING_MANAGE',
+    label: 'BOM-to-spare conversion, pricing & posting (adjusts inventory + GL)',
+    module: 'Dismantling',
+    // Was SERVICE_HEAD+SUPER_ADMIN only (both MATRIX_LOCKED_ROLES) - empty on purpose, see
+    // the controller's own comment. Zero behavior change; an admin can now opt to extend it.
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'DISMANTLING_VIEW',
+    label: 'View dismantling records',
+    module: 'Dismantling',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.TECHNICIAN_FIELD, RoleName.TECHNICIAN_WORKSHOP, RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
+
+  // --- Warranty Claims --- replaces CLERK_ROLES/VIEW_ROLES on warranty-claims.controller.ts
+  // (2026-09-10). CREDIT_NOTE_ROLES is deliberately NOT here - see that controller's own
+  // comment: it's the one role-set in the app that includes SUPER_ADMIN but not
+  // SERVICE_HEAD, and the matrix's SUPER_ADMIN+SERVICE_HEAD bypass can't preserve that
+  // asymmetry, so migrating it would silently widen SERVICE_HEAD's financial access.
+  {
+    key: 'WARRANTY_CLAIMS_CLERK',
+    label: 'Aggregate, submit & cancel a warranty claim',
+    module: 'Warranty Claims',
+    defaultRoles: [RoleName.WARRANTY_CLERK],
+    migrated: true,
+  },
+  {
+    key: 'WARRANTY_CLAIMS_VIEW',
+    label: 'View warranty claims & recovery rate',
+    module: 'Warranty Claims',
+    defaultRoles: [RoleName.WARRANTY_CLERK, RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {
