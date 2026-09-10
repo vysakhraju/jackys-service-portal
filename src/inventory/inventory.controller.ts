@@ -9,19 +9,24 @@ import { ReleaseReservationDto } from './dto/release-reservation.dto';
 import { InventoryLocation } from './entities/inventory-stock.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 
-// GRN and confirming a physical return are Warehouse Clerk duties (the role already
-// seeded with manage:grn/view:inventory permissions) - Service Head/Super Admin can
-// always cover for them. Reviewing a stale reservation is a supervisory call.
-const INVENTORY_STAFF_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK'];
-const REVIEW_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
-const READ_ROLES = [...INVENTORY_STAFF_ROLES, 'TECHNICAL_TEAM_LEADER', 'CCE'];
+// INVENTORY_STAFF_ROLES/REVIEW_ROLES/READ_ROLES, plus request-return's own inline role
+// list, all migrated onto the designation permission matrix (2026-09-10) as
+// INVENTORY_STAFF/INVENTORY_REVIEW/INVENTORY_VIEW/INVENTORY_RETURN_REQUEST - see
+// capability-catalog.ts's "Inventory" section, each the exact same membership these arrays
+// used to have. GRN and confirming a physical return are Warehouse Clerk duties (the role
+// already seeded with manage:grn/view:inventory permissions) - Service Head/Super Admin can
+// always cover for them via RolesGuard's hardcoded bypass. Reviewing a stale reservation is
+// a supervisory call.
+//
+// request-return's own inline isPrivileged check (who bypasses the "must be this
+// reservation's own custodian" rule) stays a plain business-logic array, not a gate.
 
 @ApiTags('inventory')
 @Controller('inventory')
@@ -31,7 +36,7 @@ export class InventoryController {
   constructor(private inventoryService: InventoryService) {}
 
   @Post('grn')
-  @Roles(...INVENTORY_STAFF_ROLES)
+  @RequiresCapability('INVENTORY_STAFF')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -46,7 +51,7 @@ export class InventoryController {
   }
 
   @Get('stock/:sparePartId')
-  @Roles(...READ_ROLES)
+  @RequiresCapability('INVENTORY_VIEW')
   @ApiQuery({ name: 'location', enum: InventoryLocation, required: false, description: 'Defaults to MAIN_STORE. Phase 6: pass DAMAGE_LOCATION to see stock consumed by QC-approved jobs.' })
   @ApiOperation({ summary: 'Current on-hand / reserved stock for a spare part (Main Store by default; pass ?location=DAMAGE_LOCATION for Phase 6 consumption totals)' })
   @ApiResponse({ status: 200 })
@@ -56,7 +61,7 @@ export class InventoryController {
   }
 
   @Get('reservations/stale')
-  @Roles(...READ_ROLES)
+  @RequiresCapability('INVENTORY_VIEW')
   @ApiOperation({ summary: 'Reservations idle >24h since last request/review, oldest first (inactive-custodian ones surfaced first regardless of age)' })
   @ApiResponse({ status: 200 })
   async getStale() {
@@ -64,7 +69,7 @@ export class InventoryController {
   }
 
   @Get('reservations/pending-need-spare')
-  @Roles(...READ_ROLES)
+  @RequiresCapability('INVENTORY_VIEW')
   @ApiOperation({ summary: "Mobile Phase 5: field technicians' Need Spare requests still awaiting a TL+ decision, oldest first, with spare part/job card/requester loaded" })
   @ApiResponse({ status: 200 })
   async getPendingNeedSpare() {
@@ -72,7 +77,7 @@ export class InventoryController {
   }
 
   @Post('reservations/:id/review')
-  @Roles(...REVIEW_ROLES)
+  @RequiresCapability('INVENTORY_REVIEW')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.INVENTORY_RESERVE,
@@ -88,7 +93,7 @@ export class InventoryController {
   }
 
   @Post('reservations/:id/review-need-spare')
-  @Roles(...REVIEW_ROLES)
+  @RequiresCapability('INVENTORY_REVIEW')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.INVENTORY_RESERVE,
@@ -104,7 +109,7 @@ export class InventoryController {
   }
 
   @Post('reservations/:id/release')
-  @Roles(...REVIEW_ROLES)
+  @RequiresCapability('INVENTORY_REVIEW')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.INVENTORY_RESERVE,
@@ -120,7 +125,7 @@ export class InventoryController {
   }
 
   @Post('reservations/:id/request-return')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'TECHNICIAN_WORKSHOP', 'TECHNICIAN_FIELD')
+  @RequiresCapability('INVENTORY_RETURN_REQUEST')
   @ApiOperation({ summary: "The custodian technician voluntarily returning an unused reservation (or a TL doing it on their behalf)" })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 403, description: 'Not this reservation\'s custodian' })
@@ -130,7 +135,7 @@ export class InventoryController {
   }
 
   @Post('reservations/:id/confirm-return')
-  @Roles(...INVENTORY_STAFF_ROLES)
+  @RequiresCapability('INVENTORY_STAFF')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.INVENTORY_RESERVE,

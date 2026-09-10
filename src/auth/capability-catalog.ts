@@ -168,6 +168,37 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
     migrated: true,
   },
+
+  // --- Inventory --- replaces INVENTORY_STAFF_ROLES/REVIEW_ROLES/READ_ROLES/
+  // request-return's own inline role list on inventory.controller.ts (2026-09-10).
+  {
+    key: 'INVENTORY_STAFF',
+    label: 'Receive stock (GRN) & confirm a physical return',
+    module: 'Inventory',
+    defaultRoles: [RoleName.WAREHOUSE_CLERK],
+    migrated: true,
+  },
+  {
+    key: 'INVENTORY_REVIEW',
+    label: 'Review a stale/Need Spare reservation, release a reservation',
+    module: 'Inventory',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'INVENTORY_VIEW',
+    label: 'View stock levels & pending reservations',
+    module: 'Inventory',
+    defaultRoles: [RoleName.WAREHOUSE_CLERK, RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE],
+    migrated: true,
+  },
+  {
+    key: 'INVENTORY_RETURN_REQUEST',
+    label: "Request return of a reservation as its custodian (or on a technician's behalf)",
+    module: 'Inventory',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.TECHNICIAN_WORKSHOP, RoleName.TECHNICIAN_FIELD],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {
