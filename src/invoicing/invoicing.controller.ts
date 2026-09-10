@@ -6,17 +6,20 @@ import { CustomerType } from '../appointments/entities/appointment.entity';
 import { RecordPaymentDto } from './dto/record-payment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 
-// Recording a payment is a Finance action, deliberately a different (and separate) role
-// set from Delivery's LOGISTICS_DISPATCHER/DRIVER - the person who hands over the unit is
-// never the person who gets to record that it was paid for.
-const INVOICING_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN', 'SERVICE_HEAD'];
+// INVOICING_ROLES migrated onto the designation permission matrix (2026-09-10) as
+// INVOICING_MANAGE - see capability-catalog.ts's "Invoicing" section, same membership.
+// Recording a payment is a Finance action, deliberately a different (and separate)
+// capability from Delivery's DELIVERY_MANAGE - the person who hands over the unit is never
+// the person who gets to record that it was paid for. getForJobCard() below is the one
+// exception - Delivery needs to check/lazily-draft the OOW invoice before handing over the
+// unit, so it's on its own wider INVOICING_JOB_CARD_VIEW capability instead.
 
 @ApiTags('finance')
 @Controller('invoicing')
@@ -26,7 +29,7 @@ export class InvoicingController {
   constructor(private invoicingService: InvoicingService) {}
 
   @Get()
-  @Roles(...INVOICING_ROLES)
+  @RequiresCapability('INVOICING_MANAGE')
   @ApiQuery({ name: 'status', required: false, enum: InvoiceStatus })
   @ApiQuery({ name: 'customerType', required: false, enum: CustomerType })
   @ApiOperation({ summary: 'List invoices, optionally filtered by status and/or the Job Card appointment\'s customerType (frontend Finance browse screen - the only other primitives are by-id, by-job-card, and the B2B-unpaid-only aging report, none of which cover a general browse/audit view)' })
@@ -36,7 +39,7 @@ export class InvoicingController {
   }
 
   @Get('job-card/:jobCardId')
-  @Roles(...INVOICING_ROLES, 'LOGISTICS_DISPATCHER', 'DRIVER')
+  @RequiresCapability('INVOICING_JOB_CARD_VIEW')
   @ApiOperation({ summary: 'Get (lazily creating a DRAFT if none exists yet) the invoice for an out-of-warranty, QC_PASSED Job Card' })
   @ApiResponse({ status: 200, description: 'The invoice (existing or newly drafted)' })
   @ApiResponse({ status: 400, description: 'Job Card is not QC_PASSED, is in-warranty, or has no approved Estimate' })
@@ -45,7 +48,7 @@ export class InvoicingController {
   }
 
   @Get('b2b-aging')
-  @Roles(...INVOICING_ROLES)
+  @RequiresCapability('INVOICING_MANAGE')
   @ApiOperation({ summary: 'AC-16: B2B Credit aging/recharge report, bucketed 0-30/31-60/61-90/90+ days past due' })
   @ApiResponse({ status: 200, description: 'Aging buckets and total outstanding' })
   async getB2bAging() {
@@ -53,7 +56,7 @@ export class InvoicingController {
   }
 
   @Get(':id')
-  @Roles(...INVOICING_ROLES)
+  @RequiresCapability('INVOICING_MANAGE')
   @ApiOperation({ summary: 'Get one invoice by id' })
   @ApiResponse({ status: 200, description: 'The invoice' })
   @ApiResponse({ status: 404, description: 'Not found' })
@@ -62,7 +65,7 @@ export class InvoicingController {
   }
 
   @Get(':id/payments')
-  @Roles(...INVOICING_ROLES)
+  @RequiresCapability('INVOICING_MANAGE')
   @ApiOperation({ summary: 'List every payment recorded against this invoice, oldest first' })
   @ApiResponse({ status: 200, description: 'Payment history' })
   @ApiResponse({ status: 404, description: 'Invoice not found' })
@@ -71,7 +74,7 @@ export class InvoicingController {
   }
 
   @Post(':id/record-payment')
-  @Roles(...INVOICING_ROLES)
+  @RequiresCapability('INVOICING_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.PAYMENT_RECORD,

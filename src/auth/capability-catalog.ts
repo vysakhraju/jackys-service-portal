@@ -199,6 +199,34 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.TECHNICIAN_WORKSHOP, RoleName.TECHNICIAN_FIELD],
     migrated: true,
   },
+
+  // --- Delivery --- replaces DELIVERY_ROLES on delivery.controller.ts (2026-09-10).
+  {
+    key: 'DELIVERY_MANAGE',
+    label: 'View, create, dispatch, capture POD for, and cancel deliveries',
+    module: 'Delivery',
+    defaultRoles: [RoleName.LOGISTICS_DISPATCHER, RoleName.DRIVER],
+    migrated: true,
+  },
+
+  // --- Invoicing --- replaces INVOICING_ROLES + getForJobCard()'s wider inline role list
+  // on invoicing.controller.ts (2026-09-10). Recording a payment is deliberately kept on
+  // the narrower INVOICING_MANAGE - the person who hands over the unit (DELIVERY_MANAGE)
+  // is never the person who gets to record that it was paid for.
+  {
+    key: 'INVOICING_MANAGE',
+    label: 'Browse invoices, B2B aging report, payment history, record a payment',
+    module: 'Invoicing',
+    defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
+  {
+    key: 'INVOICING_JOB_CARD_VIEW',
+    label: "Get (or lazily draft) a Job Card's invoice - also needed by Delivery before handover",
+    module: 'Invoicing',
+    defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER, RoleName.LOGISTICS_DISPATCHER, RoleName.DRIVER],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {

@@ -9,17 +9,19 @@ import { DeliveryStatus } from './entities/delivery.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 
-// Plain @Roles() gating, deliberately NOT the admin-assignable PermissionsService grant
-// mechanism Phase 6 introduced for QC/rework - that stays scoped to QC/rework only, per
-// the earlier explicit decision to keep dynamic grants from spreading to every module.
-const DELIVERY_ROLES = ['LOGISTICS_DISPATCHER', 'DRIVER', 'SUPER_ADMIN', 'SERVICE_HEAD'];
+// DELIVERY_ROLES migrated onto the designation permission matrix (2026-09-10) as
+// DELIVERY_MANAGE - see capability-catalog.ts's "Delivery" section, same membership. Still
+// deliberately NOT the admin-assignable PermissionsService grant mechanism Phase 6
+// introduced for QC/rework - that stays scoped to QC/rework only, per the earlier explicit
+// decision to keep dynamic grants from spreading to every module; the designation matrix is
+// the module-wide mechanism, a separate thing from that per-user QC/rework grant system.
 
 @ApiTags('delivery')
 @Controller('delivery')
@@ -29,7 +31,7 @@ export class DeliveryController {
   constructor(private deliveryService: DeliveryService) {}
 
   @Get('ready')
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @ApiQuery({ name: 'warrantyStatus', required: false, enum: WarrantyStatus, description: 'Filter the IW/OOW tabs' })
   @ApiOperation({ summary: 'List QC_PASSED Job Cards not yet attached to a delivery (the ready-for-delivery pool), with proactive OOW payment-status visibility' })
   @ApiResponse({ status: 200, description: 'Ready Job Cards, each with invoiceStatus/payable for OOW jobs' })
@@ -38,7 +40,7 @@ export class DeliveryController {
   }
 
   @Get('job-card/:jobCardId')
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @ApiOperation({ summary: 'Get the delivery a Job Card is attached to, if any' })
   @ApiResponse({ status: 200, description: 'The delivery, or null if this Job Card is not yet attached to one' })
   async findByJobCardId(@Param('jobCardId', ParseUUIDPipe) jobCardId: string) {
@@ -46,7 +48,7 @@ export class DeliveryController {
   }
 
   @Post()
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -63,7 +65,7 @@ export class DeliveryController {
   }
 
   @Get()
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @ApiQuery({ name: 'status', required: false, enum: DeliveryStatus })
   @ApiOperation({ summary: 'List deliveries, optionally filtered by status (POD blob columns excluded - see GET /delivery/:id for those)' })
   @ApiResponse({ status: 200, description: 'Deliveries' })
@@ -72,7 +74,7 @@ export class DeliveryController {
   }
 
   @Get(':id')
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @ApiParam({ name: 'id', type: String })
   @ApiOperation({ summary: 'Get one delivery by id, including POD signature/photo if captured' })
   @ApiResponse({ status: 200, description: 'The delivery' })
@@ -82,7 +84,7 @@ export class DeliveryController {
   }
 
   @Get(':id/job-cards')
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @ApiParam({ name: 'id', type: String })
   @ApiOperation({ summary: 'List the Job Cards attached to one delivery (frontend detail view - the only other primitive is job-card -> delivery, not this direction)' })
   @ApiResponse({ status: 200, description: 'Member Job Cards' })
@@ -92,7 +94,7 @@ export class DeliveryController {
   }
 
   @Post(':id/dispatch')
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.DELIVERY_DISPATCH,
@@ -109,7 +111,7 @@ export class DeliveryController {
   }
 
   @Post(':id/pod')
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.DELIVERY_POD,
@@ -127,7 +129,7 @@ export class DeliveryController {
   }
 
   @Post(':id/cancel')
-  @Roles(...DELIVERY_ROLES)
+  @RequiresCapability('DELIVERY_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CANCEL,
