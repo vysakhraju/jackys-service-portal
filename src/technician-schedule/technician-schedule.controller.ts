@@ -17,14 +17,18 @@ import { AuditAction } from '../auth/entities/audit-log.entity';
 // see capability-catalog.ts's "Technician" section, same membership.
 //
 // Field/workshop scheduling split (2026-09-10): getGanttBoard() below is UNCHANGED and
-// stays live (nothing was removed) - getWorkshopQueue()/getFieldSchedule() are its two
-// successor views, reusing the same TECHNICIAN_SCHEDULE_GANTT capability since it's the
-// same "who plans technician work" audience either way. Note: the business's own framing
-// says "CCE assigns workshop jobs" / "CCE drags to reprioritize field jobs", but the
-// EXISTING WorkshopController assign/reassign actions (reused unchanged by the Workshop
-// Queue's assign action) are gated WORKSHOP_ASSIGN = Team Leader only, not CCE - flagged
-// rather than silently widened. FIELD_SCHEDULE_REORDER (the new drag-reorder action) is
-// deliberately given to CCE + TL both, matching that explicit business framing.
+// stays live (nothing was removed). getWorkshopQueue() reuses the same
+// TECHNICIAN_SCHEDULE_GANTT capability as the Gantt board (same "who plans workshop work"
+// audience - Team Leader). getFieldSchedule() deliberately does NOT reuse
+// TECHNICIAN_SCHEDULE_GANTT (TL-only) - it's gated by FIELD_SCHEDULE_REORDER instead
+// (CCE + TL), so a CCE who's allowed to drag-reorder the board can also actually see it.
+// Gating the view by the same capability as the write it's paired with, rather than by a
+// capability scoped to a different, TL-only board, avoids a self-contradiction where a
+// role could reorder a screen it isn't allowed to load. Note: the business's own framing
+// says "CCE assigns workshop jobs" too, but the EXISTING WorkshopController assign/
+// reassign actions (reused unchanged by the Workshop Queue's assign action) are gated
+// WORKSHOP_ASSIGN = Team Leader only, not CCE - flagged rather than silently widened,
+// same as before.
 
 @ApiTags('technician-schedule')
 @ApiBearerAuth()
@@ -63,7 +67,7 @@ export class TechnicianScheduleController {
   }
 
   @Get('field-schedule')
-  @RequiresCapability('TECHNICIAN_SCHEDULE_GANTT')
+  @RequiresCapability('FIELD_SCHEDULE_REORDER')
   @ApiOperation({ summary: 'Field Technician Schedule board (2026-09-10): per-technician appointment list for one day, ordered by priority (drag-reordered) then time, plus the unassigned-appointment pool' })
   @ApiQuery({ name: 'date', required: true, example: '2026-09-09', description: 'YYYY-MM-DD' })
   async getFieldSchedule(@Query('date') date: string) {

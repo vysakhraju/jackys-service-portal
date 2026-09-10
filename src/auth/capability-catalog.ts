@@ -334,14 +334,14 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
   },
   {
     key: 'TECHNICIAN_SCHEDULE_GANTT',
-    label: 'View a technician planning board - the original combined Gantt, or its two split successors (Workshop Queue, Field Technician Schedule)',
+    label: 'View the original combined Gantt board, or its Workshop Queue split successor (Field Technician Schedule moved to FIELD_SCHEDULE_REORDER - see that entry)',
     module: 'Technician',
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
     migrated: true,
   },
   {
     key: 'FIELD_SCHEDULE_REORDER',
-    label: 'Drag-reorder a field technician\'s day on the Field Technician Schedule board (priority only, never the promised appointment time)',
+    label: 'View the Field Technician Schedule board and drag-reorder a field technician\'s day on it (priority only, never the promised appointment time) - one capability for both, since anyone who can reorder a day can see it',
     module: 'Technician',
     defaultRoles: [RoleName.CCE, RoleName.TECHNICAL_TEAM_LEADER],
     migrated: true,
