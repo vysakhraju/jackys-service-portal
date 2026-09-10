@@ -562,6 +562,13 @@ export class AppointmentsService {
     return conflicts === 0;
   }
 
+  // Sort order: priorityOrder ASC first (Postgres's default ASC-NULLS-LAST means an
+  // appointment nobody has ever drag-reordered just falls through to the scheduledAt
+  // tiebreaker, unchanged from before the field-scheduling split), scheduledAt ASC second.
+  // This IS "what shows in the mobile app" for a field technician - TechnicianService.
+  // getMySchedule() calls straight through to this method, so a CCE reorder on the Field
+  // Technician Schedule board (reorderTechnicianSchedule() below) is reflected here with no
+  // separate mobile-side change needed.
   async getTechnicianSchedule(technicianId: string, date: Date): Promise<Appointment[]> {
     const start = new Date(date);
     start.setHours(0, 0, 0, 0);
@@ -575,8 +582,61 @@ export class AppointmentsService {
         status: In([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED, AppointmentStatus.ON_SITE]),
       },
       relations: { serviceCentre: true },
-      order: { scheduledAt: 'ASC' },
+      order: { priorityOrder: 'ASC', scheduledAt: 'ASC' },
     });
+  }
+
+  /**
+   * Field/workshop technician scheduling split (2026-09-10): a CCE drag-reorder on the
+   * Field Technician Schedule board. Sets priorityOrder = array index for every id in
+   * orderedAppointmentIds, and ONLY priorityOrder - scheduledAt/technicianId are never
+   * touched here, per the business's own decision that reprioritizing the mobile app's
+   * order is independent of the customer's actual promised appointment time. Reassigning an
+   * appointment to a DIFFERENT technician is a separate, already-existing action
+   * (assignTechnician()/update()'s own technicianId path, with its own availability check) -
+   * this method only reorders within one technician's own list, so it deliberately does not
+   * re-run checkTechnicianAvailability() at all (no time or technician is changing).
+   *
+   * orderedAppointmentIds must be exactly that technician's own current active-status
+   * appointments for today or later - not just "any ids that happen to belong to them" -
+   * so a stale/partial client-side list can never silently drop an appointment out of
+   * order by omitting it. Every change is audit-logged by the controller's @Audit()
+   * decorator (FIELD_SCHEDULE_REORDER), per the business's explicit "every CCE
+   * drag-and-drop update must be logged in the DB" requirement.
+   */
+  async reorderTechnicianSchedule(technicianId: string, orderedAppointmentIds: string[]): Promise<Appointment[]> {
+    if (orderedAppointmentIds.length === 0) {
+      throw new BadRequestException('orderedAppointmentIds cannot be empty.');
+    }
+    const uniqueIds = new Set(orderedAppointmentIds);
+    if (uniqueIds.size !== orderedAppointmentIds.length) {
+      throw new BadRequestException('orderedAppointmentIds contains duplicate ids.');
+    }
+
+    const current = await this.appointmentRepository.find({
+      where: {
+        technicianId,
+        status: In([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED, AppointmentStatus.ON_SITE]),
+      },
+    });
+    const currentIds = new Set(current.map((a) => a.id));
+
+    if (currentIds.size !== uniqueIds.size || ![...currentIds].every((id) => uniqueIds.has(id))) {
+      throw new BadRequestException(
+        'orderedAppointmentIds must contain exactly this technician\'s current active appointments (no missing, extra, or foreign ids).',
+      );
+    }
+
+    await Promise.all(
+      orderedAppointmentIds.map((id, index) => this.appointmentRepository.update({ id }, { priorityOrder: index })),
+    );
+
+    const reordered = await this.appointmentRepository.find({
+      where: { id: In(orderedAppointmentIds) },
+      relations: { serviceCentre: true },
+      order: { priorityOrder: 'ASC' },
+    });
+    return reordered;
   }
 
   async getServiceCentreSchedule(serviceCentreId: string, date: Date): Promise<Appointment[]> {

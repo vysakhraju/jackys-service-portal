@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import { Injectable, Logger, BadRequestException, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, Not, In } from 'typeorm';
 import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { JobCardTaskPause, TaskPauseReason } from './entities/job-card-task-pause.entity';
 import { JobCardCrewHelper } from './entities/job-card-crew-helper.entity';
@@ -796,6 +796,30 @@ export class JobCardsService {
         assignedWorkshopTechnicianId: IsNull(),
       },
       order: { createdAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Workshop Queue board (2026-09-10, field/workshop scheduling split): every currently-
+   * assigned WORKSHOP Job Card a technician is actively holding - WORKSHOP_ASSIGNED (not
+   * started yet) through SPARE_PENDING (started, blocked on stock). Deliberately excludes
+   * READY_FOR_QC and later - once a job leaves the technician's hands for QC sign-off, it's
+   * no longer occupying their queue, the same "workshop-occupancy window" boundary
+   * findWorkshopScheduleForDate above already uses (there, qcApprovedAt closes the window;
+   * here, reaching READY_FOR_QC does, since qcApprovedAt isn't set yet at that point).
+   *
+   * No date scoping at all, unlike findWorkshopScheduleForDate - this is the whole point of
+   * the split: a workshop technician has no time-of-day slots, only a standing backlog
+   * ordered FIFO by workshopAssignedAt. A job that's carried forward past today is still
+   * exactly as "in the queue" as one assigned five minutes ago.
+   */
+  async findActiveWorkshopQueue(): Promise<JobCard[]> {
+    return this.jobCardRepository.find({
+      where: {
+        assignedWorkshopTechnicianId: Not(IsNull()),
+        status: In([JobCardStatus.WORKSHOP_ASSIGNED, JobCardStatus.IN_PROGRESS, JobCardStatus.SPARE_PENDING]),
+      },
+      order: { workshopAssignedAt: 'ASC' },
     });
   }
 }

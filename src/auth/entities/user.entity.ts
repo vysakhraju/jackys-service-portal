@@ -64,6 +64,18 @@ export class User {
   @Column({ type: 'uuid' })
   roleId: string;
 
+  // Field/workshop technician scheduling split (2026-09-10): only meaningful for a
+  // TECHNICIAN_WORKSHOP user - a planning-visibility number CCE/TL set per technician for
+  // the Workshop Queue board, NOT an enforced cap. Per the business's own decision, a unit
+  // that physically arrives at capacity still gets accepted and queues (FIFO via
+  // JobCard.workshopAssignedAt) - this column only drives the queue's over/under-capacity
+  // gauge, it never blocks WorkshopService.assign()/reassign(). Defaults to 6, the same
+  // number appointment-scheduling-grid.util.ts's DAILY_TECHNICIAN_APPOINTMENT_CAP already
+  // uses for field technicians, for a consistent "6 open jobs" mental model across both
+  // technician types even though the two caps mean different things (hard cap vs. gauge).
+  @Column({ type: 'int', default: 6 })
+  workshopDailyCapacity: number;
+
   @OneToMany(() => AuditLog, (audit) => audit.user)
   auditLogs: AuditLog[];
 

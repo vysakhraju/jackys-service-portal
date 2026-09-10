@@ -3,7 +3,7 @@ import { JobCardsService } from './job-cards.service';
 import { JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { TaskPauseReason } from './entities/job-card-task-pause.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
-import { IsNull } from 'typeorm';
+import { IsNull, Not, In } from 'typeorm';
 
 describe('JobCardsService', () => {
   let service: JobCardsService;
@@ -1172,6 +1172,20 @@ describe('JobCardsService', () => {
           assignedWorkshopTechnicianId: IsNull(),
         },
         order: { createdAt: 'ASC' },
+      });
+    });
+  });
+
+  describe('findActiveWorkshopQueue (field/workshop scheduling split, 2026-09-10)', () => {
+    it('queries assigned Job Cards still in an active workshop status, FIFO by workshopAssignedAt', async () => {
+      await service.findActiveWorkshopQueue();
+
+      expect(jobCardRepository.find).toHaveBeenCalledWith({
+        where: {
+          assignedWorkshopTechnicianId: Not(IsNull()),
+          status: In([JobCardStatus.WORKSHOP_ASSIGNED, JobCardStatus.IN_PROGRESS, JobCardStatus.SPARE_PENDING]),
+        },
+        order: { workshopAssignedAt: 'ASC' },
       });
     });
   });

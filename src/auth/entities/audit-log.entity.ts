@@ -40,6 +40,8 @@ export enum AuditAction {
   ROLE_ACCESS_REVOKE = 'ROLE_ACCESS_REVOKE',
   // Designation permission matrix (2026-09-10)
   ROLE_CAPABILITIES_UPDATE = 'ROLE_CAPABILITIES_UPDATE',
+  // Field/workshop technician scheduling split (2026-09-10)
+  FIELD_SCHEDULE_REORDER = 'FIELD_SCHEDULE_REORDER',
 }
 
 @Entity('audit_logs')

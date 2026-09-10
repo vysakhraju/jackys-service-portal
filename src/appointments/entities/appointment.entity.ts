@@ -153,6 +153,17 @@ export class Appointment {
   @Column({ nullable: true })
   estimatedDurationMinutes: number;
 
+  // Field technician scheduling split (2026-09-10): a CCE drag-reorder on the Field
+  // Technician Schedule board changes ONLY this column, never scheduledAt - per the
+  // business's own decision, reprioritizing what a field technician sees in their mobile
+  // app is deliberately independent of the customer's actual promised appointment time.
+  // Null (the default, for every appointment created before this column existed and every
+  // appointment nobody has manually reordered yet) sorts last under Postgres's own ASC-
+  // NULLS-LAST default, so getTechnicianSchedule() falls back to scheduledAt ordering
+  // exactly as before until a CCE actually reorders that technician's day.
+  @Column({ type: 'int', nullable: true })
+  priorityOrder: number | null;
+
   @Column({ nullable: true })
   actualStartAt: Date;
 

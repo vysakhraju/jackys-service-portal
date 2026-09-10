@@ -84,6 +84,7 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'ESTIMATE_MANAGE', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'CCE'] },
   { key: 'ESTIMATE_RECORD_RESPONSE', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'CCE'] },
   { key: 'CREDIT_NOTE_POST', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
+  { key: 'FIELD_SCHEDULE_REORDER', defaultRoles: ['CCE', 'TECHNICAL_TEAM_LEADER'] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

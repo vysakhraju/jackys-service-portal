@@ -54,6 +54,7 @@ describe('AppointmentsService', () => {
       save: jest.fn((data: any) => Promise.resolve({ ...data, id: data.id || 'apt-1' })),
       findOne: jest.fn(),
       find: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     serviceCentreRepository = { findOne: jest.fn() };
     userRepository = { findOne: jest.fn(), find: jest.fn() };
@@ -789,7 +790,7 @@ describe('AppointmentsService', () => {
         expect.objectContaining({
           where: expect.objectContaining({ technicianId: 'tech-1' }),
           relations: { serviceCentre: true },
-          order: { scheduledAt: 'ASC' },
+          order: { priorityOrder: 'ASC', scheduledAt: 'ASC' },
         }),
       );
       expect(result).toEqual([appointment()]);
@@ -808,6 +809,56 @@ describe('AppointmentsService', () => {
         }),
       );
       expect(result).toEqual([appointment()]);
+    });
+  });
+
+  describe('reorderTechnicianSchedule (field/workshop scheduling split, 2026-09-10)', () => {
+    const active = (id: string) => appointment({ id, status: AppointmentStatus.CONFIRMED, technicianId: 'tech-1' });
+
+    it('sets priorityOrder = array index for each id, in the given order', async () => {
+      appointmentRepository.find
+        .mockResolvedValueOnce([active('a'), active('b'), active('c')]) // current active set
+        .mockResolvedValueOnce([active('c'), active('a'), active('b')]); // re-fetch after update (already reordered)
+
+      const result = await service.reorderTechnicianSchedule('tech-1', ['c', 'a', 'b']);
+
+      expect(appointmentRepository.update).toHaveBeenCalledWith({ id: 'c' }, { priorityOrder: 0 });
+      expect(appointmentRepository.update).toHaveBeenCalledWith({ id: 'a' }, { priorityOrder: 1 });
+      expect(appointmentRepository.update).toHaveBeenCalledWith({ id: 'b' }, { priorityOrder: 2 });
+      expect(result.map((a: any) => a.id)).toEqual(['c', 'a', 'b']);
+    });
+
+    it('rejects an empty list', async () => {
+      await expect(service.reorderTechnicianSchedule('tech-1', [])).rejects.toThrow(BadRequestException);
+      expect(appointmentRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a list with duplicate ids', async () => {
+      await expect(service.reorderTechnicianSchedule('tech-1', ['a', 'a'])).rejects.toThrow(BadRequestException);
+      expect(appointmentRepository.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects a list missing one of the technician's current active appointments", async () => {
+      appointmentRepository.find.mockResolvedValueOnce([active('a'), active('b')]);
+
+      await expect(service.reorderTechnicianSchedule('tech-1', ['a'])).rejects.toThrow(BadRequestException);
+      expect(appointmentRepository.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects a list containing an id that is not this technician's current active appointment", async () => {
+      appointmentRepository.find.mockResolvedValueOnce([active('a')]);
+
+      await expect(service.reorderTechnicianSchedule('tech-1', ['a', 'foreign-id'])).rejects.toThrow(BadRequestException);
+      expect(appointmentRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('never touches scheduledAt or technicianId - only priorityOrder', async () => {
+      appointmentRepository.find.mockResolvedValueOnce([active('a')]).mockResolvedValueOnce([active('a')]);
+
+      await service.reorderTechnicianSchedule('tech-1', ['a']);
+
+      expect(appointmentRepository.update).toHaveBeenCalledWith({ id: 'a' }, { priorityOrder: 0 });
+      expect(appointmentRepository.update).toHaveBeenCalledTimes(1);
     });
   });
 
