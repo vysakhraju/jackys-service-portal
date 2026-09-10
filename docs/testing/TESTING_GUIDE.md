@@ -2927,6 +2927,69 @@ working non-admin login:
 
 ---
 
+## 36. Frontend — Workshop Queue + Field Technician Schedule split (2026-09-10)
+
+Two new pages pulled out of the old **Technician Assignment Board** (Sections 19b/35b) -
+that board is completely untouched and still there, but for day-to-day scheduling you'll
+likely use these two more instead, since each is built for how that half of the job
+actually works.
+
+**a. Workshop Queue** (`/technician-schedule/workshop-queue`, nav item **Workshop
+Queue**): sign in as `admin@jackys.com` / `Admin123!` (or a Team Leader login), open the
+page - one card per active workshop technician, no times anywhere. Each card lists that
+technician's actively-assigned Job Cards **oldest first** (`#1` is next up), a capacity
+bar, and (Team Leader/Service Head/Super Admin only) an **Edit capacity** button.
+  - **Prove the capacity gauge never blocks anything**: pick a technician, click **Edit
+    capacity**, set it to a number lower than their current active job count, **Save**.
+    The bar turns red and a "over capacity, queuing as backlog" message appears - but
+    every job card is still listed, nothing is hidden or greyed out. This is the point:
+    capacity here is a planning signal, not a hard stop, per how the business actually
+    wants overflow handled.
+  - To actually assign a new Job Card to a workshop technician (first assignment or
+    reassignment), use the **Assign on the Assignment Board →** link at the top - that
+    part hasn't moved.
+  - A non-Team-Leader login (e.g. a QC Officer) should see the same cards but no **Edit
+    capacity** button anywhere - capacity editing is gated the same way workshop
+    assignment always has been.
+
+**b. Field Technician Schedule** (`/technician-schedule/field-schedule`, nav item
+**Field Technician Schedule**): open the page, pick a date - one card per active field
+technician, appointments listed top-to-bottom in priority order (`#1` first). **Drag a
+job up or down within the same technician's card** to reprioritize it - drop it above or
+below another job in that same list. The list reorders immediately and saves
+automatically (no Save button) - refresh the page and the new order should still be
+there.
+  - **Prove the promised time never moves**: note an appointment's time (e.g. "9:00 AM")
+    before dragging it to a different position in its technician's list, then check it
+    again after - the time shown next to it should be completely unchanged. Only the `#`
+    position changes.
+  - **Prove it's logged**: after a reorder, check `audit_logs` (or however you inspect
+    that table) for a fresh `FIELD_SCHEDULE_REORDER` row - every drag writes one,
+    automatically, no extra step needed to trigger it.
+  - Dragging a job from one technician's card onto a *different* technician's card does
+    nothing (by design - moving an appointment to a different technician is still the
+    Assignment Board's job, not this page's).
+  - Sign in as a **CCE** and confirm the page loads and drag-reorder works for them too,
+    not just Team Leader/admin - this was a real gap found and fixed the same day it was
+    built (see `claude/STATUS_TRACKER.md`), so it's worth actually re-confirming with a
+    CCE login rather than taking it on faith.
+
+**c. Automated tests**: `npm run test:backend` (from the repo root) and `npm test`
+(inside `frontend/`) both cover this - 25 new backend tests (`technician-schedule.
+service.spec.ts`) and 17 new frontend tests (`technicianScheduleApi.test.ts`,
+`WorkshopQueuePage.test.tsx`, `FieldSchedulePage.test.tsx`, including a real
+drag-and-drop simulation and a "cross-technician drop is ignored" case). 955/955 backend,
+553/555 frontend (2 pre-existing, unrelated failures in `TechnicianGanttPage.test.tsx` -
+a hardcoded fixture date now behind today's real date, nothing to do with this feature).
+
+**d. After you pull this**: run `npm run seed:role-permissions` once more to backfill
+the new `FIELD_SCHEDULE_REORDER` capability (CCE + Team Leader) for existing role
+holders - without it, everyone currently holding those roles keeps working exactly as
+before (the seed is additive, never removes anything), they just won't have this new
+capability granted until the script runs.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What it means | Fix |
@@ -2973,9 +3036,12 @@ Finance + Customer Portal (Section 26), AMC Management (Section 27), Dismantling
 Postings within Section 26, the Schedule tab's dashboard-stats widget, the POD
 signature pad, the User Management and Extra Role Access screens (Sections 32-33), and
 today's New Appointment chip grid + Technician Assignment Board fixes + Service Centre
-field-technician assignment (Section 35)) - all 12 frontend phases are built, plus
-this session's admin-capability additions, and all are test-covered (512/512 automated
-frontend tests as of today, run isolated ahead of each device merge). Sections 18-29 are all live-verified against
+field-technician assignment (Section 35), and the Workshop Queue + Field Technician
+Schedule split (Section 36)) - all 12 frontend phases are built, plus this session's
+admin-capability additions, and all are test-covered (553/555 automated frontend tests
+as of today - the 2 failures are a pre-existing, unrelated date-rollover flake in
+`TechnicianGanttPage.test.tsx`, see Section 36c - run isolated ahead of each device
+merge). Sections 18-29 are all live-verified against
 the real backend (Section 26's `verify-phase9.ps1` run: 143/143 checks passed, 0 failed;
 Section 27's `verify-phase10.ps1` run: 66/66 checks passed, 0 failed; Section 28's
 `verify-phase11.ps1` run: 51/51 checks passed, 0 failed; Section 29's `verify-phase12.ps1`
