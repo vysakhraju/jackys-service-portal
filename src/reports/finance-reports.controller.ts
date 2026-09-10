@@ -3,20 +3,23 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@ne
 import { FinanceReportsService } from './finance-reports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 
 // BRD 18.2 Finance Dashboard audience. Narrower group than 18.1's Service Manager board -
 // Finance-specific data should not be reachable by SERVICE_HEAD/TECHNICAL_TEAM_LEADER
 // alone without also being Finance staff, but SERVICE_HEAD/SUPER_ADMIN are included per
 // this app's "a manager can also see what their team sees" precedent (matches
-// WarrantyClaimsController's VIEW_ROLES for the credit-note-adjacent Warranty section).
-const VIEW_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
+// WarrantyClaimsController's VIEW_ROLES for the credit-note-adjacent Warranty section -
+// note this is the READ-only report, not WarrantyClaimsController's own deliberately-
+// unmigrated CREDIT_NOTE_ROLES write action).
+// VIEW_ROLES migrated onto the designation permission matrix (2026-09-10) as
+// REPORTS_FINANCE_VIEW - see capability-catalog.ts's "Reports" section, same membership.
 
 @ApiTags('reports-finance')
 @Controller('reports/finance')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth('JWT-auth')
-@Roles(...VIEW_ROLES)
+@RequiresCapability('REPORTS_FINANCE_VIEW')
 export class FinanceReportsController {
   constructor(private financeReportsService: FinanceReportsService) {}
 

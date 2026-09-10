@@ -280,6 +280,38 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.WARRANTY_CLERK, RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
     migrated: true,
   },
+
+  // --- Reports --- replaces each reports/*.controller.ts's own class-level VIEW_ROLES
+  // (2026-09-10). Four separate dashboards, four separate capabilities - same reasoning as
+  // every other module here: each audience is genuinely different today.
+  {
+    key: 'REPORTS_DASHBOARD_VIEW',
+    label: 'BRD 18.1 Service Manager Dashboard (Kanban, approval aging, efficiency, overview)',
+    module: 'Reports',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'REPORTS_OPERATIONAL_VIEW',
+    label: 'BRD 18.4 Operational Reports (productivity, SLA breach, parts consumption)',
+    module: 'Reports',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'REPORTS_QUALITY_VIEW',
+    label: 'BRD 18.3 Quality Reports (product failure, repeat complaints, RWR analysis)',
+    module: 'Reports',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'REPORTS_FINANCE_VIEW',
+    label: 'BRD 18.2 Finance Dashboard (revenue/profit summary, aging, GP by centre)',
+    module: 'Reports',
+    defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {

@@ -3,19 +3,21 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 
 // BRD 18.1 "Service Manager Dashboard" audience. The BRD's other three dashboards -
 // 18.2 Finance, 18.3 Quality/Product, 18.4 Operational Reports - are explicitly out of
 // scope for this phase (see STATUS_TRACKER's Phase 11 write-up); ACCOUNTANT/
 // FINANCE_MANAGER therefore have no reason to see this particular board.
-const VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER'];
+//
+// VIEW_ROLES migrated onto the designation permission matrix (2026-09-10) as
+// REPORTS_DASHBOARD_VIEW - see capability-catalog.ts's "Reports" section, same membership.
 
 @ApiTags('reports')
 @Controller('reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth('JWT-auth')
-@Roles(...VIEW_ROLES)
+@RequiresCapability('REPORTS_DASHBOARD_VIEW')
 export class ReportsController {
   constructor(private reportsService: ReportsService) {}
 

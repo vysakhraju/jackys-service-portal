@@ -3,16 +3,17 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@ne
 import { OperationalReportsService } from './operational-reports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 
 // Same audience as 18.3 - no dedicated Operations role exists in RoleName either.
-const VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER'];
+// VIEW_ROLES migrated onto the designation permission matrix (2026-09-10) as
+// REPORTS_OPERATIONAL_VIEW - see capability-catalog.ts's "Reports" section, same membership.
 
 @ApiTags('reports-operational')
 @Controller('reports/operational')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth('JWT-auth')
-@Roles(...VIEW_ROLES)
+@RequiresCapability('REPORTS_OPERATIONAL_VIEW')
 export class OperationalReportsController {
   constructor(private operationalReportsService: OperationalReportsService) {}
 

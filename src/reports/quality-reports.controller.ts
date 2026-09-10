@@ -3,18 +3,19 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@ne
 import { QualityReportsService } from './quality-reports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 
 // BRD 18.3 audience. No dedicated Quality/Product role exists in RoleName (same finding
 // as AMC/Dismantling phases) - Service Head / Team Leader / Super Admin cover it, matching
 // 18.1's own VIEW_ROLES exactly (this is the same operational-leadership audience).
-const VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER'];
+// VIEW_ROLES migrated onto the designation permission matrix (2026-09-10) as
+// REPORTS_QUALITY_VIEW - see capability-catalog.ts's "Reports" section, same membership.
 
 @ApiTags('reports-quality')
 @Controller('reports/quality')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth('JWT-auth')
-@Roles(...VIEW_ROLES)
+@RequiresCapability('REPORTS_QUALITY_VIEW')
 export class QualityReportsController {
   constructor(private qualityReportsService: QualityReportsService) {}
 
