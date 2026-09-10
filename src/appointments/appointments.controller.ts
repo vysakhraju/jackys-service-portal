@@ -22,6 +22,7 @@ import { ResolveMapLinkDto } from './dto/resolve-map-link.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -38,7 +39,7 @@ export class AppointmentsController {
   constructor(private appointmentsService: AppointmentsService) {}
 
   @Post()
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE')
+  @RequiresCapability('SCHEDULE_CCE_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -100,7 +101,7 @@ export class AppointmentsController {
   }
 
   @Post('resolve-map-link')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE')
+  @RequiresCapability('SCHEDULE_CCE_MANAGE')
   @ApiOperation({ summary: 'Resolve a Google Maps short link to { lat, lng } - does not create or modify anything' })
   @ApiResponse({ status: 200, description: '{ lat: number, lng: number }' })
   @ApiResponse({ status: 400, description: 'Not a resolvable Google Maps link' })
@@ -109,7 +110,7 @@ export class AppointmentsController {
   }
 
   @Get('dashboard/stats')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE')
+  @RequiresCapability('SCHEDULE_VIEW_UPDATE')
   @ApiOperation({ summary: 'Get dashboard statistics' })
   @ApiQuery({ name: 'serviceCentreId', required: false, type: String })
   @ApiResponse({ status: 200 })
@@ -118,7 +119,7 @@ export class AppointmentsController {
   }
 
   @Get('scheduling-grid')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE')
+  @RequiresCapability('SCHEDULE_CCE_MANAGE')
   @ApiOperation({ summary: 'Get the New Appointment scheduling grid (per-technician 15-minute slot availability) for a service centre + date' })
   @ApiQuery({ name: 'serviceCentreId', required: true, type: String })
   @ApiQuery({ name: 'date', required: true, type: String, description: 'YYYY-MM-DD' })
@@ -171,7 +172,7 @@ export class AppointmentsController {
   }
 
   @Put(':id')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE', 'TECHNICAL_TEAM_LEADER')
+  @RequiresCapability('SCHEDULE_VIEW_UPDATE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -193,7 +194,7 @@ export class AppointmentsController {
   }
 
   @Put(':id/cancel')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE')
+  @RequiresCapability('SCHEDULE_CCE_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CANCEL,
@@ -214,7 +215,7 @@ export class AppointmentsController {
   }
 
   @Put(':id/assign-technician')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER')
+  @RequiresCapability('SCHEDULE_ASSIGN_TECHNICIAN')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -236,7 +237,7 @@ export class AppointmentsController {
   }
 
   @Put(':id/confirm')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE')
+  @RequiresCapability('SCHEDULE_CCE_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -256,7 +257,7 @@ export class AppointmentsController {
   }
 
   @Put(':id/on-site')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'TECHNICIAN_FIELD')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -276,7 +277,7 @@ export class AppointmentsController {
   }
 
   @Put(':id/complete')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'TECHNICIAN_FIELD')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,

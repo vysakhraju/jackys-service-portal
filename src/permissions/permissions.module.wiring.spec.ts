@@ -11,6 +11,7 @@ import { User } from '../auth/entities/user.entity';
 import { Role } from '../auth/entities/role.entity';
 import { AuditLog } from '../auth/entities/audit-log.entity';
 import { RoleAccessGrant } from '../auth/entities/role-access-grant.entity';
+import { RolePermission } from '../auth/entities/role-permission.entity';
 import { UserPermissionGrant } from './entities/user-permission-grant.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { JobCard } from '../job-cards/entities/job-card.entity';
@@ -41,6 +42,8 @@ describe('PermissionsModule wiring', () => {
       .overrideProvider(getRepositoryToken(AuditLog))
       .useValue(mockRepo)
       .overrideProvider(getRepositoryToken(RoleAccessGrant))
+      .useValue(mockRepo)
+      .overrideProvider(getRepositoryToken(RolePermission))
       .useValue(mockRepo)
       .overrideProvider(getRepositoryToken(UserPermissionGrant))
       .useValue(mockRepo)

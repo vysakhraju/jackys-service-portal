@@ -13,6 +13,7 @@ import { JobCard } from './entities/job-card.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -29,14 +30,15 @@ import { RequiresPermissionGrant } from '../permissions/decorators/requires-perm
 const JOB_CARD_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
 // FR-17: only a Technical Team Leader (or above) may perform a warranty override.
 const WARRANTY_OVERRIDE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
-// Phase 6 QC gate: deliberately NOT a fixed @Roles() list. Anyone can be admin-assigned
-// the QC_APPROVAL grant (QC_OFFICER, a Team Leader, a Supervisor, a CCE - whoever the
-// business actually wants) via PermissionsController. These roles are only the "can even
-// be considered for this action at all" floor (excludes pure field/workshop technicians
-// by default) - the REAL check is the requireActiveGrant() call inside each handler
-// below, which is what makes this "each and every activity ... assigned to role based if
-// needed" per the user's own requirement.
-const QC_GATE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE', 'QC_OFFICER'];
+// Phase 6 QC gate: deliberately NOT a fixed @Roles() list (now the QC_GATE_ACCESS
+// capability - see capability-catalog.ts, same membership: TECHNICAL_TEAM_LEADER, CCE,
+// QC_OFFICER, plus SUPER_ADMIN/SERVICE_HEAD via RolesGuard's hardcoded bypass). Anyone can
+// be admin-assigned the QC_APPROVAL grant (QC_OFFICER, a Team Leader, a Supervisor, a CCE -
+// whoever the business actually wants) via PermissionsController. This capability is only
+// the "can even be considered for this action at all" floor (excludes pure field/workshop
+// technicians by default) - the REAL check is the requireActiveGrant() call inside each
+// handler below, which is what makes this "each and every activity ... assigned to role
+// based if needed" per the user's own requirement.
 // Task-timer pause/resume: office roles plus whichever technician is actually doing the
 // work (field or workshop) - ownership is then enforced inside the service itself
 // (assertTaskPauseOwnership), same "@Roles is only the floor" pattern as
@@ -168,11 +170,12 @@ export class JobCardsController {
   // --- Phase 6: QC gate ---------------------------------------------------------------
   // Every job freezes at READY_FOR_QC until one of these two endpoints is called. Both
   // require the caller to hold an active QC_APPROVAL grant (PermissionsService) -
-  // completely independent of their primary @Roles() - see QC_GATE_ROLES above for why
-  // that role list is only a floor, not the real gate.
+  // completely independent of their eligibility floor - see QC_GATE_ROLES above (now
+  // migrated to the QC_GATE_ACCESS capability, same membership) for why that floor is
+  // only that - a floor, not the real gate.
 
   @Post(':id/qc/approve')
-  @Roles(...QC_GATE_ROLES)
+  @RequiresCapability('QC_GATE_ACCESS')
   @RequiresPermissionGrant(PermissionType.QC_APPROVAL)
   @UseInterceptors(AuditInterceptor)
   @Audit({
@@ -193,7 +196,7 @@ export class JobCardsController {
   }
 
   @Post(':id/qc/reject')
-  @Roles(...QC_GATE_ROLES)
+  @RequiresCapability('QC_GATE_ACCESS')
   @RequiresPermissionGrant(PermissionType.QC_APPROVAL)
   @UseInterceptors(AuditInterceptor)
   @Audit({

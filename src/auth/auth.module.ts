@@ -13,6 +13,8 @@ import { AuditLog } from './entities/audit-log.entity';
 import { RolesGuard } from './guards/roles.guard';
 import { RoleAccessService } from './role-access.service';
 import { RoleAccessGrant } from './entities/role-access-grant.entity';
+import { RolePermissionsService } from './role-permissions.service';
+import { RolePermission } from './entities/role-permission.entity';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { JobCard } from '../job-cards/entities/job-card.entity';
@@ -30,7 +32,10 @@ import { InventoryReservation } from '../inventory/entities/inventory-reservatio
     // one of those controllers' modules needing to import a separate module for it. Every
     // module that already imports AuthModule (virtually all of them, for AuditInterceptor)
     // gets this for free.
-    TypeOrmModule.forFeature([User, Role, AuditLog, Appointment, JobCard, InventoryReservation, RoleAccessGrant]),
+    // RolePermission registered alongside RoleAccessGrant for the exact same reason (see
+    // comment above): RolesGuard needs RolePermissionsService for the designation
+    // permission matrix, and every module that already imports AuthModule gets it for free.
+    TypeOrmModule.forFeature([User, Role, AuditLog, Appointment, JobCard, InventoryReservation, RoleAccessGrant, RolePermission]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -54,8 +59,9 @@ import { InventoryReservation } from '../inventory/entities/inventory-reservatio
     RefreshStrategy,
     RolesGuard,
     RoleAccessService,
+    RolePermissionsService,
     AuditInterceptor,
   ],
-  exports: [AuthService, JwtModule, RolesGuard, RoleAccessService, AuditInterceptor],
+  exports: [AuthService, JwtModule, RolesGuard, RoleAccessService, RolePermissionsService, AuditInterceptor],
 })
 export class AuthModule {}

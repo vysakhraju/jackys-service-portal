@@ -30,6 +30,7 @@ import { Payment } from '../invoicing/entities/payment.entity';
 import { Delivery } from '../delivery/entities/delivery.entity';
 import { Role } from '../auth/entities/role.entity';
 import { RoleAccessGrant } from '../auth/entities/role-access-grant.entity';
+import { RolePermission } from '../auth/entities/role-permission.entity';
 import { FaultSymptom } from '../master-data/entities/fault-symptom.entity';
 import { SparePartModel } from '../master-data/entities/spare-part-model.entity';
 import { ServicePriceList } from '../master-data/entities/service-price-list.entity';
@@ -91,6 +92,7 @@ describe('JobCardJourneyModule wiring', () => {
       Delivery,
       Role,
       RoleAccessGrant,
+      RolePermission,
       FaultSymptom,
       SparePartModel,
       ServicePriceList,

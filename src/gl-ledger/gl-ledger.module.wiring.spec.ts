@@ -8,6 +8,7 @@ import { User } from '../auth/entities/user.entity';
 import { Role } from '../auth/entities/role.entity';
 import { AuditLog } from '../auth/entities/audit-log.entity';
 import { RoleAccessGrant } from '../auth/entities/role-access-grant.entity';
+import { RolePermission } from '../auth/entities/role-permission.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { JobCard } from '../job-cards/entities/job-card.entity';
 import { InventoryReservation } from '../inventory/entities/inventory-reservation.entity';
@@ -42,6 +43,8 @@ describe('GlLedgerModule wiring', () => {
       .overrideProvider(getRepositoryToken(AuditLog))
       .useValue(mockRepo)
       .overrideProvider(getRepositoryToken(RoleAccessGrant))
+      .useValue(mockRepo)
+      .overrideProvider(getRepositoryToken(RolePermission))
       .useValue(mockRepo)
       .overrideProvider(getRepositoryToken(Appointment))
       .useValue(mockRepo)
