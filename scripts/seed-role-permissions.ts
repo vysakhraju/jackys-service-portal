@@ -81,6 +81,8 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'MASTER_DATA_WARRANTY_MASTER_MANAGE', defaultRoles: ['WARRANTY_CLERK'] },
   { key: 'MASTER_DATA_COMPONENT_YIELD_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_BULK_IMPORT', defaultRoles: [] },
+  { key: 'ESTIMATE_MANAGE', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'CCE'] },
+  { key: 'ESTIMATE_RECORD_RESPONSE', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'CCE'] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

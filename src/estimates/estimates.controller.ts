@@ -8,7 +8,7 @@ import { ReviseEstimateDto } from './dto/revise-estimate.dto';
 import { Estimate } from './entities/estimate.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -16,15 +16,15 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 
 // General Estimate management (create/send/revise/view): same office-side role set used
-// across Appointments/Job Cards.
-const ESTIMATE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
+// across Appointments/Job Cards. Migrated onto the designation permission matrix
+// (2026-09-10) as ESTIMATE_MANAGE - see capability-catalog.ts's "Estimates" section.
+//
 // Who may record a customer's decision on the customer's behalf (phone/WhatsApp/email
-// call, not the self-service link). Deliberately a SEPARATE constant from ESTIMATE_ROLES
-// (and from Job Cards' own role lists) so the business can extend who's allowed to take
+// call, not the self-service link). Deliberately a SEPARATE capability from ESTIMATE_MANAGE
+// (and from Job Cards' own capabilities) so the business can extend who's allowed to take
 // approval calls - e.g. adding a dedicated "Estimate Desk" role later - without touching
-// unrelated permission sets. Still a plain TS constant for this MVP (no admin UI to edit
-// roles yet); that's a documented future step, not a design gap in this endpoint.
-const ESTIMATE_APPROVAL_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
+// unrelated permission sets. Migrated (2026-09-10) as ESTIMATE_RECORD_RESPONSE - same
+// membership as ESTIMATE_MANAGE today, kept separate on purpose for that future flexibility.
 
 @ApiTags('estimates')
 @Controller('estimates')
@@ -34,7 +34,7 @@ export class EstimatesController {
   constructor(private estimatesService: EstimatesService) {}
 
   @Post()
-  @Roles(...ESTIMATE_ROLES)
+  @RequiresCapability('ESTIMATE_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -51,7 +51,7 @@ export class EstimatesController {
   }
 
   @Post(':id/send')
-  @Roles(...ESTIMATE_ROLES)
+  @RequiresCapability('ESTIMATE_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -68,7 +68,7 @@ export class EstimatesController {
   }
 
   @Post(':id/record-response')
-  @Roles(...ESTIMATE_APPROVAL_ROLES)
+  @RequiresCapability('ESTIMATE_RECORD_RESPONSE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -89,7 +89,7 @@ export class EstimatesController {
   }
 
   @Post(':id/revise')
-  @Roles(...ESTIMATE_ROLES)
+  @RequiresCapability('ESTIMATE_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,

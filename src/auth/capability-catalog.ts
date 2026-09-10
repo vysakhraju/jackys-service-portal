@@ -431,6 +431,26 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [],
     migrated: true,
   },
+
+  // --- Estimates --- replaces ESTIMATE_ROLES/ESTIMATE_APPROVAL_ROLES on
+  // estimates.controller.ts (2026-09-10). Kept as 2 capabilities even though today's
+  // membership is identical - the controller's own comment deliberately keeps them separate
+  // constants so the business can extend who takes approval calls (e.g. a future "Estimate
+  // Desk" role) without touching general Estimate management.
+  {
+    key: 'ESTIMATE_MANAGE',
+    label: 'Create, send & revise an Estimate',
+    module: 'Estimates',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE],
+    migrated: true,
+  },
+  {
+    key: 'ESTIMATE_RECORD_RESPONSE',
+    label: "Record a customer's Estimate decision taken by phone/WhatsApp/email",
+    module: 'Estimates',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {

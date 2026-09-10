@@ -296,6 +296,11 @@ export class AppointmentsController {
     return this.appointmentsService.completeAppointment(id, user.id, req);
   }
 
+  // Deliberately still hardcoded @Roles('SUPER_ADMIN') - asymmetric (no SERVICE_HEAD), same
+  // finding as Warranty Claims' CREDIT_NOTE_ROLES and Master Data's deleteServiceCentre
+  // (2026-09-10): the matrix's unconditional SUPER_ADMIN+SERVICE_HEAD bypass can't preserve
+  // that asymmetry, so migrating this hard-delete action would silently grant SERVICE_HEAD
+  // access it does not have today. Left unmigrated pending an explicit decision either way.
   @Delete(':id')
   @Roles('SUPER_ADMIN')
   @ApiOperation({ summary: 'Delete appointment (hard delete - admin only)' })
