@@ -312,6 +312,26 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
     migrated: true,
   },
+
+  // --- Technician --- replaces TECHNICIAN_VISIT_ROLES on technician.controller.ts and
+  // GANTT_ROLES on technician-schedule.controller.ts (2026-09-10). Two capabilities, not
+  // one: the mobile self-service visit flow (field technician + supervisory roles) and the
+  // planning Gantt board (supervisory roles only, no TECHNICIAN_FIELD) are genuinely
+  // different audiences today.
+  {
+    key: 'TECHNICIAN_VISIT',
+    label: "Mobile on-site visit flow: start visit, capture S/N & fault, request spare, complete (field technician self-service)",
+    module: 'Technician',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.TECHNICIAN_FIELD],
+    migrated: true,
+  },
+  {
+    key: 'TECHNICIAN_SCHEDULE_GANTT',
+    label: 'View the per-technician Gantt planning board',
+    module: 'Technician',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {

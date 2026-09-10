@@ -67,6 +67,8 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'REPORTS_OPERATIONAL_VIEW', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
   { key: 'REPORTS_QUALITY_VIEW', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
   { key: 'REPORTS_FINANCE_VIEW', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
+  { key: 'TECHNICIAN_VISIT', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'TECHNICIAN_FIELD'] },
+  { key: 'TECHNICIAN_SCHEDULE_GANTT', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

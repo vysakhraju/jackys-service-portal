@@ -9,7 +9,7 @@ import { CompleteVisitDto } from './dto/complete-visit.dto';
 import { TechnicianVisit } from './entities/technician-visit.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -19,7 +19,8 @@ import { User } from '../auth/entities/user.entity';
 // Field technicians self-serve on their own appointments; supervisory roles can act on
 // their behalf - the same role set already used on AppointmentsController's on-site/complete
 // endpoints, with per-appointment ownership enforced in TechnicianService for TECHNICIAN_FIELD.
-const TECHNICIAN_VISIT_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'TECHNICIAN_FIELD'];
+// Migrated onto the designation permission matrix (2026-09-10) as TECHNICIAN_VISIT - see
+// capability-catalog.ts's "Technician" section, same membership.
 
 @ApiTags('technician')
 @Controller('technician')
@@ -29,7 +30,7 @@ export class TechnicianController {
   constructor(private technicianService: TechnicianService) {}
 
   @Post('visits/:appointmentId/start')
-  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @RequiresCapability('TECHNICIAN_VISIT')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -51,7 +52,7 @@ export class TechnicianController {
   }
 
   @Post('visits/:appointmentId/serial-number')
-  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @RequiresCapability('TECHNICIAN_VISIT')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -72,7 +73,7 @@ export class TechnicianController {
   }
 
   @Post('visits/:appointmentId/fault-symptom')
-  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @RequiresCapability('TECHNICIAN_VISIT')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -93,7 +94,7 @@ export class TechnicianController {
   }
 
   @Get('visits/:appointmentId/job-card')
-  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @RequiresCapability('TECHNICIAN_VISIT')
   @ApiOperation({ summary: "Mobile Phase 5: has staff created (and assigned) a Job Card for this visit yet? 200 with null when not yet - not an error, the mobile app polls this to decide whether to show Need Spare/Complete." })
   @ApiParam({ name: 'appointmentId', type: String })
   @ApiResponse({ status: 200 })
@@ -103,7 +104,7 @@ export class TechnicianController {
   }
 
   @Post('visits/:appointmentId/need-spare')
-  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @RequiresCapability('TECHNICIAN_VISIT')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.INVENTORY_RESERVE,
@@ -126,7 +127,7 @@ export class TechnicianController {
   }
 
   @Post('visits/:appointmentId/complete')
-  @Roles(...TECHNICIAN_VISIT_ROLES)
+  @RequiresCapability('TECHNICIAN_VISIT')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.STATUS_CHANGE,
