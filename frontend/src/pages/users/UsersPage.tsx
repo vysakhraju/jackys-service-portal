@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
-import { Field, inputClass } from '../../components/Field';
+import { Checkbox, Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
+import { TabBar, TabPanel, type TabDef } from '../../components/Tabs';
 import { useAuth } from '../../lib/auth';
 import type { User } from '../../lib/types';
 import {
@@ -24,6 +25,13 @@ import {
   revokeRoleAccess,
 } from '../../lib/roleAccessApi';
 import { isRoleAccessGrantActive, MAX_ROLE_ACCESS_GRANT_DAYS } from '../../lib/roleAccessTypes';
+import {
+  getRolePermissionsMatrix,
+  listRolePermissionRoles,
+  listUsersForRolePermission,
+  setRoleCapabilities,
+} from '../../lib/rolePermissionsApi';
+import type { CapabilityMatrixEntry } from '../../lib/rolePermissionsTypes';
 
 // The only way to get a new staff account into this app used to be a CLI script run
 // directly on the server (scripts/seed-admin.ts / seed-technician.ts) - this screen is
@@ -50,10 +58,24 @@ import { isRoleAccessGrantActive, MAX_ROLE_ACCESS_GRANT_DAYS } from '../../lib/r
 // capabilities preview flagging QC-gated endpoints as needing a SEPARATE grant instead of
 // silently listing them as included; and an admin never being able to select themselves as
 // the recipient in the grant form.
+const USER_TABS: TabDef[] = [
+  { id: 'roster', label: 'Roster' },
+  { id: 'designation-access', label: 'Designation access', hint: 'Set what an entire role can do - cascades to every user with that role' },
+  { id: 'extra-access', label: 'Extra role access', hint: "Delegate one specific person more than their role, without changing the role itself" },
+  { id: 'create', label: 'Create user' },
+];
+
+// Redesigned 2026-09-10 (your feedback: "the page is very big need to scroll so much and
+// no proper segregation") - four tabs instead of one long stacked scroll. Only the active
+// tab's section is mounted (TabPanel), so a rarely-opened tab's own queries don't even fire
+// until it's actually opened. "Designation access" is the new role-level capability matrix
+// (RBAC Phase 1); "Extra role access" (per-user delegation) is unchanged, still the right
+// tool for "cover this one person while the TL is on leave" - see that section's own note.
 export function UsersPage() {
   const { user: currentUser } = useAuth();
   const isAdmin = !!currentUser && USER_MANAGEMENT_ADMIN_ROLES.includes(currentUser.role.name);
   const [grantFocusUserId, setGrantFocusUserId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState('roster');
 
   if (!isAdmin) {
     return (
@@ -64,8 +86,13 @@ export function UsersPage() {
     );
   }
 
+  const goToExtraAccess = (userId: string) => {
+    setGrantFocusUserId(userId);
+    setActiveTab('extra-access');
+  };
+
   return (
-    <div className="max-w-6xl space-y-8 p-6">
+    <div className="max-w-6xl space-y-6 p-6">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Users</p>
         <h1 className="mt-0.5 text-xl font-semibold text-slate-900">Create staff accounts and manage roles</h1>
@@ -74,9 +101,21 @@ export function UsersPage() {
           so on - is created and assigned a role here.
         </p>
       </div>
-      <RosterSection currentUserId={currentUser!.id} onGrantAccess={setGrantFocusUserId} />
-      <RoleAccessSection currentUserId={currentUser!.id} focusUserId={grantFocusUserId} onFocusUserIdChange={setGrantFocusUserId} />
-      <CreateUserSection />
+
+      <TabBar tabs={USER_TABS} active={activeTab} onChange={setActiveTab} />
+
+      <TabPanel active={activeTab === 'roster'}>
+        <RosterSection currentUserId={currentUser!.id} onGrantAccess={goToExtraAccess} />
+      </TabPanel>
+      <TabPanel active={activeTab === 'designation-access'}>
+        <RolePermissionsSection />
+      </TabPanel>
+      <TabPanel active={activeTab === 'extra-access'}>
+        <RoleAccessSection currentUserId={currentUser!.id} focusUserId={grantFocusUserId} onFocusUserIdChange={setGrantFocusUserId} />
+      </TabPanel>
+      <TabPanel active={activeTab === 'create'}>
+        <CreateUserSection />
+      </TabPanel>
     </div>
   );
 }
@@ -128,11 +167,17 @@ function UserRoleAccessPills({ userId }: { userId: string }) {
   );
 }
 
+// Raised alongside "Designation access" (2026-09-10, your feedback: "no proper
+// segregation") - the roster defaults to Active only, since that's who an admin is
+// managing day to day; Inactive/All are one click away, not the default scroll.
+type StatusFilter = 'ACTIVE' | 'INACTIVE' | 'ALL';
+
 function RosterSection({ currentUserId, onGrantAccess }: { currentUserId: string; onGrantAccess: (userId: string) => void }) {
   const queryClient = useQueryClient();
   const usersQuery = useQuery({ queryKey: ['users'], queryFn: listUsers });
   const rolesQuery = useQuery({ queryKey: ['users', 'roles'], queryFn: listCreatableRoles });
   const [resetPasswordTarget, setResetPasswordTarget] = useState<User | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ACTIVE');
 
   const roleMutation = useMutation({
     mutationFn: ({ id, roleName }: { id: string; roleName: string }) => updateUser(id, { roleName }),
@@ -182,21 +227,43 @@ function RosterSection({ currentUserId, onGrantAccess }: { currentUserId: string
     { key: 'extraAccess', label: 'Extra access', render: (u) => <UserRoleAccessPills userId={u.id} /> },
   ];
 
+  const filteredUsers = (usersQuery.data ?? []).filter((u) => statusFilter === 'ALL' || u.status === statusFilter);
+
   return (
     <section>
-      <p className="mb-1 text-sm font-semibold text-slate-900">Roster</p>
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm font-semibold text-slate-900">Roster</p>
+        <label className="flex items-center gap-2 text-xs text-slate-500">
+          Show
+          <select
+            aria-label="Filter roster by status"
+            className={`${inputClass} w-auto py-1`}
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          >
+            <option value="ACTIVE">Active</option>
+            <option value="INACTIVE">Inactive</option>
+            <option value="ALL">All</option>
+          </select>
+        </label>
+      </div>
       <p className="mb-3 text-xs text-slate-400">
         Changing a role re-checks the same open-job/appointment/spare-custody guard as deactivating - a change that
         would orphan work still in progress is blocked, not silently applied. "Extra access" is a separate,
-        time-boxed delegation on top of a user's own role (e.g. covering someone's leave) - grant or revoke it below.
+        time-boxed delegation on top of a user's own role (e.g. covering someone's leave) - grant or revoke it under
+        the Extra role access tab.
       </p>
       <ErrorNotice error={pendingError} />
       <DataTable
         columns={columns}
-        rows={usersQuery.data}
+        rows={filteredUsers}
         isLoading={usersQuery.isLoading}
         error={usersQuery.error}
-        emptyMessage="No users yet - create the first one below."
+        emptyMessage={
+          (usersQuery.data ?? []).length === 0
+            ? 'No users yet - create the first one from the Create user tab.'
+            : `No ${statusFilter === 'ALL' ? '' : statusFilter.toLowerCase() + ' '}users to show.`
+        }
         rowActions={(u) =>
           u.id === currentUserId ? (
             <span className="text-xs text-slate-400">You can't modify your own account here</span>
@@ -330,6 +397,174 @@ function ResetPasswordModal({ user, onClose }: { user: User | null; onClose: () 
   );
 }
 
+// Designation access (2026-09-10) - the designation permission matrix. "Admin picks a
+// designation, sees who currently holds it (reference only), ticks the capabilities that
+// role should have, saves" - per your own description of the flow, deliberately not the
+// full multi-column matrix grid from the screenshot you shared (that was "just to show the
+// logic", not the final UI). "Extra role access" (its own tab) stays the tool for
+// delegating access to one specific person - this tab only ever changes an entire role at
+// once, cascading to everyone who holds it.
+function RolePermissionsSection() {
+  const queryClient = useQueryClient();
+  const rolesQuery = useQuery({ queryKey: ['role-permissions', 'roles'], queryFn: listRolePermissionRoles });
+  const matrixQuery = useQuery({ queryKey: ['role-permissions', 'matrix'], queryFn: getRolePermissionsMatrix });
+  const [selectedRoleId, setSelectedRoleId] = useState('');
+  const usersForRoleQuery = useQuery({
+    queryKey: ['role-permissions', 'users', selectedRoleId],
+    queryFn: () => listUsersForRolePermission(selectedRoleId),
+    enabled: !!selectedRoleId,
+  });
+
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [dirty, setDirty] = useState(false);
+
+  const saveMutation = useMutation({
+    mutationFn: () => setRoleCapabilities(selectedRoleId, [...checked]),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['role-permissions', 'matrix'] });
+      setDirty(false);
+    },
+  });
+
+  // Resets local checkbox state to exactly what the server has, every time the selected
+  // designation changes (or the matrix is refetched after a save) - never carries a
+  // previous role's ticks into a newly-selected one, and never shows a stale "Saved."
+  // message against a role that was never actually saved.
+  useEffect(() => {
+    saveMutation.reset();
+    if (!selectedRoleId || !matrixQuery.data) {
+      setChecked(new Set());
+      setDirty(false);
+      return;
+    }
+    setChecked(new Set(matrixQuery.data.filter((c) => c.grantedRoleIds.includes(selectedRoleId)).map((c) => c.key)));
+    setDirty(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRoleId, matrixQuery.data]);
+
+  const toggle = (key: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    setDirty(true);
+  };
+
+  const byModule = new Map<string, CapabilityMatrixEntry[]>();
+  for (const c of matrixQuery.data ?? []) {
+    if (!byModule.has(c.module)) byModule.set(c.module, []);
+    byModule.get(c.module)!.push(c);
+  }
+
+  const selectedRole = rolesQuery.data?.find((r) => r.id === selectedRoleId);
+  const usersForRole = usersForRoleQuery.data ?? [];
+  const activeUsersForRole = usersForRole.filter((u) => u.status === 'ACTIVE');
+
+  return (
+    <section>
+      <p className="mb-1 text-sm font-semibold text-slate-900">Designation access</p>
+      <p className="mb-3 max-w-2xl text-xs text-slate-400">
+        Set what an entire designation can do - tick a capability once here and every user assigned that role gets
+        it immediately, no per-user setup needed. Super Admin and Service Head always have full access and never
+        appear below. Need to give ONE specific person more than their own role, without changing the designation
+        itself? Use the Extra role access tab instead.
+      </p>
+
+      <Field label="Designation">
+        <select
+          className={`${inputClass} max-w-sm`}
+          value={selectedRoleId}
+          onChange={(e) => setSelectedRoleId(e.target.value)}
+        >
+          <option value="" disabled>
+            Select a designation…
+          </option>
+          {rolesQuery.data?.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.displayName}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      {selectedRoleId && (
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_16rem]">
+          <div className="rounded-md border border-slate-200 bg-white p-4">
+            {matrixQuery.isLoading && <p className="text-xs text-slate-400">Loading capabilities…</p>}
+            {[...byModule.entries()].map(([moduleName, capabilities]) => (
+              <div key={moduleName} className="mb-4 last:mb-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{moduleName}</p>
+                <div className="mt-2 space-y-2">
+                  {capabilities.map((c) => (
+                    <div key={c.key} className="flex items-start gap-2">
+                      <Checkbox
+                        label={c.label}
+                        checked={c.migrated && checked.has(c.key)}
+                        disabled={!c.migrated}
+                        onChange={() => c.migrated && toggle(c.key)}
+                      />
+                      {!c.migrated && (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">
+                          Coming soon
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+              {selectedRole?.displayName ?? 'This designation'} today
+            </p>
+            <p className="mb-2 text-xs text-slate-500">
+              Reference only - who this change affects. Not editable from here.
+            </p>
+            {usersForRoleQuery.isLoading && <p className="text-xs text-slate-400">Loading…</p>}
+            {!usersForRoleQuery.isLoading && usersForRole.length === 0 && (
+              <p className="text-xs text-slate-400">No one currently holds this designation.</p>
+            )}
+            <ul className="max-h-56 space-y-1 overflow-y-auto">
+              {usersForRole.map((u) => (
+                <li key={u.id} className="text-xs text-slate-600">
+                  {u.firstName} {u.lastName}
+                  {u.status !== 'ACTIVE' && <span className="ml-1 text-slate-400">({u.status.toLowerCase()})</span>}
+                </li>
+              ))}
+            </ul>
+            {usersForRole.length > 0 && (
+              <p className="mt-2 text-xs font-medium text-slate-500">
+                {activeUsersForRole.length} active user{activeUsersForRole.length === 1 ? '' : 's'} will get this
+                change immediately on save.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {selectedRoleId && (
+        <>
+          <ErrorNotice error={saveMutation.error} />
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              onClick={() => saveMutation.mutate()}
+              disabled={!dirty || saveMutation.isPending}
+              className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              Save
+            </button>
+            {saveMutation.isSuccess && !dirty && <span className="text-xs text-emerald-600">Saved.</span>}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function toDateInputValue(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -397,7 +632,7 @@ function RoleAccessSection({
   const eligibleRecipients = (usersQuery.data ?? []).filter((u) => u.status === 'ACTIVE' && u.id !== currentUserId);
 
   return (
-    <section className="border-t border-slate-200 pt-6">
+    <section>
       <p className="mb-1 text-sm font-semibold text-slate-900">Extra role access</p>
       <p className="mb-3 max-w-2xl text-xs text-slate-400">
         Give a user everything a DIFFERENT role can do, on top of their own real role - e.g. cover a Technical Team
@@ -512,7 +747,7 @@ function CreateUserSection() {
   });
 
   return (
-    <section className="border-t border-slate-200 pt-6">
+    <section>
       <p className="mb-1 text-sm font-semibold text-slate-900">Create a user</p>
       <p className="mb-3 text-xs text-slate-400">
         Sets a temporary password directly - tell the new hire what it is (WhatsApp, verbally, a note); they can

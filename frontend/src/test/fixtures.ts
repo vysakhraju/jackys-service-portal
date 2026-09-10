@@ -38,6 +38,7 @@ import type { AppointmentDashboardStats } from '../lib/appointmentsTypes';
 import type { GlPosting } from '../lib/glLedgerTypes';
 import type { Role, User } from '../lib/types';
 import type { RoleAccessGrant, RoleCapabilityModule } from '../lib/roleAccessTypes';
+import type { CapabilityMatrixEntry, RolePermissionUserRef } from '../lib/rolePermissionsTypes';
 
 export function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -710,6 +711,28 @@ export function makeRoleAccessGrant(overrides: Partial<RoleAccessGrant> = {}): R
     revokedAt: null,
     revokedByUserId: null,
     notes: null,
+    ...overrides,
+  };
+}
+
+export function makeCapabilityMatrixEntry(overrides: Partial<CapabilityMatrixEntry> = {}): CapabilityMatrixEntry {
+  return {
+    key: 'SCHEDULE_CCE_MANAGE',
+    label: 'Create & manage appointments (create, cancel, confirm, map link, scheduling grid)',
+    module: 'Appointments',
+    migrated: true,
+    grantedRoleIds: ['role-cce'],
+    ...overrides,
+  };
+}
+
+export function makeRolePermissionUserRef(overrides: Partial<RolePermissionUserRef> = {}): RolePermissionUserRef {
+  return {
+    id: 'user-2',
+    firstName: 'Priya',
+    lastName: 'Nair',
+    email: 'priya@jackys.com',
+    status: 'ACTIVE',
     ...overrides,
   };
 }

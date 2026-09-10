@@ -2,7 +2,14 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { makeRole, makeRoleAccessGrant, makeRoleCapabilityModule, makeUser } from '../../test/fixtures';
+import {
+  makeCapabilityMatrixEntry,
+  makeRole,
+  makeRoleAccessGrant,
+  makeRoleCapabilityModule,
+  makeRolePermissionUserRef,
+  makeUser,
+} from '../../test/fixtures';
 
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/usersApi', () => ({
@@ -20,6 +27,12 @@ vi.mock('../../lib/roleAccessApi', () => ({
   grantRoleAccess: vi.fn(),
   revokeRoleAccess: vi.fn(),
   listRoleAccessForUser: vi.fn(),
+}));
+vi.mock('../../lib/rolePermissionsApi', () => ({
+  listRolePermissionRoles: vi.fn(),
+  getRolePermissionsMatrix: vi.fn(),
+  listUsersForRolePermission: vi.fn(),
+  setRoleCapabilities: vi.fn(),
 }));
 
 import { useAuth } from '../../lib/auth';
@@ -39,6 +52,12 @@ import {
   listRoleAccessForUser,
   revokeRoleAccess,
 } from '../../lib/roleAccessApi';
+import {
+  getRolePermissionsMatrix,
+  listRolePermissionRoles,
+  listUsersForRolePermission,
+  setRoleCapabilities,
+} from '../../lib/rolePermissionsApi';
 import { UsersPage } from './UsersPage';
 
 function renderPage() {
@@ -48,6 +67,14 @@ function renderPage() {
       <UsersPage />
     </QueryClientProvider>,
   );
+}
+
+// The page is now tabbed (2026-09-10) - Roster is the default/active tab, everything else
+// (Designation access, Extra role access, Create user) needs an explicit switch before its
+// section is even mounted, let alone queryable.
+async function switchToTab(label: string) {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('tab', { name: label }));
 }
 
 function mockCurrentUser(roleName: string, id = 'admin-1') {
@@ -78,6 +105,10 @@ beforeEach(() => {
   vi.mocked(grantRoleAccess).mockReset();
   vi.mocked(revokeRoleAccess).mockReset();
   vi.mocked(listRoleAccessForUser).mockReset().mockResolvedValue([]);
+  vi.mocked(listRolePermissionRoles).mockReset().mockResolvedValue(ROLES);
+  vi.mocked(getRolePermissionsMatrix).mockReset().mockResolvedValue([]);
+  vi.mocked(listUsersForRolePermission).mockReset().mockResolvedValue([]);
+  vi.mocked(setRoleCapabilities).mockReset();
 });
 
 describe('UsersPage - admin-only gating', () => {
@@ -89,11 +120,15 @@ describe('UsersPage - admin-only gating', () => {
     expect(listUsers).not.toHaveBeenCalled();
   });
 
-  it('shows the roster and create form for SERVICE_HEAD', async () => {
+  it('shows the roster tab (active by default) and a Create user tab for SERVICE_HEAD', async () => {
     mockCurrentUser('SERVICE_HEAD');
     vi.mocked(listUsers).mockResolvedValue([]);
     renderPage();
-    expect(await screen.findByText('Roster')).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Roster' })).toBeInTheDocument();
+    expect(within(screen.getByRole('tabpanel')).getByText('Roster')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Create user' })).toBeInTheDocument();
+
+    await switchToTab('Create user');
     expect(screen.getByText('Create a user')).toBeInTheDocument();
   });
 });
@@ -116,7 +151,63 @@ describe('UsersPage - roster', () => {
     mockCurrentUser('SUPER_ADMIN');
     vi.mocked(listUsers).mockResolvedValue([]);
     renderPage();
-    expect(await screen.findByText('No users yet - create the first one below.')).toBeInTheDocument();
+    expect(await screen.findByText('No users yet - create the first one from the Create user tab.')).toBeInTheDocument();
+  });
+
+  // Added 2026-09-10, your feedback: "no proper segregation" - the roster defaults to
+  // Active only, with Inactive/All one click away, instead of always showing everyone.
+  describe('status filter', () => {
+    it('shows only ACTIVE users by default, hiding inactive ones', async () => {
+      mockCurrentUser('SUPER_ADMIN');
+      vi.mocked(listUsers).mockResolvedValue([
+        makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', status: 'ACTIVE' }),
+        makeUser({ id: 'user-3', firstName: 'Rahul', lastName: 'Verma', status: 'INACTIVE' }),
+      ]);
+      renderPage();
+
+      expect(await screen.findByText('Priya Nair')).toBeInTheDocument();
+      expect(screen.queryByText('Rahul Verma')).not.toBeInTheDocument();
+    });
+
+    it('switching the filter to Inactive shows only inactive users', async () => {
+      mockCurrentUser('SUPER_ADMIN');
+      vi.mocked(listUsers).mockResolvedValue([
+        makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', status: 'ACTIVE' }),
+        makeUser({ id: 'user-3', firstName: 'Rahul', lastName: 'Verma', status: 'INACTIVE' }),
+      ]);
+      const user = userEvent.setup();
+      renderPage();
+      await screen.findByText('Priya Nair');
+
+      await user.selectOptions(screen.getByLabelText('Filter roster by status'), 'INACTIVE');
+
+      expect(screen.getByText('Rahul Verma')).toBeInTheDocument();
+      expect(screen.queryByText('Priya Nair')).not.toBeInTheDocument();
+    });
+
+    it('switching the filter to All shows both active and inactive users', async () => {
+      mockCurrentUser('SUPER_ADMIN');
+      vi.mocked(listUsers).mockResolvedValue([
+        makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', status: 'ACTIVE' }),
+        makeUser({ id: 'user-3', firstName: 'Rahul', lastName: 'Verma', status: 'INACTIVE' }),
+      ]);
+      const user = userEvent.setup();
+      renderPage();
+      await screen.findByText('Priya Nair');
+
+      await user.selectOptions(screen.getByLabelText('Filter roster by status'), 'ALL');
+
+      expect(screen.getByText('Priya Nair')).toBeInTheDocument();
+      expect(screen.getByText('Rahul Verma')).toBeInTheDocument();
+    });
+
+    it('shows a filter-aware empty message when the filter hides every user, distinct from the true zero-users message', async () => {
+      mockCurrentUser('SUPER_ADMIN');
+      vi.mocked(listUsers).mockResolvedValue([makeUser({ id: 'user-3', firstName: 'Rahul', lastName: 'Verma', status: 'INACTIVE' })]);
+      renderPage();
+
+      expect(await screen.findByText('No active users to show.')).toBeInTheDocument();
+    });
   });
 
   it("marks the current admin's own row and disables its role select and row action (the-fool finding #1)", async () => {
@@ -232,8 +323,9 @@ describe('UsersPage - create user form', () => {
     vi.mocked(createUser).mockResolvedValue(makeUser());
     const user = userEvent.setup();
     renderPage();
+    await switchToTab('Create user');
 
-    const section = (await screen.findByText('Create a user')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     await user.type(within(section).getByLabelText('First name'), 'New');
     await user.type(within(section).getByLabelText('Last name'), 'Hire');
     await user.type(within(section).getByLabelText('Email'), 'new.hire@jackys.com');
@@ -261,8 +353,9 @@ describe('UsersPage - create user form', () => {
     // only) - this test just asserts the page renders exactly what the API returned,
     // proving the page does not add CUSTOMER back in on its own.
     renderPage();
+    await switchToTab('Create user');
 
-    const section = (await screen.findByText('Create a user')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     const roleSelect = within(section).getByLabelText('Role') as HTMLSelectElement;
     const optionLabels = Array.from(roleSelect.options).map((o) => o.value);
     expect(optionLabels).not.toContain('CUSTOMER');
@@ -276,8 +369,9 @@ describe('UsersPage - create user form', () => {
     });
     const user = userEvent.setup();
     renderPage();
+    await switchToTab('Create user');
 
-    const section = (await screen.findByText('Create a user')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     await user.type(within(section).getByLabelText('First name'), 'New');
     await user.type(within(section).getByLabelText('Last name'), 'Hire');
     await user.type(within(section).getByLabelText('Email'), 'admin@jackys.com');
@@ -297,8 +391,9 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
     // this test proves the page renders exactly what the API returned, not that it adds
     // the excluded roles back in on its own.
     renderPage();
+    await switchToTab('Extra role access');
 
-    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     await within(section).findByRole('option', { name: 'Technical Team Leader' });
     const roleSelect = within(section).getByLabelText(/^Role to delegate/) as HTMLSelectElement;
     const optionValues = Array.from(roleSelect.options).map((o) => o.value);
@@ -314,8 +409,9 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
       makeUser({ id: 'user-2', firstName: 'Priya', lastName: 'Nair', status: 'ACTIVE' }),
     ]);
     renderPage();
+    await switchToTab('Extra role access');
 
-    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     await within(section).findByRole('option', { name: /Priya Nair/ });
     const userSelect = within(section).getByLabelText('User') as HTMLSelectElement;
     const optionLabels = Array.from(userSelect.options).map((o) => o.textContent);
@@ -329,8 +425,9 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
     vi.mocked(getRoleCapabilities).mockResolvedValue([makeRoleCapabilityModule()]);
     const user = userEvent.setup();
     renderPage();
+    await switchToTab('Extra role access');
 
-    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     await within(section).findByRole('option', { name: 'Technical Team Leader' });
     await user.selectOptions(within(section).getByLabelText(/^Role to delegate/), 'TECHNICAL_TEAM_LEADER');
 
@@ -347,8 +444,9 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
     vi.mocked(grantRoleAccess).mockResolvedValue(makeRoleAccessGrant());
     const user = userEvent.setup();
     renderPage();
+    await switchToTab('Extra role access');
 
-    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     await within(section).findByRole('option', { name: /Priya Nair/ });
     await user.selectOptions(within(section).getByLabelText('User'), 'user-2');
     await user.selectOptions(within(section).getByLabelText(/^Role to delegate/), 'TECHNICAL_TEAM_LEADER');
@@ -369,7 +467,7 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Grant access' }));
 
-    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     const userSelect = within(section).getByLabelText('User') as HTMLSelectElement;
     await waitFor(() => expect(userSelect.value).toBe('user-2'));
   });
@@ -423,8 +521,9 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
     vi.mocked(grantRoleAccess).mockImplementation(() => new Promise(() => {})); // never resolves - simulates in-flight
     const user = userEvent.setup();
     renderPage();
+    await switchToTab('Extra role access');
 
-    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     const grantButton = within(section).getByRole('button', { name: 'Grant' });
     // Expiry defaults to a valid date, so with no user/role picked the button starts disabled.
     expect(grantButton).toBeDisabled();
@@ -449,8 +548,9 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
     });
     const user = userEvent.setup();
     renderPage();
+    await switchToTab('Extra role access');
 
-    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     await within(section).findByRole('option', { name: /Priya Nair/ });
     await user.selectOptions(within(section).getByLabelText('User'), 'user-2');
     await user.selectOptions(within(section).getByLabelText(/^Role to delegate/), 'TECHNICAL_TEAM_LEADER');
@@ -465,11 +565,170 @@ describe('UsersPage - extra role access (RoleAccessSection)', () => {
     vi.mocked(getRoleCapabilities).mockResolvedValue([]);
     const user = userEvent.setup();
     renderPage();
+    await switchToTab('Extra role access');
 
-    const section = (await screen.findByText('Extra role access')).closest('section') as HTMLElement;
+    const section = screen.getByRole('tabpanel') as HTMLElement;
     await within(section).findByRole('option', { name: 'Technical Team Leader' });
     await user.selectOptions(within(section).getByLabelText(/^Role to delegate/), 'TECHNICAL_TEAM_LEADER');
 
     expect(await screen.findByText('This role has no distinct gated capabilities in the app today.')).toBeInTheDocument();
+  });
+});
+
+// RBAC Phase 1 admin UI (2026-09-10): a single designation dropdown, a reference-only list
+// of who currently holds it, and a tick-and-save capability checklist grouped by module -
+// per your own description of the flow, not the multi-column matrix grid from the
+// screenshot (that was "just to show the logic", not the final UI).
+describe('UsersPage - designation access (RolePermissionsSection)', () => {
+  const CAPABILITIES = [
+    makeCapabilityMatrixEntry({ key: 'SCHEDULE_CCE_MANAGE', label: 'Create & manage appointments', module: 'Appointments', migrated: true, grantedRoleIds: ['role-cce'] }),
+    makeCapabilityMatrixEntry({ key: 'SCHEDULE_ASSIGN_TECHNICIAN', label: 'Assign a technician to an appointment', module: 'Appointments', migrated: true, grantedRoleIds: ['role-tl'] }),
+    makeCapabilityMatrixEntry({ key: 'QC_GATE_ACCESS', label: 'Eligible to hold QC approve/reject sign-off', module: 'QC', migrated: true, grantedRoleIds: [] }),
+    makeCapabilityMatrixEntry({ key: 'INVENTORY_ISSUE', label: 'Issue spares from Main Store', module: 'Inventory', migrated: false, grantedRoleIds: [] }),
+  ];
+
+  it('never offers a locked role (SUPER_ADMIN/SERVICE_HEAD/CUSTOMER) as a designation - proves the page renders exactly what the API returned', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([]);
+    // listRolePermissionRoles is mocked per beforeEach to return only CCE/TECHNICAL_TEAM_LEADER -
+    // the backend is what actually excludes SUPER_ADMIN/SERVICE_HEAD/CUSTOMER (MATRIX_LOCKED_ROLES).
+    renderPage();
+    await switchToTab('Designation access');
+
+    const panel = screen.getByRole('tabpanel') as HTMLElement;
+    await within(panel).findByRole('option', { name: 'Technical Team Leader' });
+    const roleSelect = within(panel).getByLabelText('Designation') as HTMLSelectElement;
+    const optionLabels = Array.from(roleSelect.options).map((o) => o.textContent);
+    expect(optionLabels).not.toContain('Super Admin');
+    expect(optionLabels).not.toContain('Service Head');
+    expect(optionLabels).not.toContain('Customer');
+  });
+
+  it('selecting a designation shows its reference-only user list and its capabilities grouped by module, pre-ticked from the matrix', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([]);
+    vi.mocked(getRolePermissionsMatrix).mockResolvedValue(CAPABILITIES);
+    vi.mocked(listUsersForRolePermission).mockResolvedValue([
+      makeRolePermissionUserRef({ id: 'u1', firstName: 'Amina', lastName: 'Khan', status: 'ACTIVE' }),
+    ]);
+    const user = userEvent.setup();
+    renderPage();
+    await switchToTab('Designation access');
+
+    const panel = screen.getByRole('tabpanel') as HTMLElement;
+    await within(panel).findByRole('option', { name: 'Customer Care Executive' });
+    await user.selectOptions(within(panel).getByLabelText('Designation'), 'role-cce');
+
+    expect(await within(panel).findByText('Amina Khan')).toBeInTheDocument();
+    expect(within(panel).getByText(/1 active user.*will get this change/)).toBeInTheDocument();
+
+    const cceCheckbox = within(panel).getByLabelText('Create & manage appointments') as HTMLInputElement;
+    expect(cceCheckbox.checked).toBe(true);
+    const assignCheckbox = within(panel).getByLabelText('Assign a technician to an appointment') as HTMLInputElement;
+    expect(assignCheckbox.checked).toBe(false);
+    expect(within(panel).getByText('Appointments')).toBeInTheDocument();
+    expect(within(panel).getByText('QC')).toBeInTheDocument();
+  });
+
+  it('shows a not-yet-migrated capability as a disabled "Coming soon" checkbox, never tickable', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([]);
+    vi.mocked(getRolePermissionsMatrix).mockResolvedValue(CAPABILITIES);
+    const user = userEvent.setup();
+    renderPage();
+    await switchToTab('Designation access');
+
+    const panel = screen.getByRole('tabpanel') as HTMLElement;
+    await within(panel).findByRole('option', { name: 'Customer Care Executive' });
+    await user.selectOptions(within(panel).getByLabelText('Designation'), 'role-cce');
+
+    expect(await within(panel).findByText('Coming soon')).toBeInTheDocument();
+    const comingSoonCheckbox = within(panel).getByLabelText('Issue spares from Main Store') as HTMLInputElement;
+    expect(comingSoonCheckbox.disabled).toBe(true);
+    expect(comingSoonCheckbox.checked).toBe(false);
+  });
+
+  it('shows a message when no one currently holds the selected designation', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([]);
+    vi.mocked(getRolePermissionsMatrix).mockResolvedValue(CAPABILITIES);
+    vi.mocked(listUsersForRolePermission).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderPage();
+    await switchToTab('Designation access');
+
+    const panel = screen.getByRole('tabpanel') as HTMLElement;
+    await within(panel).findByRole('option', { name: 'Customer Care Executive' });
+    await user.selectOptions(within(panel).getByLabelText('Designation'), 'role-cce');
+
+    expect(await within(panel).findByText('No one currently holds this designation.')).toBeInTheDocument();
+  });
+
+  it('disables Save until a checkbox is toggled, then saves exactly the new full capability set for that role', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([]);
+    vi.mocked(getRolePermissionsMatrix).mockResolvedValue(CAPABILITIES);
+    vi.mocked(setRoleCapabilities).mockResolvedValue({ granted: ['SCHEDULE_ASSIGN_TECHNICIAN'], revoked: [] });
+    const user = userEvent.setup();
+    renderPage();
+    await switchToTab('Designation access');
+
+    const panel = screen.getByRole('tabpanel') as HTMLElement;
+    await within(panel).findByRole('option', { name: 'Customer Care Executive' });
+    await user.selectOptions(within(panel).getByLabelText('Designation'), 'role-cce');
+
+    const saveButton = await within(panel).findByRole('button', { name: 'Save' });
+    expect(saveButton).toBeDisabled();
+
+    await user.click(within(panel).getByLabelText('Assign a technician to an appointment'));
+    expect(saveButton).not.toBeDisabled();
+
+    await user.click(saveButton);
+
+    await waitFor(() =>
+      expect(setRoleCapabilities).toHaveBeenCalledWith(
+        'role-cce',
+        expect.arrayContaining(['SCHEDULE_CCE_MANAGE', 'SCHEDULE_ASSIGN_TECHNICIAN']),
+      ),
+    );
+    expect(await within(panel).findByText('Saved.')).toBeInTheDocument();
+  });
+
+  it('resets the checklist to the newly-selected role\'s own capabilities when switching designations, not carrying over the previous selection', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([]);
+    vi.mocked(getRolePermissionsMatrix).mockResolvedValue(CAPABILITIES);
+    const user = userEvent.setup();
+    renderPage();
+    await switchToTab('Designation access');
+
+    const panel = screen.getByRole('tabpanel') as HTMLElement;
+    await within(panel).findByRole('option', { name: 'Customer Care Executive' });
+    await user.selectOptions(within(panel).getByLabelText('Designation'), 'role-cce');
+    expect((within(panel).getByLabelText('Create & manage appointments') as HTMLInputElement).checked).toBe(true);
+
+    await user.selectOptions(within(panel).getByLabelText('Designation'), 'role-tl');
+    expect((within(panel).getByLabelText('Create & manage appointments') as HTMLInputElement).checked).toBe(false);
+    expect((within(panel).getByLabelText('Assign a technician to an appointment') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('surfaces a server error from a failed save as an error notice', async () => {
+    mockCurrentUser('SUPER_ADMIN');
+    vi.mocked(listUsers).mockResolvedValue([]);
+    vi.mocked(getRolePermissionsMatrix).mockResolvedValue(CAPABILITIES);
+    vi.mocked(setRoleCapabilities).mockRejectedValue({
+      response: { data: { message: 'Role not found.' } },
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await switchToTab('Designation access');
+
+    const panel = screen.getByRole('tabpanel') as HTMLElement;
+    await within(panel).findByRole('option', { name: 'Customer Care Executive' });
+    await user.selectOptions(within(panel).getByLabelText('Designation'), 'role-cce');
+    await user.click(within(panel).getByLabelText('Assign a technician to an appointment'));
+    await user.click(within(panel).getByRole('button', { name: 'Save' }));
+
+    expect(await within(panel).findByText('Role not found.')).toBeInTheDocument();
   });
 });

@@ -38,6 +38,8 @@ export enum AuditAction {
   // Extra role access grants (2026-09-03)
   ROLE_ACCESS_GRANT = 'ROLE_ACCESS_GRANT',
   ROLE_ACCESS_REVOKE = 'ROLE_ACCESS_REVOKE',
+  // Designation permission matrix (2026-09-10)
+  ROLE_CAPABILITIES_UPDATE = 'ROLE_CAPABILITIES_UPDATE',
 }
 
 @Entity('audit_logs')

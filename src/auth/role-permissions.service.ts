@@ -120,6 +120,44 @@ export class RolePermissionsService {
     // Already in the desired state - no-op, matches setGrant's idempotent contract.
   }
 
+  // The admin UI's single "tick and save" write path: sets a role's ENTIRE migrated-
+  // capability set to exactly `capabilityKeys` in one call, diffing against what the role
+  // holds today and only touching what actually changed (reuses setGrant() per changed
+  // key, so role-existence/lock validation and the write itself stay exactly as tested
+  // there). Unknown/not-yet-migrated keys in the input are silently ignored - the UI only
+  // ever renders checkboxes for migrated catalog entries, so anything else is not a real
+  // toggle to begin with.
+  async setRoleCapabilities(
+    roleId: string,
+    capabilityKeys: string[],
+    grantedByUserId: string,
+  ): Promise<{ granted: string[]; revoked: string[] }> {
+    const role = await this.rolesRepo.findOne({ where: { id: roleId } });
+    if (!role) {
+      throw new BadRequestException('Role not found.');
+    }
+    if (MATRIX_LOCKED_ROLES.includes(role.name)) {
+      throw new ForbiddenException(
+        `${role.displayName} always has full access and cannot be edited here.`,
+      );
+    }
+
+    const desired = new Set(capabilityKeys);
+    const granted: string[] = [];
+    const revoked: string[] = [];
+
+    for (const capability of CAPABILITY_CATALOG) {
+      if (!capability.migrated) continue; // not a real checkbox yet - nothing to toggle
+      const shouldHave = desired.has(capability.key);
+      const hasNow = await this.roleHasCapability(roleId, capability.key);
+      if (shouldHave === hasNow) continue;
+      await this.setGrant(roleId, capability.key, shouldHave, grantedByUserId);
+      (shouldHave ? granted : revoked).push(capability.key);
+    }
+
+    return { granted, revoked };
+  }
+
   // Seeds every migrated capability's defaultRoles, INSERT-IF-MISSING ONLY - never
   // touches a row that already exists, so a previously-applied admin edit (including an
   // admin UNCHECKING a default) is never silently reverted by re-running this. Matches

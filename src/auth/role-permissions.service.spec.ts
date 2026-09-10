@@ -167,6 +167,75 @@ describe('RolePermissionsService', () => {
     });
   });
 
+  describe('setRoleCapabilities', () => {
+    beforeEach(() => {
+      rolesRepo.findOne.mockResolvedValue(role());
+    });
+
+    it('grants every migrated capability passed in that the role does not already hold', async () => {
+      rolePermRepo.findOne.mockResolvedValue(null); // role holds nothing today
+
+      const result = await service.setRoleCapabilities(
+        'role-cce',
+        ['SCHEDULE_CCE_MANAGE', 'QC_GATE_ACCESS'],
+        'admin-1',
+      );
+
+      expect(result.granted.sort()).toEqual(['QC_GATE_ACCESS', 'SCHEDULE_CCE_MANAGE'].sort());
+      expect(result.revoked).toEqual([]);
+      const savedKeys = rolePermRepo.save.mock.calls.map((call: any[]) => call[0].capabilityKey);
+      expect(savedKeys.sort()).toEqual(['QC_GATE_ACCESS', 'SCHEDULE_CCE_MANAGE'].sort());
+    });
+
+    it('revokes every migrated capability the role holds today that is missing from the new list', async () => {
+      // Role currently holds SCHEDULE_CCE_MANAGE only.
+      rolePermRepo.findOne.mockImplementation(({ where }: any) =>
+        Promise.resolve(where.capabilityKey === 'SCHEDULE_CCE_MANAGE' ? { id: 'row-1', roleId: 'role-cce', capabilityKey: 'SCHEDULE_CCE_MANAGE' } : null),
+      );
+
+      const result = await service.setRoleCapabilities('role-cce', [], 'admin-1');
+
+      expect(result.revoked).toEqual(['SCHEDULE_CCE_MANAGE']);
+      expect(result.granted).toEqual([]);
+      expect(rolePermRepo.remove).toHaveBeenCalledWith({ id: 'row-1', roleId: 'role-cce', capabilityKey: 'SCHEDULE_CCE_MANAGE' });
+    });
+
+    it('touches nothing when the new list exactly matches what the role already holds (idempotent save)', async () => {
+      rolePermRepo.findOne.mockImplementation(({ where }: any) =>
+        Promise.resolve(where.capabilityKey === 'SCHEDULE_CCE_MANAGE' ? { id: 'row-1' } : null),
+      );
+
+      const result = await service.setRoleCapabilities('role-cce', ['SCHEDULE_CCE_MANAGE'], 'admin-1');
+
+      expect(result).toEqual({ granted: [], revoked: [] });
+      expect(rolePermRepo.save).not.toHaveBeenCalled();
+      expect(rolePermRepo.remove).not.toHaveBeenCalled();
+    });
+
+    it('silently ignores an unrecognized/unmigrated key in the input rather than throwing', async () => {
+      rolePermRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.setRoleCapabilities('role-cce', ['NOT_A_REAL_KEY'], 'admin-1');
+
+      expect(result).toEqual({ granted: [], revoked: [] });
+      expect(rolePermRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown role id before touching any grant row', async () => {
+      rolesRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.setRoleCapabilities('role-ghost', ['SCHEDULE_CCE_MANAGE'], 'admin-1')).rejects.toThrow(BadRequestException);
+      expect(rolePermRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('refuses to edit a MATRIX_LOCKED_ROLES role, even with an empty list that would otherwise no-op', async () => {
+      rolesRepo.findOne.mockResolvedValue(role({ id: 'role-admin', name: RoleName.SUPER_ADMIN, displayName: 'Super Admin' }));
+
+      await expect(service.setRoleCapabilities('role-admin', [], 'admin-1')).rejects.toThrow(ForbiddenException);
+      expect(rolePermRepo.findOne).not.toHaveBeenCalled();
+    });
+  });
+
   describe('seedDefaults', () => {
     it('creates a row for every migrated capability x defaultRole combination not already present', async () => {
       rolesRepo.findOne.mockImplementation(({ where }: any) =>

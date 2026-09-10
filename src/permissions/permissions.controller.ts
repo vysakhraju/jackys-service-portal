@@ -14,8 +14,10 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam }
 import { PermissionsService } from './permissions.service';
 import { RoleCapabilitiesService } from './role-capabilities.service';
 import { RoleAccessService } from '../auth/role-access.service';
+import { RolePermissionsService } from '../auth/role-permissions.service';
 import { GrantPermissionDto } from './dto/grant-permission.dto';
 import { RevokePermissionDto } from './dto/revoke-permission.dto';
+import { SetRoleCapabilitiesDto } from './dto/set-role-capabilities.dto';
 import { PermissionType } from './entities/user-permission-grant.entity';
 import { GrantRoleAccessDto, GRANTABLE_ACCESS_ROLE_NAMES } from '../auth/dto/grant-role-access.dto';
 import { RevokeRoleAccessDto } from '../auth/dto/revoke-role-access.dto';
@@ -46,6 +48,7 @@ export class PermissionsController {
     private permissionsService: PermissionsService,
     private roleAccessService: RoleAccessService,
     private roleCapabilitiesService: RoleCapabilitiesService,
+    private rolePermissionsService: RolePermissionsService,
   ) {}
 
   @Post('grant')
@@ -173,5 +176,60 @@ export class PermissionsController {
   @ApiResponse({ status: 400, description: 'roleName is not a real role' })
   async listRoleAccessByRole(@Param('roleName', new ParseEnumPipe(RoleName)) roleName: RoleName) {
     return this.roleAccessService.listByRole(roleName);
+  }
+
+  // --- Designation permission matrix (2026-09-10) -----------------------------------
+  // "CCE gets Schedule + QC access, every user with that role gets it" - role-level,
+  // cascading capabilities, as opposed to role-access above (per-USER whole-role
+  // delegation) or grant/revoke above (per-USER named sign-off authority). See
+  // RolePermission's own doc comment for the full three-way distinction. Same admin gate
+  // as everything else on this controller, on purpose (the-fool finding, 2026-09-10): this
+  // is the screen that fixes a broken matrix, so it can never depend on the matrix itself.
+
+  @Get('role-permissions/roles')
+  @Roles(...PERMISSION_ADMIN_ROLES)
+  @ApiOperation({ summary: 'List every role that can appear as an editable column in the designation permission matrix (excludes SUPER_ADMIN, SERVICE_HEAD, CUSTOMER - always full access, hardcoded)' })
+  @ApiResponse({ status: 200, description: 'Editable roles' })
+  async listRolePermissionRoles() {
+    return this.rolePermissionsService.listEditableRoles();
+  }
+
+  @Get('role-permissions/matrix')
+  @Roles(...PERMISSION_ADMIN_ROLES)
+  @ApiOperation({ summary: 'The full capability catalog, each entry listing which role ids currently hold it. Not-yet-migrated capabilities are included (migrated: false) so the UI can show them as "coming soon".' })
+  @ApiResponse({ status: 200, description: 'Capability catalog with current grants' })
+  async getRolePermissionsMatrix() {
+    return this.rolePermissionsService.getMatrix();
+  }
+
+  @Get('role-permissions/roles/:roleId/users')
+  @Roles(...PERMISSION_ADMIN_ROLES)
+  @ApiParam({ name: 'roleId', type: String })
+  @ApiOperation({ summary: 'Reference-only list of every user currently holding this role, shown alongside the capability checklist so an admin sees who a change actually affects before saving' })
+  @ApiResponse({ status: 200, description: 'Users holding this role' })
+  async listUsersForRolePermission(@Param('roleId', ParseUUIDPipe) roleId: string) {
+    return this.rolePermissionsService.listUsersForRole(roleId);
+  }
+
+  @Post('role-permissions/roles/:roleId')
+  @Roles(...PERMISSION_ADMIN_ROLES)
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.ROLE_CAPABILITIES_UPDATE,
+    entityType: 'RolePermission',
+    getEntityId: (args) => args.params?.roleId,
+    getNewValues: (result) => result,
+  })
+  @ApiParam({ name: 'roleId', type: String })
+  @ApiOperation({ summary: "Sets a role's complete capability set in one call (tick-and-save) - cascades to every user holding that role immediately, no per-user configuration" })
+  @ApiResponse({ status: 201, description: '{ granted: string[], revoked: string[] }' })
+  @ApiResponse({ status: 400, description: 'Role not found' })
+  @ApiResponse({ status: 403, description: 'Role always has full access and cannot be edited here' })
+  async setRolePermissionCapabilities(
+    @Param('roleId', ParseUUIDPipe) roleId: string,
+    @Body() dto: SetRoleCapabilitiesDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.rolePermissionsService.setRoleCapabilities(roleId, dto.capabilityKeys, user.id);
   }
 }
