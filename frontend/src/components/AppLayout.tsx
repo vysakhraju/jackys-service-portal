@@ -16,6 +16,8 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
   { label: 'Job Cards', path: '/job-cards' },
   { label: 'Job Card Journey', path: '/job-cards/journey' },
   { label: 'Technician Schedule', path: '/technician-schedule' },
+  { label: 'Workshop Queue', path: '/technician-schedule/workshop-queue' },
+  { label: 'Field Technician Schedule', path: '/technician-schedule/field-schedule' },
   { label: 'Estimates', path: '/estimates' },
   { label: 'Workshop & Inventory', path: '/workshop-inventory' },
   { label: 'QC & Permissions', path: '/qc-permissions' },

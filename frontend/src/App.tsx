@@ -25,6 +25,8 @@ import { FieldVisitsPage } from './pages/appointments/FieldVisitsPage';
 import { JobCardsPage } from './pages/jobCards/JobCardsPage';
 import { JobCardJourneyPage } from './pages/jobCards/JobCardJourneyPage';
 import { TechnicianGanttPage } from './pages/scheduling/TechnicianGanttPage';
+import { WorkshopQueuePage } from './pages/scheduling/WorkshopQueuePage';
+import { FieldSchedulePage } from './pages/scheduling/FieldSchedulePage';
 import { EstimatesPage } from './pages/estimates/EstimatesPage';
 import { EstimatePublicPage } from './pages/estimates/EstimatePublicPage';
 import { WorkshopInventoryLayout } from './pages/workshop/WorkshopInventoryLayout';
@@ -113,6 +115,8 @@ export function App() {
                 <Route path="/job-cards" element={<JobCardsPage />} />
                 <Route path="/job-cards/journey" element={<JobCardJourneyPage />} />
                 <Route path="/technician-schedule" element={<TechnicianGanttPage />} />
+                <Route path="/technician-schedule/workshop-queue" element={<WorkshopQueuePage />} />
+                <Route path="/technician-schedule/field-schedule" element={<FieldSchedulePage />} />
                 <Route path="/estimates" element={<EstimatesPage />} />
 
                 <Route path="/workshop-inventory" element={<WorkshopInventoryLayout />}>
