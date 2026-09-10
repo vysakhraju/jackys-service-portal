@@ -46,6 +46,10 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'WORKSHOP_ASSIGN', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
   { key: 'WORKSHOP_ACTION', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'TECHNICIAN_WORKSHOP'] },
   { key: 'WORKSHOP_VIEW', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'TECHNICIAN_WORKSHOP', 'CCE'] },
+  { key: 'AMC_MANAGE', defaultRoles: ['CCE'] },
+  { key: 'AMC_VIEW', defaultRoles: ['CCE', 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP', 'ACCOUNTANT', 'FINANCE_MANAGER'] },
+  { key: 'AMC_TECHNICIAN_VISIT', defaultRoles: ['TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP'] },
+  { key: 'AMC_BILLING', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

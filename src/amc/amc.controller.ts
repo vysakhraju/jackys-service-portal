@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@ne
 import { AmcService } from './amc.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -17,10 +17,10 @@ import { CancelAmcContractDto } from './dto/cancel-amc-contract.dto';
 import { GenerateAmcBillingInvoiceDto } from './dto/generate-amc-billing-invoice.dto';
 import { RecordAmcBillingPaymentDto } from './dto/record-amc-billing-payment.dto';
 
-const AMC_MANAGEMENT_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'CCE'];
-const AMC_VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'CCE', 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP', 'ACCOUNTANT', 'FINANCE_MANAGER'];
-const AMC_TECHNICIAN_ROLES = ['TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-const FINANCE_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN', 'SERVICE_HEAD'];
+// AMC_MANAGEMENT_ROLES/AMC_VIEW_ROLES/AMC_TECHNICIAN_ROLES/FINANCE_ROLES all migrated onto
+// the designation permission matrix (2026-09-10) as AMC_MANAGE/AMC_VIEW/AMC_TECHNICIAN_VISIT/
+// AMC_BILLING respectively - see capability-catalog.ts's "AMC" section, each the exact same
+// membership these arrays used to have.
 
 @ApiTags('amc')
 @Controller('amc')
@@ -30,7 +30,7 @@ export class AmcController {
   constructor(private amcService: AmcService) {}
 
   @Post('contracts')
-  @Roles(...AMC_MANAGEMENT_ROLES)
+  @RequiresCapability('AMC_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -45,7 +45,7 @@ export class AmcController {
   }
 
   @Get('contracts')
-  @Roles(...AMC_VIEW_ROLES)
+  @RequiresCapability('AMC_VIEW')
   @ApiQuery({ name: 'status', enum: AmcContractStatus, required: false })
   @ApiOperation({ summary: 'List all AMC contracts, optionally filtered by status' })
   async findAll(@Query('status') status?: AmcContractStatus) {
@@ -53,7 +53,7 @@ export class AmcController {
   }
 
   @Get('contracts/expiring')
-  @Roles(...AMC_VIEW_ROLES)
+  @RequiresCapability('AMC_VIEW')
   @ApiQuery({ name: 'withinDays', required: false, example: 30 })
   @ApiOperation({ summary: 'ACTIVE contracts expiring within N days (default 30) - the manual companion to the renewal-reminder trigger, since no scheduler exists to auto-fire it' })
   async getExpiring(@Query('withinDays') withinDays?: string) {
@@ -61,21 +61,21 @@ export class AmcController {
   }
 
   @Get('upsell-candidates')
-  @Roles(...AMC_VIEW_ROLES)
+  @RequiresCapability('AMC_VIEW')
   @ApiOperation({ summary: 'Post-MVP bonus: out-of-warranty customers with a paid repair (approved Estimate) who are not already on an ACTIVE AMC contract - heuristic phone-number match, not a precise CRM lookup' })
   async getUpsellCandidates() {
     return this.amcService.getRwrUpsellCandidates();
   }
 
   @Get('contracts/number/:contractNumber')
-  @Roles(...AMC_VIEW_ROLES)
+  @RequiresCapability('AMC_VIEW')
   @ApiOperation({ summary: 'Get an AMC contract by its contractNumber (AMC-####)' })
   async findByContractNumber(@Param('contractNumber') contractNumber: string) {
     return this.amcService.findByContractNumber(contractNumber);
   }
 
   @Get('contracts/:id')
-  @Roles(...AMC_VIEW_ROLES)
+  @RequiresCapability('AMC_VIEW')
   @ApiOperation({ summary: 'Get one AMC contract by id' })
   @ApiResponse({ status: 404, description: 'Not found' })
   async findById(@Param('id', ParseUUIDPipe) id: string) {
@@ -83,14 +83,14 @@ export class AmcController {
   }
 
   @Get('contracts/:id/schedule')
-  @Roles(...AMC_VIEW_ROLES)
+  @RequiresCapability('AMC_VIEW')
   @ApiOperation({ summary: 'List the PM visit schedule (Appointment rows, type=AMC) generated for a contract' })
   async getSchedule(@Param('id', ParseUUIDPipe) id: string) {
     return this.amcService.getSchedule(id);
   }
 
   @Post('contracts/:id/renew')
-  @Roles(...AMC_MANAGEMENT_ROLES)
+  @RequiresCapability('AMC_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -104,7 +104,7 @@ export class AmcController {
   }
 
   @Post('contracts/:id/cancel')
-  @Roles(...AMC_MANAGEMENT_ROLES)
+  @RequiresCapability('AMC_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CANCEL,
@@ -119,7 +119,7 @@ export class AmcController {
   }
 
   @Post('contracts/:id/send-renewal-reminder')
-  @Roles(...AMC_MANAGEMENT_ROLES)
+  @RequiresCapability('AMC_MANAGE')
   @ApiOperation({ summary: 'Manually trigger the AMC_RENEWAL_REMINDER notification to the customer (no scheduler exists to auto-fire this 30 days before expiry)' })
   @ApiResponse({ status: 400, description: 'Contract is not ACTIVE' })
   async sendRenewalReminder(@Param('id', ParseUUIDPipe) id: string) {
@@ -127,7 +127,7 @@ export class AmcController {
   }
 
   @Post('visits/:appointmentId/complete')
-  @Roles(...AMC_TECHNICIAN_ROLES)
+  @RequiresCapability('AMC_TECHNICIAN_VISIT')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -145,7 +145,7 @@ export class AmcController {
   }
 
   @Get('visits/:appointmentId/completion')
-  @Roles(...AMC_VIEW_ROLES)
+  @RequiresCapability('AMC_VIEW')
   @ApiOperation({ summary: 'Get the completion record for a PM visit' })
   @ApiResponse({ status: 404, description: 'This visit has not been completed yet' })
   async getVisitCompletion(@Param('appointmentId', ParseUUIDPipe) appointmentId: string) {
@@ -153,7 +153,7 @@ export class AmcController {
   }
 
   @Post('contracts/:id/billing-invoices')
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('AMC_BILLING')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -167,14 +167,14 @@ export class AmcController {
   }
 
   @Get('contracts/:id/billing-invoices')
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('AMC_BILLING')
   @ApiOperation({ summary: 'List billing invoices generated for a contract' })
   async getBillingInvoices(@Param('id', ParseUUIDPipe) id: string) {
     return this.amcService.getBillingInvoicesForContract(id);
   }
 
   @Get('billing-invoices/:id')
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('AMC_BILLING')
   @ApiOperation({ summary: 'Get one AMC billing invoice by id' })
   @ApiResponse({ status: 404, description: 'Not found' })
   async findBillingInvoiceById(@Param('id', ParseUUIDPipe) id: string) {
@@ -182,7 +182,7 @@ export class AmcController {
   }
 
   @Post('billing-invoices/:id/record-payment')
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('AMC_BILLING')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,

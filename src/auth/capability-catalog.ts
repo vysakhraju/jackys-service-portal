@@ -135,6 +135,39 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.TECHNICIAN_WORKSHOP, RoleName.CCE],
     migrated: true,
   },
+
+  // --- AMC --- replaces AMC_MANAGEMENT_ROLES/AMC_VIEW_ROLES/AMC_TECHNICIAN_ROLES/
+  // FINANCE_ROLES on amc.controller.ts (2026-09-10). Named AMC_BILLING rather than a bare
+  // "FINANCE" key since GL/Debit Notes will need their own, differently-scoped finance
+  // capability when those modules migrate - keys must stay globally unique in this catalog.
+  {
+    key: 'AMC_MANAGE',
+    label: 'Create, renew, cancel an AMC contract & send renewal reminders',
+    module: 'AMC',
+    defaultRoles: [RoleName.CCE],
+    migrated: true,
+  },
+  {
+    key: 'AMC_VIEW',
+    label: 'View AMC contracts, schedules & visit completions',
+    module: 'AMC',
+    defaultRoles: [RoleName.CCE, RoleName.TECHNICIAN_FIELD, RoleName.TECHNICIAN_WORKSHOP, RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
+  {
+    key: 'AMC_TECHNICIAN_VISIT',
+    label: 'Complete an AMC preventive-maintenance visit',
+    module: 'AMC',
+    defaultRoles: [RoleName.TECHNICIAN_FIELD, RoleName.TECHNICIAN_WORKSHOP],
+    migrated: true,
+  },
+  {
+    key: 'AMC_BILLING',
+    label: 'Generate & manage AMC billing invoices, record payments',
+    module: 'AMC',
+    defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {
