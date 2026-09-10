@@ -218,13 +218,19 @@ export function TechnicianGanttPage() {
           // technician assignment and the drop-computed time land together (a the-fool
           // pre-mortem on the original drag rework flagged the earlier two-call sequence as
           // its top-severity risk - see AssignTechnicianDto's own doc comment).
-          return assignTechnician(action.id, action.technicianId, action.scheduledAt);
+          // skipSuccessToast: onSuccess below already pushes a drag-specific toast
+          // ("Technician assigned" / "Reassigned") - the generic one would just double up.
+          return assignTechnician(action.id, action.technicianId, action.scheduledAt, { skipSuccessToast: true });
         case 'appointment-reassign':
-          return updateAppointment(action.id, { technicianId: action.technicianId, scheduledAt: action.scheduledAt });
+          return updateAppointment(
+            action.id,
+            { technicianId: action.technicianId, scheduledAt: action.scheduledAt },
+            { skipSuccessToast: true },
+          );
         case 'jobcard-assign':
-          return assignWorkshopTechnician(action.id, { technicianId: action.technicianId });
+          return assignWorkshopTechnician(action.id, { technicianId: action.technicianId }, { skipSuccessToast: true });
         case 'jobcard-reassign':
-          return reassignWorkshopTechnician(action.id, { technicianId: action.technicianId });
+          return reassignWorkshopTechnician(action.id, { technicianId: action.technicianId }, { skipSuccessToast: true });
       }
     },
     onSuccess: (_data, action) => {
@@ -653,7 +659,8 @@ function AddCrewHelperModal({
   const available = useMemo(() => candidates.filter((c) => !currentlyOnJob.has(c.id)), [candidates, currentlyOnJob]);
 
   const mutation = useMutation({
-    mutationFn: () => addCrewHelper(jobCardId, { technicianId }),
+    // skipSuccessToast: onSuccess below already pushes a specific "Crew helper added" toast.
+    mutationFn: () => addCrewHelper(jobCardId, { technicianId }, { skipSuccessToast: true }),
     onSuccess: () => {
       push({ title: 'Crew helper added', description: `Added to ${jobCardNumber}.` });
       onAdded();

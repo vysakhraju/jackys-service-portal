@@ -289,7 +289,9 @@ describe('TechnicianGanttPage', () => {
     await user.selectOptions(select, 'tech-3');
     await user.click(screen.getByRole('button', { name: 'Add helper' }));
 
-    await waitFor(() => expect(addCrewHelper).toHaveBeenCalledWith('jc-1', { technicianId: 'tech-3' }));
+    await waitFor(() =>
+      expect(addCrewHelper).toHaveBeenCalledWith('jc-1', { technicianId: 'tech-3' }, { skipSuccessToast: true }),
+    );
     await waitFor(() => expect(screen.queryByText('Add crew helper — JC-0100')).not.toBeInTheDocument());
   });
 
@@ -363,7 +365,11 @@ describe('TechnicianGanttPage', () => {
 
     // One atomic call - technician + the drop-computed time together (see the-fool
     // pre-mortem note in the source: this used to be two sequential calls).
-    await waitFor(() => expect(assignTechnician).toHaveBeenCalledWith('apt-9', 'tech-1', '2026-09-09T14:00:00.000Z'));
+    await waitFor(() =>
+      expect(assignTechnician).toHaveBeenCalledWith('apt-9', 'tech-1', '2026-09-09T14:00:00.000Z', {
+        skipSuccessToast: true,
+      }),
+    );
     expect(await screen.findByText('Technician assigned')).toBeInTheDocument();
   });
 
@@ -416,7 +422,9 @@ describe('TechnicianGanttPage', () => {
 
     dragAndDrop(card, dropZone);
 
-    await waitFor(() => expect(assignWorkshopTechnician).toHaveBeenCalledWith('jc-9', { technicianId: 'tech-3' }));
+    await waitFor(() =>
+      expect(assignWorkshopTechnician).toHaveBeenCalledWith('jc-9', { technicianId: 'tech-3' }, { skipSuccessToast: true }),
+    );
     expect(await screen.findByText('Technician assigned')).toBeInTheDocument();
   });
 
@@ -457,7 +465,11 @@ describe('TechnicianGanttPage', () => {
     dragAndDrop(bar, dropZone, 500);
 
     await waitFor(() =>
-      expect(updateAppointment).toHaveBeenCalledWith('apt-1', { technicianId: 'tech-4', scheduledAt: '2026-09-09T14:00:00.000Z' }),
+      expect(updateAppointment).toHaveBeenCalledWith(
+        'apt-1',
+        { technicianId: 'tech-4', scheduledAt: '2026-09-09T14:00:00.000Z' },
+        { skipSuccessToast: true },
+      ),
     );
   });
 
@@ -471,7 +483,9 @@ describe('TechnicianGanttPage', () => {
 
     dragAndDrop(bar, dropZone);
 
-    await waitFor(() => expect(reassignWorkshopTechnician).toHaveBeenCalledWith('jc-1', { technicianId: 'tech-3' }));
+    await waitFor(() =>
+      expect(reassignWorkshopTechnician).toHaveBeenCalledWith('jc-1', { technicianId: 'tech-3' }, { skipSuccessToast: true }),
+    );
   });
 
   it('treats dropping a workshop_job block back onto its own current technician as a no-op', async () => {

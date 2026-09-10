@@ -25,7 +25,7 @@ describe('workshopApi', () => {
   it('assignWorkshopTechnician posts to /workshop/:jobCardId/assign', async () => {
     (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'jc1', status: 'WORKSHOP_ASSIGNED' } });
     await assignWorkshopTechnician('jc1', { technicianId: 'tech-1' });
-    expect(api.post).toHaveBeenCalledWith('/workshop/jc1/assign', { technicianId: 'tech-1' });
+    expect(api.post).toHaveBeenCalledWith('/workshop/jc1/assign', { technicianId: 'tech-1' }, undefined);
   });
 
   it('startWip posts to /workshop/:jobCardId/start-wip with no body', async () => {
@@ -56,7 +56,7 @@ describe('workshopApi', () => {
   it('addCrewHelper posts to /workshop/:jobCardId/crew-helpers', async () => {
     (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'helper-1', technicianId: 'tech-2' } });
     await addCrewHelper('jc1', { technicianId: 'tech-2' });
-    expect(api.post).toHaveBeenCalledWith('/workshop/jc1/crew-helpers', { technicianId: 'tech-2' });
+    expect(api.post).toHaveBeenCalledWith('/workshop/jc1/crew-helpers', { technicianId: 'tech-2' }, undefined);
   });
 
   it('listCrewHelpers fetches GET /workshop/:jobCardId/crew-helpers', async () => {

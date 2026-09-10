@@ -37,14 +37,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function login(email: string, password: string) {
-    const response = await api.post<TokenPair>('/auth/login', { email, password });
+    // Not a "save" - skip the automatic success toast (see lib/api.ts's response
+    // interceptor). The user is about to land on the dashboard; a "Saved successfully"
+    // pop-up on the way there would just be noise.
+    const response = await api.post<TokenPair>(
+      '/auth/login',
+      { email, password },
+      { skipSuccessToast: true },
+    );
     setTokens(response.data.accessToken, response.data.refreshToken);
     setUser(response.data.user);
   }
 
   async function logout() {
     try {
-      await api.post('/auth/logout');
+      await api.post('/auth/logout', undefined, { skipSuccessToast: true });
     } catch {
       // Best-effort — even if the server call fails (e.g. token already
       // expired), we still want to clear local state and send the user

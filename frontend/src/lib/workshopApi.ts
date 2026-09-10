@@ -10,13 +10,19 @@ import type { JobCard } from './jobCardsTypes';
 
 const BASE = '/workshop';
 
-export const assignWorkshopTechnician = (jobCardId: string, data: AssignWorkshopInput) =>
-  api.post<JobCard>(`${BASE}/${jobCardId}/assign`, data).then((r) => r.data);
+export const assignWorkshopTechnician = (
+  jobCardId: string,
+  data: AssignWorkshopInput,
+  opts?: { skipSuccessToast?: boolean },
+) => api.post<JobCard>(`${BASE}/${jobCardId}/assign`, data, opts).then((r) => r.data);
 
 // Technician Assignment Board's reassign action (2026-09-09) - only valid once a job
 // already has a workshop technician; use assignWorkshopTechnician above for the first one.
-export const reassignWorkshopTechnician = (jobCardId: string, data: AssignWorkshopInput) =>
-  api.post<JobCard>(`${BASE}/${jobCardId}/reassign`, data).then((r) => r.data);
+export const reassignWorkshopTechnician = (
+  jobCardId: string,
+  data: AssignWorkshopInput,
+  opts?: { skipSuccessToast?: boolean },
+) => api.post<JobCard>(`${BASE}/${jobCardId}/reassign`, data, opts).then((r) => r.data);
 
 export const startWip = (jobCardId: string) => api.post<JobCard>(`${BASE}/${jobCardId}/start-wip`).then((r) => r.data);
 
@@ -28,8 +34,11 @@ export const completeWorkshop = (jobCardId: string) => api.post<JobCard>(`${BASE
 export const getWorkshopState = (jobCardId: string) => api.get<WorkshopState>(`${BASE}/${jobCardId}`).then((r) => r.data);
 
 // Gantt board's "add crew helper" action, 2026-09-09.
-export const addCrewHelper = (jobCardId: string, data: AddCrewHelperInput) =>
-  api.post<JobCardCrewHelper>(`${BASE}/${jobCardId}/crew-helpers`, data).then((r) => r.data);
+export const addCrewHelper = (
+  jobCardId: string,
+  data: AddCrewHelperInput,
+  opts?: { skipSuccessToast?: boolean },
+) => api.post<JobCardCrewHelper>(`${BASE}/${jobCardId}/crew-helpers`, data, opts).then((r) => r.data);
 
 export const listCrewHelpers = (jobCardId: string) =>
   api.get<JobCardCrewHelper[]>(`${BASE}/${jobCardId}/crew-helpers`).then((r) => r.data);

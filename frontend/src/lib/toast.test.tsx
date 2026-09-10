@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ToastProvider, useToast } from './toast';
+import { ToastProvider, notifySaveSuccess, useToast } from './toast';
 
 function Trigger({ toast }: { toast: Parameters<ReturnType<typeof useToast>['push']>[0] }) {
   const { push } = useToast();
@@ -101,6 +101,43 @@ describe('toast - push/render/dismiss', () => {
     expect(await screen.findByText('First')).toBeInTheDocument();
     expect(screen.getByText('Second')).toBeInTheDocument();
     expect(screen.getAllByRole('status')).toHaveLength(2);
+  });
+});
+
+describe('toast - notifySaveSuccess (non-component bridge used by lib/api.ts)', () => {
+  it('is a safe no-op when no ToastProvider is mounted', () => {
+    expect(() => notifySaveSuccess()).not.toThrow();
+  });
+
+  it('renders a toast with the default title when a ToastProvider is mounted', async () => {
+    render(
+      <ToastProvider>
+        <div />
+      </ToastProvider>,
+    );
+    notifySaveSuccess();
+    expect(await screen.findByText('Saved successfully.')).toBeInTheDocument();
+  });
+
+  it('renders a toast with a custom message when one is passed', async () => {
+    render(
+      <ToastProvider>
+        <div />
+      </ToastProvider>,
+    );
+    notifySaveSuccess('Estimate sent to customer.');
+    expect(await screen.findByText('Estimate sent to customer.')).toBeInTheDocument();
+  });
+
+  it('stops firing once the ToastProvider unmounts', () => {
+    const { unmount } = render(
+      <ToastProvider>
+        <div />
+      </ToastProvider>,
+    );
+    unmount();
+    expect(() => notifySaveSuccess()).not.toThrow();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
 

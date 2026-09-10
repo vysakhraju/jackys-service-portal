@@ -1,6 +1,20 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { API_BASE_URL } from './config';
 import type { TokenPair } from './types';
+import { notifySaveSuccess } from './toast';
+
+// Lets one call opt out of, or customize, the automatic "Saved successfully" toast fired
+// below for every successful mutating request - e.g. a call that already shows its own more
+// specific toast (see TechnicianGanttPage's drag-and-drop), or one that isn't really a "save"
+// at all (login/logout, resolving a map link).
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipSuccessToast?: boolean;
+    successMessage?: string;
+  }
+}
+
+const MUTATING_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 
 // Keys used in localStorage. Centralized here so nothing else in the app has to
 // remember the exact string — see also lib/auth.tsx, which is the only other
@@ -60,7 +74,18 @@ async function refreshAccessToken(): Promise<string> {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Fire a generic "Saved successfully" toast for every successful create/update/delete
+    // request, app-wide (2026-09-10) - one interceptor instead of touching every one of the
+    // ~75 mutating calls across the app individually. GET requests never toast. A call opts
+    // out (skipSuccessToast) or overrides the wording (successMessage) via its own config -
+    // see the module augmentation above.
+    const method = response.config.method?.toLowerCase();
+    if (method && MUTATING_METHODS.has(method) && !response.config.skipSuccessToast) {
+      notifySaveSuccess(response.config.successMessage ?? (method === 'delete' ? 'Deleted successfully.' : 'Saved successfully.'));
+    }
+    return response;
+  },
   async (error: AxiosError) => {
     const original = error.config as (InternalAxiosRequestConfig & { _retried?: boolean }) | undefined;
 

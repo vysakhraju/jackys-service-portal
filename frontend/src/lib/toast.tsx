@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
 // App-wide toast primitive - didn't exist anywhere in this codebase before the 2026-09-07
 // Need Spare review notification (grepped: no toast/notification/snackbar/popup library or
@@ -32,6 +32,20 @@ const DEFAULT_DURATION_MS = 8000;
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
+// Module-level bridge so non-component code can fire a toast without being inside the React
+// tree - specifically the axios success interceptor in lib/api.ts, which is what drives the
+// "Saved successfully" toast on every mutating request app-wide (2026-09-10). Registered by
+// the single mounted <ToastProvider> and cleared on unmount, so calling notifySaveSuccess()
+// with no provider mounted - a unit test that mocks the API layer directly rather than going
+// through axios, or the public/unauthenticated customer routes that render outside
+// AppLayout/ToastProvider entirely - is a safe no-op rather than a throw.
+let bridgePush: ((toast: ToastInput) => void) | null = null;
+
+/** Fire the standard "saved" toast from outside the React tree. See bridgePush above. */
+export function notifySaveSuccess(message?: string): void {
+  bridgePush?.({ title: message ?? 'Saved successfully.' });
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const idRef = useRef(0);
@@ -55,6 +69,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     },
     [dismiss],
   );
+
+  useEffect(() => {
+    bridgePush = push;
+    return () => {
+      bridgePush = null;
+    };
+  }, [push]);
 
   return (
     <ToastContext.Provider value={{ push }}>

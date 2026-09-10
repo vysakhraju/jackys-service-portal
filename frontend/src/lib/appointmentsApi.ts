@@ -51,8 +51,11 @@ export const getAppointment = (id: string) => api.get<Appointment>(`${BASE}/${id
 export const getAppointmentByNumber = (appointmentNumber: string) =>
   api.get<Appointment>(`${BASE}/number/${encodeURIComponent(appointmentNumber)}`).then((r) => r.data);
 
-export const updateAppointment = (id: string, data: Partial<CreateAppointmentInput>) =>
-  api.put<Appointment>(`${BASE}/${id}`, data).then((r) => r.data);
+export const updateAppointment = (
+  id: string,
+  data: Partial<CreateAppointmentInput>,
+  opts?: { skipSuccessToast?: boolean },
+) => api.put<Appointment>(`${BASE}/${id}`, data, opts).then((r) => r.data);
 
 export const cancelAppointment = (id: string, reason: string) =>
   api.put<Appointment>(`${BASE}/${id}/cancel`, { reason }).then((r) => r.data);
@@ -62,8 +65,12 @@ export const cancelAppointment = (id: string, reason: string) =>
 // drag-assign is one atomic backend call rather than assign-then-update, which could
 // otherwise leave an appointment assigned to a technician but still on its old time if the
 // second call failed.
-export const assignTechnician = (id: string, technicianId: string, scheduledAt?: string) =>
-  api.put<Appointment>(`${BASE}/${id}/assign-technician`, { technicianId, scheduledAt }).then((r) => r.data);
+export const assignTechnician = (
+  id: string,
+  technicianId: string,
+  scheduledAt?: string,
+  opts?: { skipSuccessToast?: boolean },
+) => api.put<Appointment>(`${BASE}/${id}/assign-technician`, { technicianId, scheduledAt }, opts).then((r) => r.data);
 
 export const confirmAppointment = (id: string) => api.put<Appointment>(`${BASE}/${id}/confirm`).then((r) => r.data);
 
@@ -78,7 +85,8 @@ export const deleteAppointment = (id: string) => api.delete(`${BASE}/${id}`).the
 // my location" GPS flow), then submitted as plain customerLat/customerLng numbers alongside
 // the rest of the create form - see google-maps-link.util.ts for how resolution works.
 export const resolveMapLink = (url: string) =>
-  api.post<ResolvedMapLink>(`${BASE}/resolve-map-link`, { url }).then((r) => r.data);
+  // A lookup, not a save - nothing is persisted here, so skip the automatic success toast.
+  api.post<ResolvedMapLink>(`${BASE}/resolve-map-link`, { url }, { skipSuccessToast: true }).then((r) => r.data);
 
 // New Appointment scheduling grid (2026-09-09) - see SchedulingGrid's own doc comment.
 export const getSchedulingGrid = (serviceCentreId: string, date: string) =>
