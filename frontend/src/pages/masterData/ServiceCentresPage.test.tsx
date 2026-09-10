@@ -132,4 +132,28 @@ describe('ServiceCentresPage - field technician assignment', () => {
       expect(updateServiceCentre).toHaveBeenCalledWith('sc-1', expect.objectContaining({ assignedTechnicianIds: ['tech-1'] })),
     );
   });
+
+  it('drops stale technician ids (deactivated since, or malformed) instead of resending them on save', async () => {
+    // Real bug: DXB-01 still had ids from technicians deactivated in the 2026-09-09
+    // cleanup (plus one non-UUID legacy value) sitting in assignedTechnicianIds. None
+    // of those render as a checked box (they aren't in the active-field-tech list), but
+    // without filtering they rode along in state and got resent on save, where the
+    // backend's @IsUUID validator rejected the whole array - permanently blocking that
+    // centre from being saved at all.
+    vi.mocked(listServiceCentres).mockResolvedValue([
+      centre({ assignedTechnicianIds: ['tech-1', 'deactivated-tech-id', 'not-a-uuid'] }),
+    ]);
+    vi.mocked(updateServiceCentre).mockResolvedValue(centre());
+    renderPage();
+
+    fireEvent.click(await screen.findByText('Edit'));
+    const raviCheckbox = (await screen.findByText('Ravi Kumar')).closest('label')!.querySelector('input')!;
+    expect(raviCheckbox).toBeChecked();
+
+    fireEvent.click(screen.getByText('Save changes'));
+
+    await waitFor(() =>
+      expect(updateServiceCentre).toHaveBeenCalledWith('sc-1', expect.objectContaining({ assignedTechnicianIds: ['tech-1'] })),
+    );
+  });
 });

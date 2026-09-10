@@ -102,7 +102,16 @@ export function ServiceCentresPage() {
       if (centre.schedule?.[day]) merged[day] = centre.schedule[day];
     }
     setSchedule(merged);
-    setAssignedTechnicianIds(centre.assignedTechnicianIds ?? []);
+    // Drop anything that isn't a currently-active field technician before it lands in
+    // form state - a centre's stored assignedTechnicianIds can carry ids from techs
+    // deactivated since (e.g. yesterday's test-user cleanup) or, on older records, a
+    // malformed non-UUID entry from before validation existed. Neither renders as a
+    // checked box below, but without this filter it rode along silently and got
+    // resent on save, where the backend's @IsUUID validator rejects the WHOLE array
+    // over one bad entry - permanently blocking that centre from ever being saved
+    // again, including by an admin trying to fix exactly this.
+    const validTechIds = new Set(fieldTechnicians.map((t) => t.id));
+    setAssignedTechnicianIds((centre.assignedTechnicianIds ?? []).filter((id) => validTechIds.has(id)));
     setModalOpen(true);
   }
 
