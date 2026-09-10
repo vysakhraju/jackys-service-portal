@@ -69,6 +69,18 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'REPORTS_FINANCE_VIEW', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
   { key: 'TECHNICIAN_VISIT', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'TECHNICIAN_FIELD'] },
   { key: 'TECHNICIAN_SCHEDULE_GANTT', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
+  { key: 'GL_LEDGER_VIEW', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
+  { key: 'DEBIT_NOTES_MANAGE', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
+  { key: 'MASTER_DATA_SERVICE_CENTRE_CREATE', defaultRoles: ['CCE'] },
+  { key: 'MASTER_DATA_SERVICE_CENTRE_UPDATE', defaultRoles: [] },
+  { key: 'MASTER_DATA_FAULT_SYMPTOM_MANAGE', defaultRoles: ['CCE', 'TECHNICAL_TEAM_LEADER'] },
+  { key: 'MASTER_DATA_SPARE_PARTS_MANAGE', defaultRoles: ['WAREHOUSE_CLERK'] },
+  { key: 'MASTER_DATA_PRICE_LIST_MANAGE', defaultRoles: ['FINANCE_MANAGER'] },
+  { key: 'MASTER_DATA_KPI_RULE_MANAGE', defaultRoles: [] },
+  { key: 'MASTER_DATA_NOTIFICATION_TEMPLATE_MANAGE', defaultRoles: [] },
+  { key: 'MASTER_DATA_WARRANTY_MASTER_MANAGE', defaultRoles: ['WARRANTY_CLERK'] },
+  { key: 'MASTER_DATA_COMPONENT_YIELD_MANAGE', defaultRoles: [] },
+  { key: 'MASTER_DATA_BULK_IMPORT', defaultRoles: [] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

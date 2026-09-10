@@ -3,14 +3,17 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { DebitNotesService } from './debit-notes.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 
-const FINANCE_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN', 'SERVICE_HEAD'];
+// Migrated onto the designation permission matrix (2026-09-10) as DEBIT_NOTES_MANAGE - see
+// capability-catalog.ts's "Debit Notes" section. Includes the GL-posting action (post()) -
+// unlike Warranty Claims' credit-note posting, this role set is symmetric on
+// SUPER_ADMIN/SERVICE_HEAD, so migrating it is a zero-behavior-change move.
 
 @ApiTags('finance')
 @Controller('debit-notes')
@@ -20,7 +23,7 @@ export class DebitNotesController {
   constructor(private debitNotesService: DebitNotesService) {}
 
   @Get('job-card/:jobCardId')
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('DEBIT_NOTES_MANAGE')
   @ApiOperation({ summary: 'FR-15/AC-15: get (lazily creating a DRAFT if none exists yet) the Debit Note for an interdepartment (B2B_SALES_CHANNEL, in-warranty), QC_PASSED Job Card' })
   @ApiResponse({ status: 200, description: 'The Debit Note (existing or newly drafted)' })
   @ApiResponse({ status: 400, description: 'Job Card is not QC_PASSED, is out-of-warranty, or is not a B2B_SALES_CHANNEL appointment' })
@@ -29,7 +32,7 @@ export class DebitNotesController {
   }
 
   @Get('recharge-report')
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('DEBIT_NOTES_MANAGE')
   @ApiOperation({ summary: 'AC-16: interdepartment recharge report - posted vs draft counts and totals' })
   @ApiResponse({ status: 200, description: 'Recharge summary' })
   async getRechargeReport() {
@@ -37,7 +40,7 @@ export class DebitNotesController {
   }
 
   @Get()
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('DEBIT_NOTES_MANAGE')
   @ApiOperation({ summary: 'List all Debit Notes, newest first' })
   @ApiResponse({ status: 200, description: 'Debit Notes' })
   async findAll() {
@@ -45,7 +48,7 @@ export class DebitNotesController {
   }
 
   @Get(':id')
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('DEBIT_NOTES_MANAGE')
   @ApiOperation({ summary: 'Get one Debit Note by id' })
   @ApiResponse({ status: 200, description: 'The Debit Note' })
   @ApiResponse({ status: 404, description: 'Not found' })
@@ -54,7 +57,7 @@ export class DebitNotesController {
   }
 
   @Post(':id/post')
-  @Roles(...FINANCE_ROLES)
+  @RequiresCapability('DEBIT_NOTES_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,

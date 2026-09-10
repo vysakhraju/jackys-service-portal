@@ -332,6 +332,105 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
     migrated: true,
   },
+
+  // --- GL Ledger --- replaces FINANCE_ROLES on gl-ledger.controller.ts (2026-09-10). Own
+  // capability, not shared with AMC's AMC_BILLING or Debit Notes' DEBIT_NOTES_MANAGE below -
+  // each finance-adjacent module's FINANCE_ROLES const was independently declared, and keys
+  // must stay globally unique in this catalog.
+  {
+    key: 'GL_LEDGER_VIEW',
+    label: 'View GL postings (system-generated only, no manual entry exists)',
+    module: 'GL Ledger',
+    defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
+
+  // --- Debit Notes --- replaces FINANCE_ROLES on debit-notes.controller.ts (2026-09-10).
+  // One capability for browse + the GL-posting action (post()) - verified symmetric on
+  // SUPER_ADMIN/SERVICE_HEAD, unlike Warranty Claims' credit-note posting.
+  {
+    key: 'DEBIT_NOTES_MANAGE',
+    label: 'View Debit Notes & recharge report, post a DRAFT Debit Note to GL',
+    module: 'Debit Notes',
+    defaultRoles: [RoleName.ACCOUNTANT, RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
+
+  // --- Master Data --- replaces 12 of the 13 inline @Roles() literals on
+  // master-data.controller.ts (2026-09-10), one capability per distinct role membership /
+  // entity-type admin action, matching the controller's own entity-type sectioning.
+  // deleteServiceCentre's @Roles('SUPER_ADMIN') is deliberately absent - asymmetric (no
+  // SERVICE_HEAD), see the controller's own comment.
+  {
+    key: 'MASTER_DATA_SERVICE_CENTRE_CREATE',
+    label: 'Create a service centre',
+    module: 'Master Data',
+    defaultRoles: [RoleName.CCE],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_SERVICE_CENTRE_UPDATE',
+    label: 'Update a service centre',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_FAULT_SYMPTOM_MANAGE',
+    label: 'Create a fault/symptom code',
+    module: 'Master Data',
+    defaultRoles: [RoleName.CCE, RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_SPARE_PARTS_MANAGE',
+    label: 'Create a spare part, link it to a model, or create a spare part model',
+    module: 'Master Data',
+    defaultRoles: [RoleName.WAREHOUSE_CLERK],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_PRICE_LIST_MANAGE',
+    label: 'Create a service price list entry',
+    module: 'Master Data',
+    defaultRoles: [RoleName.FINANCE_MANAGER],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_KPI_RULE_MANAGE',
+    label: 'Create a technician KPI rule',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_NOTIFICATION_TEMPLATE_MANAGE',
+    label: 'Create a notification template',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_WARRANTY_MASTER_MANAGE',
+    label: 'Create a warranty master entry',
+    module: 'Master Data',
+    defaultRoles: [RoleName.WARRANTY_CLERK],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_COMPONENT_YIELD_MANAGE',
+    label: 'Create a component yield matrix entry',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_BULK_IMPORT',
+    label: 'Bulk import master data from CSV/Excel',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {

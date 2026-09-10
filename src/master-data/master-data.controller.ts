@@ -25,6 +25,7 @@ import { CreateComponentYieldDto } from './dto/create-component-yield.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
@@ -51,8 +52,14 @@ export class MasterDataController {
   constructor(private masterDataService: MasterDataService) {}
 
   // === Service Centres ===
+  // createServiceCentre/updateServiceCentre migrated onto the designation permission matrix
+  // (2026-09-10) as MASTER_DATA_SERVICE_CENTRE_CREATE/_UPDATE - see capability-catalog.ts's
+  // "Master Data" section. deleteServiceCentre below is deliberately NOT migrated: its
+  // @Roles('SUPER_ADMIN') is asymmetric (SUPER_ADMIN only, no SERVICE_HEAD), and the
+  // matrix's SUPER_ADMIN+SERVICE_HEAD bypass can't preserve that - same finding as
+  // Warranty Claims' CREDIT_NOTE_ROLES (2026-09-10).
   @Post('service-centres')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE')
+  @RequiresCapability('MASTER_DATA_SERVICE_CENTRE_CREATE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -82,7 +89,7 @@ export class MasterDataController {
   }
 
   @Put('service-centres/:id')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
+  @RequiresCapability('MASTER_DATA_SERVICE_CENTRE_UPDATE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -96,6 +103,8 @@ export class MasterDataController {
     return this.masterDataService.updateServiceCentre(id, data);
   }
 
+  // Deliberately still hardcoded @Roles('SUPER_ADMIN') - asymmetric (no SERVICE_HEAD),
+  // cannot be migrated onto the matrix without silently widening SERVICE_HEAD's access.
   @Delete('service-centres/:id')
   @Roles('SUPER_ADMIN')
   @ApiOperation({ summary: 'Delete service centre (soft)' })
@@ -105,7 +114,7 @@ export class MasterDataController {
 
   // === Fault & Symptoms ===
   @Post('fault-symptoms')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'CCE', 'TECHNICAL_TEAM_LEADER')
+  @RequiresCapability('MASTER_DATA_FAULT_SYMPTOM_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -143,7 +152,7 @@ export class MasterDataController {
 
   // === Spare Parts ===
   @Post('spare-parts')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK')
+  @RequiresCapability('MASTER_DATA_SPARE_PARTS_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -190,7 +199,7 @@ export class MasterDataController {
   }
 
   @Post('spare-parts/:id/link-model')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK')
+  @RequiresCapability('MASTER_DATA_SPARE_PARTS_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -206,7 +215,7 @@ export class MasterDataController {
 
   // === Spare Part Models ===
   @Post('spare-part-models')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK')
+  @RequiresCapability('MASTER_DATA_SPARE_PARTS_MANAGE')
   @ApiOperation({ summary: 'Create spare part model' })
   @ApiBody({ type: CreateSparePartModelDto })
   @ApiResponse({ status: 201, type: SparePartModel })
@@ -223,7 +232,7 @@ export class MasterDataController {
 
   // === Service Price List ===
   @Post('price-lists')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'FINANCE_MANAGER')
+  @RequiresCapability('MASTER_DATA_PRICE_LIST_MANAGE')
   @ApiOperation({ summary: 'Create service price list' })
   @ApiBody({ type: CreatePriceListDto })
   @ApiResponse({ status: 201, type: ServicePriceList })
@@ -245,7 +254,7 @@ export class MasterDataController {
 
   // === Technician KPI Rules ===
   @Post('kpi-rules')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
+  @RequiresCapability('MASTER_DATA_KPI_RULE_MANAGE')
   @ApiOperation({ summary: 'Create technician KPI rule' })
   @ApiBody({ type: CreateKpiRuleDto })
   @ApiResponse({ status: 201, type: TechnicianKpiRule })
@@ -262,7 +271,7 @@ export class MasterDataController {
 
   // === Notification Templates ===
   @Post('notification-templates')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
+  @RequiresCapability('MASTER_DATA_NOTIFICATION_TEMPLATE_MANAGE')
   @ApiOperation({ summary: 'Create notification template' })
   @ApiBody({ type: CreateNotificationTemplateDto })
   @ApiResponse({ status: 201, type: NotificationTemplate })
@@ -289,7 +298,7 @@ export class MasterDataController {
 
   // === Warranty Master ===
   @Post('warranty-master')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD', 'WARRANTY_CLERK')
+  @RequiresCapability('MASTER_DATA_WARRANTY_MASTER_MANAGE')
   @ApiOperation({ summary: 'Create warranty master entry' })
   @ApiBody({ type: CreateWarrantyMasterDto })
   @ApiResponse({ status: 201, type: WarrantyMaster })
@@ -314,7 +323,7 @@ export class MasterDataController {
 
   // === Component Yield Matrix ===
   @Post('component-yield')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
+  @RequiresCapability('MASTER_DATA_COMPONENT_YIELD_MANAGE')
   @ApiOperation({ summary: 'Create component yield matrix entry' })
   @ApiBody({ type: CreateComponentYieldDto })
   @ApiResponse({ status: 201, type: ComponentYieldMatrix })
@@ -338,7 +347,7 @@ export class MasterDataController {
 
   // === Bulk Import ===
   @Post('bulk-import/:entityType')
-  @Roles('SUPER_ADMIN', 'SERVICE_HEAD')
+  @RequiresCapability('MASTER_DATA_BULK_IMPORT')
   @ApiOperation({ summary: 'Bulk import master data from CSV/Excel' })
   @ApiResponse({ status: 200 })
   bulkImport(@Param('entityType') entityType: string, @Body() data: any[]) {
