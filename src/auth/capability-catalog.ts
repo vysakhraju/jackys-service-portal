@@ -109,6 +109,32 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE, RoleName.TECHNICIAN_FIELD, RoleName.TECHNICIAN_WORKSHOP],
     migrated: true,
   },
+
+  // --- Workshop --- replaces ASSIGN_ROLES/ACTION_ROLES/the ACTION_ROLES+CCE view combo on
+  // workshop.controller.ts (2026-09-10). PRIVILEGED_ROLES (the in-handler ownership-bypass
+  // check on start-wip/request-spare/complete) is untouched, same reasoning as Job Cards'
+  // TASK_PAUSE_PRIVILEGED_ROLES.
+  {
+    key: 'WORKSHOP_ASSIGN',
+    label: 'Assign/reassign a workshop technician & manage crew helpers',
+    module: 'Workshop',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'WORKSHOP_ACTION',
+    label: 'Start WIP, request a spare, complete workshop work',
+    module: 'Workshop',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.TECHNICIAN_WORKSHOP],
+    migrated: true,
+  },
+  {
+    key: 'WORKSHOP_VIEW',
+    label: 'View a Job Card\'s workshop state & crew helpers',
+    module: 'Workshop',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.TECHNICIAN_WORKSHOP, RoleName.CCE],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {

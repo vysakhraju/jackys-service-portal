@@ -43,6 +43,9 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'JOB_CARD_MANAGE', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'CCE'] },
   { key: 'JOB_CARD_WARRANTY_OVERRIDE', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
   { key: 'JOB_CARD_TASK_PAUSE', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'CCE', 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP'] },
+  { key: 'WORKSHOP_ASSIGN', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
+  { key: 'WORKSHOP_ACTION', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'TECHNICIAN_WORKSHOP'] },
+  { key: 'WORKSHOP_VIEW', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'TECHNICIAN_WORKSHOP', 'CCE'] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

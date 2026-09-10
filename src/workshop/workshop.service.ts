@@ -46,9 +46,9 @@ export class WorkshopService {
    *    edit job-card-edit-lock.util.ts exists to gate once a job hits READY_FOR_QC or
    *    later - reusing it here rather than letting this brand-new mutation path reopen
    *    the exact hole that feature was built to close. In practice this never actually
-   *    blocks anyone today, since WorkshopController's ASSIGN_ROLES (who can even call
-   *    this) is already a subset of the lock's own override roles - kept explicit anyway
-   *    so that stays true if either role list ever changes independently.
+   *    blocks anyone today, since WorkshopController's WORKSHOP_ASSIGN capability (who can
+   *    even call this) grants a subset of the lock's own override roles - kept explicit
+   *    anyway so that stays true if either list ever changes independently.
    * 2. Reservation custody (the-fool finding): mirrors AppointmentsService.update()'s own
    *    guard for the identical problem on the field-visit side - don't let the outgoing
    *    technician get silently swapped out while they still physically hold a reserved
