@@ -12,7 +12,6 @@ import { PauseTaskDto } from './dto/pause-task.dto';
 import { JobCard } from './entities/job-card.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
 import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
@@ -24,27 +23,29 @@ import { PermissionsService } from '../permissions/permissions.service';
 import { PermissionType } from '../permissions/entities/user-permission-grant.entity';
 import { RequiresPermissionGrant } from '../permissions/decorators/requires-permission-grant.decorator';
 
-// Creation/validation/section-assignment/approval: same office-side role set used
-// elsewhere (Appointments' CCE-facing endpoints). Warranty override is deliberately
-// narrower - see WARRANTY_OVERRIDE_ROLES below.
-const JOB_CARD_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
-// FR-17: only a Technical Team Leader (or above) may perform a warranty override.
-const WARRANTY_OVERRIDE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
-// Phase 6 QC gate: deliberately NOT a fixed @Roles() list (now the QC_GATE_ACCESS
-// capability - see capability-catalog.ts, same membership: TECHNICAL_TEAM_LEADER, CCE,
-// QC_OFFICER, plus SUPER_ADMIN/SERVICE_HEAD via RolesGuard's hardcoded bypass). Anyone can
-// be admin-assigned the QC_APPROVAL grant (QC_OFFICER, a Team Leader, a Supervisor, a CCE -
-// whoever the business actually wants) via PermissionsController. This capability is only
-// the "can even be considered for this action at all" floor (excludes pure field/workshop
-// technicians by default) - the REAL check is the requireActiveGrant() call inside each
-// handler below, which is what makes this "each and every activity ... assigned to role
-// based if needed" per the user's own requirement.
-// Task-timer pause/resume: office roles plus whichever technician is actually doing the
-// work (field or workshop) - ownership is then enforced inside the service itself
-// (assertTaskPauseOwnership), same "@Roles is only the floor" pattern as
-// WorkshopController's ACTION_ROLES/PRIVILEGED_ROLES.
-const TASK_PAUSE_ROLES = [...JOB_CARD_ROLES, 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP'];
-const TASK_PAUSE_PRIVILEGED_ROLES = JOB_CARD_ROLES;
+// Creation/validation/section-assignment/approval/cancel, warranty override, and task-timer
+// pause/resume all migrated onto the designation permission matrix (2026-09-10) - see
+// capability-catalog.ts's "Job Cards" section for the JOB_CARD_MANAGE/
+// JOB_CARD_WARRANTY_OVERRIDE/JOB_CARD_TASK_PAUSE entries, which are each the exact same
+// membership the old hardcoded @Roles() arrays here used to have.
+//
+// Phase 6 QC gate: deliberately NOT a fixed @Roles() list (the QC_GATE_ACCESS capability -
+// see capability-catalog.ts, same membership: TECHNICAL_TEAM_LEADER, CCE, QC_OFFICER, plus
+// SUPER_ADMIN/SERVICE_HEAD via RolesGuard's hardcoded bypass). Anyone can be admin-assigned
+// the QC_APPROVAL grant (QC_OFFICER, a Team Leader, a Supervisor, a CCE - whoever the
+// business actually wants) via PermissionsController. This capability is only the "can even
+// be considered for this action at all" floor (excludes pure field/workshop technicians by
+// default) - the REAL check is the requireActiveGrant() call inside each handler below,
+// which is what makes this "each and every activity ... assigned to role based if needed"
+// per the user's own requirement.
+//
+// Task-timer pause/resume ownership: JOB_CARD_TASK_PAUSE's floor (office roles plus
+// whichever technician is actually doing the work, field or workshop) is a different,
+// wider question from WHO gets to bypass per-technician ownership once inside the handler -
+// that's TASK_PAUSE_PRIVILEGED_ROLES below, a plain business-logic array (not a @Roles()/
+// @RequiresCapability() gate, so it stays outside the matrix, same "checked in code, not
+// admin-editable" reasoning as WorkshopController's own PRIVILEGED_ROLES).
+const TASK_PAUSE_PRIVILEGED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
 
 @ApiTags('job-cards')
 @Controller('job-cards')
@@ -58,7 +59,7 @@ export class JobCardsController {
   ) {}
 
   @Post()
-  @Roles(...JOB_CARD_ROLES)
+  @RequiresCapability('JOB_CARD_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CREATE,
@@ -75,7 +76,7 @@ export class JobCardsController {
   }
 
   @Post(':id/validate-sn')
-  @Roles(...JOB_CARD_ROLES)
+  @RequiresCapability('JOB_CARD_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -91,7 +92,7 @@ export class JobCardsController {
   }
 
   @Post(':id/assign-section')
-  @Roles(...JOB_CARD_ROLES)
+  @RequiresCapability('JOB_CARD_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.STATUS_CHANGE,
@@ -107,7 +108,7 @@ export class JobCardsController {
   }
 
   @Post(':id/approve-customer')
-  @Roles(...JOB_CARD_ROLES)
+  @RequiresCapability('JOB_CARD_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -122,7 +123,7 @@ export class JobCardsController {
   }
 
   @Post(':id/warranty-override')
-  @Roles(...WARRANTY_OVERRIDE_ROLES)
+  @RequiresCapability('JOB_CARD_WARRANTY_OVERRIDE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.WARRANTY_OVERRIDE,
@@ -149,7 +150,7 @@ export class JobCardsController {
   }
 
   @Post(':id/cancel')
-  @Roles(...JOB_CARD_ROLES)
+  @RequiresCapability('JOB_CARD_MANAGE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.CANCEL,
@@ -218,7 +219,7 @@ export class JobCardsController {
   // --- Task timer pause/resume (SLA-safe pausing) -------------------------------------
 
   @Post(':id/pause')
-  @Roles(...TASK_PAUSE_ROLES)
+  @RequiresCapability('JOB_CARD_TASK_PAUSE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,
@@ -238,7 +239,7 @@ export class JobCardsController {
   }
 
   @Post(':id/resume')
-  @Roles(...TASK_PAUSE_ROLES)
+  @RequiresCapability('JOB_CARD_TASK_PAUSE')
   @UseInterceptors(AuditInterceptor)
   @Audit({
     action: AuditAction.UPDATE,

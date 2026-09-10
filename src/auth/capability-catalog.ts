@@ -81,6 +81,34 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE, RoleName.QC_OFFICER],
     migrated: true,
   },
+
+  // --- Job Cards --- replaces JOB_CARD_ROLES/WARRANTY_OVERRIDE_ROLES/TASK_PAUSE_ROLES on
+  // job-cards.controller.ts (2026-09-10). Kept as 3 separate capabilities, same reasoning as
+  // Appointments above: warranty override is genuinely narrower (TL only, FR-17) than core
+  // Job Card management, and task pause/resume is genuinely wider (also open to the
+  // technician actually doing the work) - collapsing any of these would silently grant more
+  // or less than today.
+  {
+    key: 'JOB_CARD_MANAGE',
+    label: 'Create, validate S/N, assign section, record customer approval, and cancel a Job Card',
+    module: 'Job Cards',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE],
+    migrated: true,
+  },
+  {
+    key: 'JOB_CARD_WARRANTY_OVERRIDE',
+    label: 'Warranty override on a Job Card (FR-17/AC-18)',
+    module: 'Job Cards',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'JOB_CARD_TASK_PAUSE',
+    label: 'Pause/resume a Job Card task timer',
+    module: 'Job Cards',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE, RoleName.TECHNICIAN_FIELD, RoleName.TECHNICIAN_WORKSHOP],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {
