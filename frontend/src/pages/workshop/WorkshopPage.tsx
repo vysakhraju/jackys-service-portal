@@ -46,12 +46,24 @@ const ASSIGN_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
 const RETURN_CONFIRM_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK'];
 
 export function WorkshopPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const prefill = searchParams.get('jobCardId') ?? '';
   const [activeJobCardId, setActiveJobCardId] = useState(prefill);
   // #218/#251: see QcPage's identical field for why this isn't derived via an effect.
   const [pickedLabel, setPickedLabel] = useState<string | null>(null);
   const queryClient = useQueryClient();
+
+  // 2026-09-14 live-tested finding: this page's activeJobCardId used to seed from
+  // ?jobCardId= once on mount and never write back to the URL - so picking a job via
+  // search left the URL blank, and switching to a sibling tab under
+  // WorkshopInventoryLayout (Inventory & Stock / Need Spare Requests) fully unmounts this
+  // page via its <Outlet /> and remounts it with nothing to re-seed from, silently losing
+  // the loaded job. Keeping the URL in sync (same setSearchParams({ jobCardId }) convention
+  // JobCardJourneyPage already uses) means a tab switch and back re-seeds activeJobCardId
+  // from the URL exactly as it would on a fresh "Go to Workshop ->" link. This does not
+  // require any new autosave mechanism - every action below (assign/startWip/complete/
+  // requestSpare) already calls the backend immediately via useMutation and is persisted
+  // the instant it succeeds; the job only *looked* wiped because the pointer to it was lost.
 
   const stateQuery = useQuery({
     queryKey: ['workshop-state', activeJobCardId],
@@ -81,6 +93,7 @@ export function WorkshopPage() {
             onSelect={(item) => {
               setPickedLabel(item.jobCardNumber);
               setActiveJobCardId(item.jobCardId);
+              setSearchParams({ jobCardId: item.jobCardId });
             }}
             renderOption={renderJobCardOption}
             getOptionLabel={(item) => `${item.jobCardNumber} — ${item.customerName}`}
@@ -89,6 +102,7 @@ export function WorkshopPage() {
             onClear={() => {
               setPickedLabel(null);
               setActiveJobCardId('');
+              setSearchParams({});
             }}
           />
         </Field>

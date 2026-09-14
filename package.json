@@ -18,6 +18,7 @@
     "seed:admin": "ts-node -T scripts/seed-admin.ts",
     "seed:technician": "ts-node -T scripts/seed-technician.ts",
     "cleanup:users": "ts-node -T scripts/cleanup-test-users.ts",
+    "release:stale-reservations": "ts-node -T scripts/release-stale-reservations.ts",
     "seed:role-permissions": "ts-node -T scripts/seed-role-permissions.ts"
   },
   "dependencies": {

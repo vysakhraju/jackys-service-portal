@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeJobCard, makeReservation, makeWorkshopState } from '../../test/fixtures';
 
@@ -85,6 +85,11 @@ beforeEach(() => {
   vi.mocked(searchJobCardJourney).mockReset().mockResolvedValue([]);
 });
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-search">{location.search}</div>;
+}
+
 // #218/#251: covers the search-then-select path for the top-of-page job card lookup,
 // distinct from every other test in this file which deep-links straight in via ?jobCardId=.
 describe('WorkshopPage - #218 name-based job card picker', () => {
@@ -119,6 +124,91 @@ describe('WorkshopPage - #218 name-based job card picker', () => {
     fireEvent.click(await screen.findByText('JC-0099'));
 
     await waitFor(() => expect(getWorkshopState).toHaveBeenCalledWith('jc-99'));
+  });
+});
+
+// 2026-09-14 live-tested bug: switching to a sibling tab (Inventory & Stock / Need Spare
+// Requests) under WorkshopInventoryLayout's <Outlet /> fully unmounts this page, and the
+// loaded job card was silently lost on return because activeJobCardId was never written
+// back into the URL. These tests cover the fix - the URL now tracks the picked job card,
+// so a remount (which is exactly what a tab switch does) re-seeds from it.
+describe('WorkshopPage - job card survives a tab-switch remount (URL stays in sync)', () => {
+  it('writes the picked job card into the URL as soon as it is selected via search', async () => {
+    mockUser({ roleName: 'TECHNICAL_TEAM_LEADER' });
+    vi.mocked(searchJobCardJourney).mockResolvedValue([
+      {
+        jobCardId: 'jc-99',
+        jobCardNumber: 'JC-0099',
+        jobCardStatus: 'WORKSHOP_ASSIGNED',
+        appointmentNumber: 'APT-0099',
+        customerName: 'Layla Hassan',
+        customerPhone: '050-9998888',
+        deliveryNumber: null,
+      },
+    ]);
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({ jobCard: makeJobCard({ id: 'jc-99', jobCardNumber: 'JC-0099' }) }),
+    );
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/workshop-inventory/workshop']}>
+          <WorkshopPage />
+          <LocationProbe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
+    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'JC-0099' } });
+    fireEvent.click(await screen.findByText('JC-0099'));
+
+    await waitFor(() => expect(getWorkshopState).toHaveBeenCalledWith('jc-99'));
+    expect(screen.getByTestId('location-search')).toHaveTextContent('?jobCardId=jc-99');
+  });
+
+  it('re-seeds the same job card after an unmount+remount at the URL it just wrote (simulating a tab switch and back)', async () => {
+    mockUser({ roleName: 'TECHNICAL_TEAM_LEADER' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({ jobCard: makeJobCard({ id: 'jc-99', jobCardNumber: 'JC-0099' }) }),
+    );
+
+    // The URL WorkshopPage would have written after picking JC-0099 (per the test above) -
+    // WorkshopInventoryLayout's sibling-route <Outlet /> unmounts WorkshopPage entirely on
+    // tab switch and mounts a fresh instance on return, so this is a faithful simulation.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/workshop-inventory/workshop?jobCardId=jc-99']}>
+          <WorkshopPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(getWorkshopState).toHaveBeenCalledWith('jc-99'));
+    expect(await screen.findAllByText('JC-0099')).not.toHaveLength(0);
+  });
+
+  it('clears the URL job card param when the selection is cleared ("Change")', async () => {
+    mockUser({ roleName: 'TECHNICAL_TEAM_LEADER' });
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState());
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/workshop-inventory/workshop?jobCardId=jc-1']}>
+          <WorkshopPage />
+          <LocationProbe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('Request a spare part (FR-09: reserves, does not deduct)');
+    expect(screen.getByTestId('location-search')).toHaveTextContent('?jobCardId=jc-1');
+
+    fireEvent.click(screen.getByText('Change'));
+    expect(screen.getByTestId('location-search')).toHaveTextContent('');
   });
 });
 
