@@ -149,4 +149,38 @@ export class InventoryController {
   async confirmReturn(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmReturnDto, @CurrentUser() user: User) {
     return this.inventoryService.confirmReturn(id, dto.quantityReturned, user.id);
   }
+
+  // Inventory Controller returns dashboard (2026-09-14) - see InventoryService
+  // .getReturnPendingByJobCard()/confirmAllReturnsForJobCard()'s own doc comments. The
+  // existing paste-a-reservation-id Confirm Return form above is untouched (still the
+  // right tool for a single partial return) - these two just give the clerk a way to SEE
+  // what's outstanding, by job, instead of having to already know a raw reservation id.
+  @Get('reservations/return-pending')
+  @RequiresCapability('INVENTORY_VIEW')
+  @ApiOperation({ summary: 'Every RETURN_PENDING reservation, grouped by Job Card, so a clerk can see everything a job owes back without already knowing a reservation id' })
+  @ApiResponse({ status: 200 })
+  async getReturnPending() {
+    return this.inventoryService.getReturnPendingByJobCard();
+  }
+
+  @Post('reservations/return-pending/:jobCardId/confirm-all')
+  @RequiresCapability('INVENTORY_STAFF')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.INVENTORY_RESERVE,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params.jobCardId,
+    getNewValues: (result) => ({
+      confirmedReservationIds: Array.isArray(result) ? result.map((r: { id: string }) => r.id) : undefined,
+      totalQuantityReturned: Array.isArray(result)
+        ? result.reduce((sum: number, r: { quantityReturned: number | null }) => sum + (r.quantityReturned ?? 0), 0)
+        : undefined,
+    }),
+  })
+  @ApiOperation({ summary: 'Confirms the FULL reserved quantity on every RETURN_PENDING reservation for this Job Card in one call - "physically verified, all parts are back"' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'This Job Card has no RETURN_PENDING reservations' })
+  async confirmAllReturns(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @CurrentUser() user: User) {
+    return this.inventoryService.confirmAllReturnsForJobCard(jobCardId, user.id);
+  }
 }

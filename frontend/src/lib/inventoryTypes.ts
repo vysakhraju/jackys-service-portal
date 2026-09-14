@@ -117,3 +117,15 @@ export interface ReviewNeedSpareInput {
 export interface ConfirmReturnInput {
   quantityReturned: number;
 }
+
+// GET /inventory/reservations/return-pending (2026-09-14 Inventory Controller returns
+// dashboard) - mirrors InventoryService.ReturnPendingJobCardGroup exactly. Lets a clerk
+// see everything a Job Card owes back without already knowing a reservation id, and
+// confirm it all in one click via confirmAllReturnsForJobCard() below. The existing
+// paste-a-reservation-id Confirm Return card stays untouched alongside this.
+export interface ReturnPendingJobCardGroup {
+  jobCardId: string;
+  jobCardNumber: string;
+  totalQuantityPending: number;
+  reservations: InventoryReservation[];
+}

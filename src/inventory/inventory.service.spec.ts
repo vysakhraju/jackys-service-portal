@@ -358,6 +358,123 @@ describe('InventoryService', () => {
     });
   });
 
+  describe('getReturnPendingByJobCard (2026-09-14 fix - Inventory Controller returns dashboard)', () => {
+    it('queries only RETURN_PENDING, oldest first, with sparePart/custodian/jobCard relations', async () => {
+      reservationRepository.find.mockResolvedValue([]);
+
+      await service.getReturnPendingByJobCard();
+
+      expect(reservationRepository.find).toHaveBeenCalledWith({
+        where: { status: ReservationStatus.RETURN_PENDING },
+        relations: { sparePart: true, custodian: true, jobCard: true },
+        order: { requestedAt: 'ASC' },
+      });
+    });
+
+    it('groups multiple reservations on the same job card into one entry, summing quantityReserved', async () => {
+      reservationRepository.find.mockResolvedValue([
+        reservation({
+          id: 'res-1',
+          jobCardId: 'jc-1',
+          quantityReserved: 2,
+          status: ReservationStatus.RETURN_PENDING,
+          jobCard: { jobCardNumber: 'JC-0001' },
+        }),
+        reservation({
+          id: 'res-2',
+          jobCardId: 'jc-1',
+          quantityReserved: 5,
+          status: ReservationStatus.RETURN_PENDING,
+          jobCard: { jobCardNumber: 'JC-0001' },
+        }),
+      ]);
+
+      const result = await service.getReturnPendingByJobCard();
+
+      expect(result).toEqual([
+        {
+          jobCardId: 'jc-1',
+          jobCardNumber: 'JC-0001',
+          totalQuantityPending: 7,
+          reservations: [
+            expect.objectContaining({ id: 'res-1' }),
+            expect.objectContaining({ id: 'res-2' }),
+          ],
+        },
+      ]);
+    });
+
+    it('keeps different job cards as separate groups', async () => {
+      reservationRepository.find.mockResolvedValue([
+        reservation({ id: 'res-1', jobCardId: 'jc-1', quantityReserved: 2, status: ReservationStatus.RETURN_PENDING, jobCard: { jobCardNumber: 'JC-0001' } }),
+        reservation({ id: 'res-2', jobCardId: 'jc-2', quantityReserved: 4, status: ReservationStatus.RETURN_PENDING, jobCard: { jobCardNumber: 'JC-0002' } }),
+      ]);
+
+      const result = await service.getReturnPendingByJobCard();
+
+      expect(result).toHaveLength(2);
+      expect(result.map((g) => g.jobCardId)).toEqual(['jc-1', 'jc-2']);
+    });
+
+    it('falls back to the raw jobCardId when the jobCard relation failed to load', async () => {
+      reservationRepository.find.mockResolvedValue([
+        reservation({ id: 'res-1', jobCardId: 'jc-1', quantityReserved: 2, status: ReservationStatus.RETURN_PENDING, jobCard: null }),
+      ]);
+
+      const result = await service.getReturnPendingByJobCard();
+
+      expect(result[0].jobCardNumber).toBe('jc-1');
+    });
+
+    it('returns an empty array when nothing is RETURN_PENDING anywhere', async () => {
+      reservationRepository.find.mockResolvedValue([]);
+
+      const result = await service.getReturnPendingByJobCard();
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('confirmAllReturnsForJobCard (2026-09-14 fix - the "1 click, whole job back" action)', () => {
+    it('rejects a job card with no RETURN_PENDING reservations rather than silently doing nothing', async () => {
+      reservationRepository.find.mockResolvedValue([]);
+
+      await expect(service.confirmAllReturnsForJobCard('jc-1', 'clerk-1')).rejects.toThrow(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('confirms every RETURN_PENDING reservation on the job card, each for its own full quantityReserved', async () => {
+      const res1 = reservation({ id: 'res-1', jobCardId: 'jc-1', sparePartId: 'part-1', quantityReserved: 2, status: ReservationStatus.RETURN_PENDING });
+      const res2 = reservation({ id: 'res-2', jobCardId: 'jc-1', sparePartId: 'part-2', quantityReserved: 5, status: ReservationStatus.RETURN_PENDING });
+      reservationRepository.find.mockResolvedValue([res1, res2]);
+
+      // confirmReturn() reloads each reservation by id internally via findReservationById -> findOne
+      reservationRepository.findOne.mockImplementation(({ where: { id } }: any) =>
+        Promise.resolve(id === 'res-1' ? { ...res1 } : { ...res2 }),
+      );
+      manager.findOne.mockResolvedValue(stock({ sparePartId: 'part-1', quantityOnHand: 0, quantityReserved: 10 }));
+
+      const result = await service.confirmAllReturnsForJobCard('jc-1', 'clerk-1', NOW);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].status).toBe(ReservationStatus.RETURNED);
+      expect(result[0].quantityReturned).toBe(2);
+      expect(result[1].status).toBe(ReservationStatus.RETURNED);
+      expect(result[1].quantityReturned).toBe(5);
+      expect(dataSource.transaction).toHaveBeenCalledTimes(2);
+    });
+
+    it('only looks at RETURN_PENDING reservations scoped to this job card', async () => {
+      reservationRepository.find.mockResolvedValue([]);
+
+      await expect(service.confirmAllReturnsForJobCard('jc-1', 'clerk-1')).rejects.toThrow(BadRequestException);
+
+      expect(reservationRepository.find).toHaveBeenCalledWith({
+        where: { jobCardId: 'jc-1', status: ReservationStatus.RETURN_PENDING },
+      });
+    });
+  });
+
   describe('findLatestNeedSpareRequestForJobCard (2026-09-07 mobile "forgotten request" fix)', () => {
     it('queries scoped to this job card and idempotencyKey IS NOT NULL, ordered newest first', async () => {
       reservationRepository.findOne.mockResolvedValue(reservation({ idempotencyKey: 'a1b2c3-tap-1' }));

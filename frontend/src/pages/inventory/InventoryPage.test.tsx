@@ -7,7 +7,9 @@ import { makeReservation } from '../../test/fixtures';
 
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/inventoryApi', () => ({
+  confirmAllReturnsForJobCard: vi.fn(),
   confirmReturn: vi.fn(),
+  getReturnPendingByJobCard: vi.fn(),
   getStaleReservations: vi.fn(),
   getStock: vi.fn(),
   grn: vi.fn(),
@@ -18,7 +20,13 @@ vi.mock('../../lib/masterDataApi', () => ({
 }));
 
 import { useAuth } from '../../lib/auth';
-import { getStaleReservations, getStock, reviewReservation } from '../../lib/inventoryApi';
+import {
+  confirmAllReturnsForJobCard,
+  getReturnPendingByJobCard,
+  getStaleReservations,
+  getStock,
+  reviewReservation,
+} from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import { InventoryPage } from './InventoryPage';
 
@@ -59,6 +67,9 @@ beforeEach(() => {
   vi.mocked(listSpareParts).mockResolvedValue([]);
   vi.mocked(getStock).mockReset();
   vi.mocked(reviewReservation).mockReset();
+  vi.mocked(getReturnPendingByJobCard).mockReset();
+  vi.mocked(getReturnPendingByJobCard).mockResolvedValue([]);
+  vi.mocked(confirmAllReturnsForJobCard).mockReset();
 });
 
 describe('InventoryPage - role gating', () => {
@@ -127,5 +138,101 @@ describe('InventoryPage - review then confirm-return handoff (the-fool: RETURN_P
     await waitFor(() => {
       expect(screen.getByText(/now RETURN_PENDING/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe('InventoryPage - returns dashboard (2026-09-14: no reservation id required)', () => {
+  const group = {
+    jobCardId: 'jc-1',
+    jobCardNumber: 'JC-0042',
+    totalQuantityPending: 5,
+    reservations: [
+      makeReservation({
+        id: 'res-1',
+        status: 'RETURN_PENDING',
+        quantityReserved: 2,
+        sparePart: { id: 'sp-1', code: 'SP-1', name: 'Drum Motor' },
+        custodian: { id: 'tech-1', firstName: 'Rahim', lastName: 'K', email: 't@example.com' },
+      }),
+      makeReservation({
+        id: 'res-2',
+        status: 'RETURN_PENDING',
+        quantityReserved: 3,
+        sparePart: { id: 'sp-2', code: 'SP-2', name: 'PCB Board' },
+        custodian: { id: 'tech-1', firstName: 'Rahim', lastName: 'K', email: 't@example.com' },
+      }),
+    ],
+  } as any;
+
+  it('shows the dashboard to a Warehouse Clerk, with the job card and its total pending qty', async () => {
+    mockUser('WAREHOUSE_CLERK');
+    vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
+    renderPage();
+
+    expect(await screen.findByText('Job cards with parts pending return (1)')).toBeInTheDocument();
+    expect(screen.getByText('JC-0042')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+  });
+
+  it('hides the dashboard from a role with no inventory-staff grant', async () => {
+    mockUser('TECHNICIAN_FIELD');
+    vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
+    renderPage();
+
+    await screen.findByText('Stock lookup');
+    expect(screen.queryByText(/Job cards with parts pending return/)).not.toBeInTheDocument();
+  });
+
+  it('shows an empty state when nothing is pending return', async () => {
+    mockUser('WAREHOUSE_CLERK');
+    vi.mocked(getReturnPendingByJobCard).mockResolvedValue([]);
+    renderPage();
+
+    expect(await screen.findByText('Nothing pending return right now.')).toBeInTheDocument();
+  });
+
+  it('expands a job card row on click to show each part and its custodian', async () => {
+    mockUser('WAREHOUSE_CLERK');
+    vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByText('JC-0042'));
+
+    expect(await screen.findByText(/SP-1 — Drum Motor/)).toBeInTheDocument();
+    expect(screen.getByText(/SP-2 — PCB Board/)).toBeInTheDocument();
+    expect(screen.getAllByText(/from Rahim K/).length).toBe(2);
+  });
+
+  it('confirms all returns for the job card in one click and reports success', async () => {
+    mockUser('WAREHOUSE_CLERK');
+    vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
+    vi.mocked(confirmAllReturnsForJobCard).mockResolvedValue(
+      group.reservations.map((r: any) => ({ ...r, status: 'RETURNED', quantityReturned: r.quantityReserved })),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByText('JC-0042'));
+    await user.click(await screen.findByRole('button', { name: 'Confirm all returned' }));
+
+    expect(confirmAllReturnsForJobCard).toHaveBeenCalledWith('jc-1');
+    expect(await screen.findByText(/All 2 part\(s\) confirmed back on Main Store/i)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Confirmed' })).toBeDisabled();
+  });
+
+  it("confirming all doesn't require knowing any reservation id - only the job card's own id is sent", async () => {
+    mockUser('WAREHOUSE_CLERK');
+    vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
+    vi.mocked(confirmAllReturnsForJobCard).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByText('JC-0042'));
+    await user.click(await screen.findByRole('button', { name: 'Confirm all returned' }));
+
+    expect(confirmAllReturnsForJobCard).toHaveBeenCalledTimes(1);
+    expect(confirmAllReturnsForJobCard).toHaveBeenCalledWith(group.jobCardId);
+    expect(vi.mocked(confirmAllReturnsForJobCard).mock.calls[0]).toHaveLength(1);
   });
 });

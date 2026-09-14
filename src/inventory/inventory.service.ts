@@ -10,6 +10,23 @@ import { UserStatus } from '../auth/entities/user.entity';
 // pattern AuthService already uses for JobCard/InventoryReservation.
 import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 
+// Inventory Controller returns dashboard (2026-09-14, live-tested finding): a Warehouse
+// Clerk confirming a physical return had to already know a specific reservation's raw
+// UUID, pasted from wherever they'd seen it once - genuinely impractical the moment a job
+// has more than one returned part, or there's more than one job with something pending
+// return at once, with no list anywhere to check against. Field technicians are the real
+// case this matters for (off-site, no shared paper trail with whoever's at the counter);
+// workshop technicians sit in the same office as CCE/the clerk day-to-day, so this was
+// always going to bite harder on the field side - but the fix is the same for both: group
+// every RETURN_PENDING reservation by the Job Card it's against, so the clerk can see and
+// verify everything a job owes back in one place, then confirm it all in one click.
+export interface ReturnPendingJobCardGroup {
+  jobCardId: string;
+  jobCardNumber: string;
+  totalQuantityPending: number;
+  reservations: InventoryReservation[];
+}
+
 // The idle-reservation review cadence (mitigation for the-fool failure #3/#4): a
 // reservation sitting untouched this long shows up on GET /inventory/reservations/stale
 // and on the Job Card/Workshop view a TL already checks daily. Crossing STALE_HOURS is a
@@ -236,6 +253,72 @@ export class InventoryService {
       reservation.returnConfirmedAt = now;
       return manager.save(reservation);
     });
+  }
+
+  /**
+   * GET /inventory/reservations/return-pending - the dashboard-style listing that closes
+   * the "impossible to know the reservation id" gap (see this file's own note above the
+   * ReturnPendingJobCardGroup interface). Every currently RETURN_PENDING reservation,
+   * grouped by Job Card, oldest-request-first within each group so a clerk sees the
+   * longest-outstanding part first when there's more than one on the same job. sparePart/
+   * custodian are loaded (not just ids) - this list exists specifically so a human can
+   * look at it and decide what's actually physically in front of them, the same reasoning
+   * getPendingNeedSpareRequests() already applies. jobCard is loaded only for its
+   * jobCardNumber - deliberately not the whole entity, to keep this listing lightweight.
+   */
+  async getReturnPendingByJobCard(): Promise<ReturnPendingJobCardGroup[]> {
+    const pending = await this.reservationRepository.find({
+      where: { status: ReservationStatus.RETURN_PENDING },
+      relations: { sparePart: true, custodian: true, jobCard: true },
+      order: { requestedAt: 'ASC' },
+    });
+
+    const groups = new Map<string, ReturnPendingJobCardGroup>();
+    for (const r of pending) {
+      const existing = groups.get(r.jobCardId);
+      if (existing) {
+        existing.reservations.push(r);
+        existing.totalQuantityPending += r.quantityReserved;
+      } else {
+        groups.set(r.jobCardId, {
+          jobCardId: r.jobCardId,
+          jobCardNumber: r.jobCard?.jobCardNumber ?? r.jobCardId,
+          totalQuantityPending: r.quantityReserved,
+          reservations: [r],
+        });
+      }
+    }
+    return [...groups.values()];
+  }
+
+  /**
+   * POST /inventory/reservations/return-pending/:jobCardId/confirm-all - the "1 click, the
+   * whole job's parts are back" action (2026-09-14 live-tested finding): a clerk who has
+   * physically verified every part a Job Card owes back no longer has to confirm each
+   * reservation one at a time by its own id. Reuses confirmReturn() per reservation
+   * unchanged (same advisory lock, same audit-worthy state transition, same "only this
+   * method ever increments quantityOnHand" invariant) rather than duplicating its logic -
+   * this is purely a batching convenience over it, not a new way to move stock. Always
+   * confirms the FULL quantityReserved for every reservation in the group - "1 single
+   * click, all parts returned for the job" is the one thing this action is for; a PARTIAL
+   * return still goes through confirmReturn() directly with its own quantity, same as
+   * today. Throws if the Job Card has nothing RETURN_PENDING at all, rather than silently
+   * doing nothing - a clerk clicking this on a job with no pending returns most likely
+   * picked the wrong job card.
+   */
+  async confirmAllReturnsForJobCard(jobCardId: string, confirmedByUserId: string, now: Date = new Date()): Promise<InventoryReservation[]> {
+    const pending = await this.reservationRepository.find({
+      where: { jobCardId, status: ReservationStatus.RETURN_PENDING },
+    });
+    if (pending.length === 0) {
+      throw new BadRequestException(`Job Card ${jobCardId} has no RETURN_PENDING reservations to confirm.`);
+    }
+
+    const confirmed: InventoryReservation[] = [];
+    for (const reservation of pending) {
+      confirmed.push(await this.confirmReturn(reservation.id, reservation.quantityReserved, confirmedByUserId, now));
+    }
+    return confirmed;
   }
 
   /**

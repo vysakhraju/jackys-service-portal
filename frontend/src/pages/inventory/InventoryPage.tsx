@@ -6,9 +6,22 @@ import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAuth } from '../../lib/auth';
-import { confirmReturn, getStaleReservations, getStock, grn, reviewReservation } from '../../lib/inventoryApi';
+import {
+  confirmAllReturnsForJobCard,
+  confirmReturn,
+  getReturnPendingByJobCard,
+  getStaleReservations,
+  getStock,
+  grn,
+  reviewReservation,
+} from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
-import type { InventoryReservation, InventoryReservationWithAge, StockLookupResult } from '../../lib/inventoryTypes';
+import type {
+  InventoryReservation,
+  InventoryReservationWithAge,
+  ReturnPendingJobCardGroup,
+  StockLookupResult,
+} from '../../lib/inventoryTypes';
 
 // Same role sets as InventoryController's own @Roles() - shown here so buttons only
 // appear for someone who could actually use them, not as a substitute for the server's
@@ -65,6 +78,8 @@ export function InventoryPage() {
           </div>
         )}
       </div>
+
+      {canConfirmReturn && <ReturnPendingDashboardCard />}
 
       {canConfirmReturn && <ConfirmReturnCard />}
     </div>
@@ -302,6 +317,144 @@ function ReservationRow({
         </p>
       )}
     </div>
+  );
+}
+
+// 2026-09-14 live-tested finding: a Warehouse Clerk had no dashboard/list to work from -
+// only the paste-a-reservation-id form below, which needs them to already know a raw
+// UUID for a job that may have several returned parts across several reasons. This
+// table gives them the same thing at a glance, grouped by Job Card, with a single
+// "Confirm all returned" action per job - the existing paste-id form is untouched and
+// still there for a single partial return.
+function ReturnPendingDashboardCard() {
+  const queryClient = useQueryClient();
+  const [expandedJobCardId, setExpandedJobCardId] = useState<string | null>(null);
+  const returnPendingQuery = useQuery({
+    queryKey: ['reservations', 'return-pending'],
+    queryFn: getReturnPendingByJobCard,
+  });
+
+  function onConfirmed() {
+    queryClient.invalidateQueries({ queryKey: ['reservations', 'return-pending'] });
+    queryClient.invalidateQueries({ queryKey: ['reservations', 'stale'] });
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <p className="mb-1 text-sm font-medium text-slate-800">
+        Job cards with parts pending return ({returnPendingQuery.data?.length ?? 0})
+      </p>
+      <p className="mb-3 text-xs text-slate-400">
+        Every Job Card with at least one RETURN_PENDING part, no reservation id needed.
+        Click a row to see what it owes back, then confirm the whole job in one click once
+        you've physically verified everything is in front of you.
+      </p>
+      {returnPendingQuery.isLoading && <p className="text-sm text-slate-400">Loading…</p>}
+      {returnPendingQuery.error && <ErrorNotice error={returnPendingQuery.error} />}
+      {returnPendingQuery.data && returnPendingQuery.data.length === 0 && (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-400">
+          Nothing pending return right now.
+        </p>
+      )}
+      {returnPendingQuery.data && returnPendingQuery.data.length > 0 && (
+        <div className="overflow-hidden rounded-md border border-slate-200">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-3 py-2 font-medium">Job card</th>
+                <th className="px-3 py-2 font-medium">Parts</th>
+                <th className="px-3 py-2 font-medium">Total qty pending</th>
+                <th className="px-3 py-2 font-medium"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {returnPendingQuery.data.map((group) => (
+                <ReturnPendingJobCardRow
+                  key={group.jobCardId}
+                  group={group}
+                  expanded={expandedJobCardId === group.jobCardId}
+                  onToggle={() =>
+                    setExpandedJobCardId((current) => (current === group.jobCardId ? null : group.jobCardId))
+                  }
+                  onConfirmed={onConfirmed}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReturnPendingJobCardRow({
+  group,
+  expanded,
+  onToggle,
+  onConfirmed,
+}: {
+  group: ReturnPendingJobCardGroup;
+  expanded: boolean;
+  onToggle: () => void;
+  onConfirmed: () => void;
+}) {
+  const confirmAllMutation = useMutation({
+    mutationFn: () => confirmAllReturnsForJobCard(group.jobCardId),
+    onSuccess: onConfirmed,
+  });
+
+  return (
+    <>
+      <tr className="cursor-pointer hover:bg-slate-50" onClick={onToggle}>
+        <td className="px-3 py-2 font-medium text-slate-700">
+          {group.jobCardNumber}
+          <span className="ml-1 text-slate-400">{expanded ? '▾' : '▸'}</span>
+        </td>
+        <td className="px-3 py-2 text-slate-600">{group.reservations.length}</td>
+        <td className="px-3 py-2 text-slate-600">{group.totalQuantityPending}</td>
+        <td className="px-3 py-2 text-right">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              confirmAllMutation.mutate();
+            }}
+            disabled={confirmAllMutation.isPending || confirmAllMutation.isSuccess}
+            className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {confirmAllMutation.isSuccess ? 'Confirmed' : 'Confirm all returned'}
+          </button>
+        </td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td colSpan={4} className="bg-slate-50 px-3 py-2">
+            <div className="space-y-1.5">
+              {group.reservations.map((r) => (
+                <div key={r.id} className="flex items-center justify-between text-xs text-slate-600">
+                  <span>
+                    {r.sparePart ? `${r.sparePart.code} — ${r.sparePart.name}` : r.sparePartId}
+                    {r.custodian && (
+                      <span className="text-slate-400">
+                        {' '}
+                        · from {r.custodian.firstName} {r.custodian.lastName}
+                      </span>
+                    )}
+                  </span>
+                  <span className="font-medium text-slate-700">{r.quantityReserved} unit(s)</span>
+                </div>
+              ))}
+            </div>
+            <ErrorNotice error={confirmAllMutation.error} />
+            {confirmAllMutation.isSuccess && (
+              <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-700">
+                All {group.reservations.length} part(s) confirmed back on Main Store.
+              </p>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

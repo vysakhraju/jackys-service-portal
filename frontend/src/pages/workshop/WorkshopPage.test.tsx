@@ -74,6 +74,7 @@ beforeEach(() => {
   vi.mocked(listSpareParts).mockReset();
   vi.mocked(listSpareParts).mockResolvedValue([]);
   vi.mocked(assignWorkshopTechnician).mockReset();
+  vi.mocked(requestSpare).mockReset();
   vi.mocked(listReworkApprovers).mockReset().mockResolvedValue([{ id: 'tl-1', name: 'Fatima Noor' }]);
   vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
     date: '2026-09-14',
@@ -460,6 +461,121 @@ describe('WorkshopPage - Active reservations on this job (persists across a remo
 
     await screen.findByText(/Active reservations on this job \(1\)/i);
     expect(screen.queryByRole('button', { name: 'Not needed - request return' })).not.toBeInTheDocument();
+  });
+});
+
+// 2026-09-14 live-tested finding: a technician requesting a spare part that already has
+// an outstanding (non-terminal) reservation on this exact job card used to go straight
+// through, silently doubling up a hold on Main Store. Now it's confirmed first - checked
+// against the same activeReservations list "Active reservations on this job" renders from.
+describe('WorkshopPage - confirm before requesting the same spare part again', () => {
+  it('asks for confirmation instead of submitting when the part already has an active reservation on this job', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        activeReservations: [
+          makeReservation({
+            id: 'res-existing',
+            sparePartId: 'sp-1',
+            status: 'HELD',
+            quantityReserved: 2,
+            sparePart: { id: 'sp-1', code: 'SP-001', name: 'Compressor' },
+          }),
+        ],
+      }),
+    );
+    vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
+    renderPage();
+
+    await screen.findByText('SP-001 — Compressor');
+    fireEvent.change(screen.getByLabelText('Spare part'), { target: { value: 'sp-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Request Spare' }));
+
+    expect(await screen.findByText('Request more of the same spare?')).toBeInTheDocument();
+    expect(
+      screen.getByText(/SP-001 — Compressor already has an outstanding request on this job card \(HELD, 2 unit\(s\)\)/i),
+    ).toBeInTheDocument();
+    expect(vi.mocked(requestSpare)).not.toHaveBeenCalled();
+  });
+
+  it('only proceeds with the request once the technician confirms Yes', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        activeReservations: [makeReservation({ id: 'res-existing', sparePartId: 'sp-1', status: 'HELD' })],
+      }),
+    );
+    vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
+    vi.mocked(requestSpare).mockResolvedValue(makeReservation({ sparePartId: 'sp-1' }));
+    renderPage();
+
+    await screen.findByText('SP-001 — Compressor');
+    fireEvent.change(screen.getByLabelText('Spare part'), { target: { value: 'sp-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Request Spare' }));
+
+    await screen.findByText('Request more of the same spare?');
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, request again' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(requestSpare)).toHaveBeenCalledWith('jc-1', expect.objectContaining({ sparePartId: 'sp-1' })),
+    );
+  });
+
+  it('submits nothing when the technician clicks No, cancel', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        activeReservations: [makeReservation({ id: 'res-existing', sparePartId: 'sp-1', status: 'HELD' })],
+      }),
+    );
+    vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
+    renderPage();
+
+    await screen.findByText('SP-001 — Compressor');
+    fireEvent.change(screen.getByLabelText('Spare part'), { target: { value: 'sp-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Request Spare' }));
+
+    await screen.findByText('Request more of the same spare?');
+    fireEvent.click(screen.getByRole('button', { name: 'No, cancel' }));
+
+    expect(screen.queryByText('Request more of the same spare?')).not.toBeInTheDocument();
+    expect(vi.mocked(requestSpare)).not.toHaveBeenCalled();
+  });
+
+  it('submits immediately, no confirmation, when the part has no active reservation on this job yet', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState({ activeReservations: [] }));
+    vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
+    vi.mocked(requestSpare).mockResolvedValue(makeReservation({ sparePartId: 'sp-1' }));
+    renderPage();
+
+    await screen.findByText('SP-001 — Compressor');
+    fireEvent.change(screen.getByLabelText('Spare part'), { target: { value: 'sp-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Request Spare' }));
+
+    expect(screen.queryByText('Request more of the same spare?')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(vi.mocked(requestSpare)).toHaveBeenCalledWith('jc-1', expect.objectContaining({ sparePartId: 'sp-1' })),
+    );
+  });
+
+  it('does not confirm against a different spare part that happens to also be active on this job', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        activeReservations: [makeReservation({ id: 'res-existing', sparePartId: 'sp-OTHER', status: 'HELD' })],
+      }),
+    );
+    vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
+    vi.mocked(requestSpare).mockResolvedValue(makeReservation({ sparePartId: 'sp-1' }));
+    renderPage();
+
+    await screen.findByText('SP-001 — Compressor');
+    fireEvent.change(screen.getByLabelText('Spare part'), { target: { value: 'sp-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Request Spare' }));
+
+    expect(screen.queryByText('Request more of the same spare?')).not.toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(requestSpare)).toHaveBeenCalled());
   });
 });
 

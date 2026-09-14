@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
+import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { NamePicker } from '../../components/pickers/NamePicker';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
@@ -263,7 +264,7 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
 
       {!notWorkshopSection && ['IN_PROGRESS', 'SPARE_PENDING', 'READY_FOR_QC'].includes(jobCard.status) && canAct && (
         <>
-          <RequestSpareCard jobCard={jobCard} mutation={requestSpareMutation} />
+          <RequestSpareCard jobCard={jobCard} mutation={requestSpareMutation} activeReservations={activeReservations} />
           <ActiveReservationsSection reservations={activeReservations} isPrivileged={isPrivileged} onChanged={onChanged} />
           {jobCard.status === 'IN_PROGRESS' && (
             <ActionCard title="Mark workshop work done">
@@ -370,24 +371,28 @@ function AssignTechnicianCard({ mutation }: { mutation: UseMutationResult<unknow
   );
 }
 
+type RequestSpareFormValues = {
+  sparePartId: string;
+  quantity: number;
+  approverId: string;
+  verbalOverrideBy: string;
+  verbalOverrideNotes: string;
+};
+
 function RequestSpareCard({
   jobCard,
   mutation,
+  activeReservations,
 }: {
   jobCard: WorkshopState['jobCard'];
   mutation: UseMutationResult<InventoryReservation, unknown, Parameters<typeof requestSpare>[1]>;
+  activeReservations: InventoryReservation[];
 }) {
   const sparePartsQuery = useQuery({
     queryKey: ['spare-parts', 'active'],
     queryFn: () => listSpareParts({ active: true }),
   });
-  const { register, handleSubmit, reset, setValue, watch } = useForm<{
-    sparePartId: string;
-    quantity: number;
-    approverId: string;
-    verbalOverrideBy: string;
-    verbalOverrideNotes: string;
-  }>({
+  const { register, handleSubmit, reset, setValue, watch } = useForm<RequestSpareFormValues>({
     defaultValues: { sparePartId: '', quantity: 1, approverId: '', verbalOverrideBy: '', verbalOverrideNotes: '' },
   });
   // #218: WORKSHOP_ACTION-gated, same capability as request-spare itself, so this resolves
@@ -406,6 +411,40 @@ function RequestSpareCard({
 
   const hadPriorRejection = jobCard.qcRejectionCount > 0;
 
+  // 2026-09-14 live-tested finding: nothing stopped a technician from re-requesting a
+  // spare part that already has an outstanding (non-terminal) reservation on this exact
+  // job card - easy to do by mistake, and each extra request holds/reserves more stock
+  // against Main Store. This doesn't block it (a genuine second unit is a real need,
+  // e.g. it broke again on refit) - it just makes them confirm before it goes through.
+  // Checked against `activeReservations` (the same PENDING_REVIEW/HELD/PARTIALLY_RESERVED/
+  // RETURN_PENDING list already fetched for the "Active reservations on this job" section
+  // below), not a fresh query - it's already the right scope (this job card, still open).
+  const [pendingDuplicateValues, setPendingDuplicateValues] = useState<RequestSpareFormValues | null>(null);
+
+  function submitRequest(values: RequestSpareFormValues) {
+    mutation.mutate(
+      {
+        sparePartId: values.sparePartId,
+        quantity: Number(values.quantity),
+        approverId: values.approverId || undefined,
+        verbalOverrideBy: values.verbalOverrideBy || undefined,
+        verbalOverrideNotes: values.verbalOverrideNotes || undefined,
+      },
+      {
+        onSuccess: (r) => {
+          setJustReserved(r);
+          reset({ sparePartId: '', quantity: 1, approverId: '', verbalOverrideBy: '', verbalOverrideNotes: '' });
+        },
+      },
+    );
+  }
+
+  function findDuplicateReservation(sparePartId: string) {
+    return activeReservations.find((r) => r.sparePartId === sparePartId);
+  }
+
+  const duplicateReservation = pendingDuplicateValues ? findDuplicateReservation(pendingDuplicateValues.sparePartId) : undefined;
+
   return (
     <ActionCard title="Request a spare part (FR-09: reserves, does not deduct)">
       {hadPriorRejection && (
@@ -418,21 +457,12 @@ function RequestSpareCard({
       <ErrorNotice error={mutation.error} />
       <form
         onSubmit={handleSubmit((values) => {
-          mutation.mutate(
-            {
-              sparePartId: values.sparePartId,
-              quantity: Number(values.quantity),
-              approverId: values.approverId || undefined,
-              verbalOverrideBy: values.verbalOverrideBy || undefined,
-              verbalOverrideNotes: values.verbalOverrideNotes || undefined,
-            },
-            {
-              onSuccess: (r) => {
-                setJustReserved(r);
-                reset({ sparePartId: '', quantity: 1, approverId: '', verbalOverrideBy: '', verbalOverrideNotes: '' });
-              },
-            },
-          );
+          const duplicate = findDuplicateReservation(values.sparePartId);
+          if (duplicate) {
+            setPendingDuplicateValues(values);
+          } else {
+            submitRequest(values);
+          }
         })}
         className="space-y-2"
       >
@@ -527,6 +557,40 @@ function RequestSpareCard({
           <ErrorNotice error={returnMutation.error} />
         </div>
       )}
+
+      <Modal
+        open={!!pendingDuplicateValues}
+        onClose={() => setPendingDuplicateValues(null)}
+        title="Request more of the same spare?"
+      >
+        <p className="text-sm text-slate-600">
+          {duplicateReservation?.sparePart
+            ? `${duplicateReservation.sparePart.code} — ${duplicateReservation.sparePart.name}`
+            : 'This spare part'}{' '}
+          already has an outstanding request on this job card ({duplicateReservation?.status.replaceAll('_', ' ')}
+          {duplicateReservation ? `, ${duplicateReservation.quantityReserved} unit(s)` : ''}). Are you sure you need
+          more quantity of the same spare?
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setPendingDuplicateValues(null)}
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            No, cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (pendingDuplicateValues) submitRequest(pendingDuplicateValues);
+              setPendingDuplicateValues(null);
+            }}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            Yes, request again
+          </button>
+        </div>
+      </Modal>
     </ActionCard>
   );
 }

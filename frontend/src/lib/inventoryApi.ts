@@ -8,6 +8,7 @@ import type {
   GrnInput,
   InventoryReservation,
   InventoryReservationWithAge,
+  ReturnPendingJobCardGroup,
   ReviewNeedSpareInput,
   ReviewReservationInput,
   StockLookupResult,
@@ -41,3 +42,13 @@ export const requestReturn = (id: string) =>
 
 export const confirmReturn = (id: string, data: ConfirmReturnInput) =>
   api.post<InventoryReservation>(`${BASE}/reservations/${id}/confirm-return`, data).then((r) => r.data);
+
+// 2026-09-14 Inventory Controller returns dashboard - see InventoryService
+// .getReturnPendingByJobCard()/confirmAllReturnsForJobCard()'s own doc comments. The
+// existing paste-a-reservation-id confirmReturn() above is unchanged and still the right
+// tool for a single partial return.
+export const getReturnPendingByJobCard = () =>
+  api.get<ReturnPendingJobCardGroup[]>(`${BASE}/reservations/return-pending`).then((r) => r.data);
+
+export const confirmAllReturnsForJobCard = (jobCardId: string) =>
+  api.post<InventoryReservation[]>(`${BASE}/reservations/return-pending/${jobCardId}/confirm-all`).then((r) => r.data);
