@@ -92,6 +92,36 @@ describe('NamePicker', () => {
     expect(screen.getByTestId('name-picker-options')).toHaveTextContent('model m-1');
   });
 
+  // #218 pre-mortem follow-up (2026-09-14): re-focusing an already-filled field used to
+  // blank the input immediately, which read as "did I just lose my selection?" even though
+  // nothing was actually lost - the most likely "looks broken but isn't" issue left across
+  // the whole #218 conversion, since it affects every NamePicker on every page.
+  it('shows the current selection (not a blank input) when an already-filled field is re-focused, with the full list still browsable', () => {
+    render(<NamePicker value="sc-2" onChange={vi.fn()} options={options} />);
+    const input = screen.getByTestId('name-picker-input');
+
+    fireEvent.focus(input);
+
+    expect(input).toHaveValue('Sharjah Service Centre');
+    const list = screen.getByTestId('name-picker-options');
+    expect(list).toHaveTextContent('Dubai Service Centre');
+    expect(list).toHaveTextContent('Sharjah Service Centre');
+    expect(list).toHaveTextContent('Abu Dhabi Service Centre');
+  });
+
+  it('still filters normally once the user actually types after re-focusing a filled field', () => {
+    render(<NamePicker value="sc-2" onChange={vi.fn()} options={options} />);
+    const input = screen.getByTestId('name-picker-input');
+
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'dubai' } });
+
+    const list = screen.getByTestId('name-picker-options');
+    expect(list).toHaveTextContent('Dubai Service Centre');
+    expect(list).not.toHaveTextContent('Sharjah Service Centre');
+    expect(list).not.toHaveTextContent('Abu Dhabi Service Centre');
+  });
+
   it('closes the option list when clicking outside the component', () => {
     render(
       <div>

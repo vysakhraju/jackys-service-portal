@@ -41,6 +41,15 @@ export function NamePicker({
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  // #218 pre-mortem follow-up (2026-09-14): tracks whether the user has actually typed
+  // since the field was last focused. Without this, re-focusing an already-filled field
+  // used to blank the input immediately (query reset to '') - harmless (the real `value`
+  // was untouched, it just re-displayed on blur/close), but it read as "did I just lose my
+  // selection?" on every single converted picker in the app. Now focusing shows the current
+  // selection's name (fully selected, so typing replaces it) and the full option list stays
+  // browsable underneath, exactly like every option was visible before picking; only actual
+  // typing narrows the list.
+  const [hasTyped, setHasTyped] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const selected = useMemo(() => options.find((o) => o.id === value) ?? null, [options, value]);
@@ -56,12 +65,12 @@ export function NamePicker({
   }, []);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = (hasTyped ? query : '').trim().toLowerCase();
     if (!q) return options;
     return options.filter((o) => o.name.toLowerCase().includes(q));
-  }, [options, query]);
+  }, [options, query, hasTyped]);
 
-  const displayValue = open ? query : selected?.name ?? '';
+  const displayValue = open ? (hasTyped ? query : selected?.name ?? '') : selected?.name ?? '';
 
   return (
     <div className="relative" ref={containerRef}>
@@ -71,11 +80,16 @@ export function NamePicker({
         placeholder={loading ? 'Loading…' : placeholder}
         value={displayValue}
         disabled={disabled || loading}
-        onFocus={() => {
+        onFocus={(e) => {
+          setHasTyped(false);
           setQuery('');
           setOpen(true);
+          // Pre-select the current text so the first keystroke replaces it outright,
+          // rather than inserting into the middle of the existing selection's name.
+          e.target.select();
         }}
         onChange={(e) => {
+          setHasTyped(true);
           setQuery(e.target.value);
           setOpen(true);
         }}
@@ -107,6 +121,7 @@ export function NamePicker({
                   onClick={() => {
                     onChange(option.id);
                     setQuery('');
+                    setHasTyped(false);
                     setOpen(false);
                   }}
                 >
