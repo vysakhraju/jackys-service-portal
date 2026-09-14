@@ -8,15 +8,16 @@
 // only. See the entity's own doc comment for why no transition exists back out of
 // SUBMITTED/CREDIT_RECEIVED.
 //
-// Three role arrays gate different actions, same fragmentation risk the-fool flagged for
-// AMC/Dismantling - collapsed into one warrantyClaimsPermissions() source of truth below,
-// copied verbatim from warranty-claims.controller.ts's own const declarations.
+// 2026-09-14: was three hardcoded role arrays (WARRANTY_CLAIM_CLERK_ROLES/
+// WARRANTY_CLAIM_CREDIT_NOTE_ROLES/WARRANTY_CLAIM_VIEW_ROLES, "copied verbatim from
+// warranty-claims.controller.ts's own const declarations") - that comment is now stale,
+// the backend migrated to @RequiresCapability('WARRANTY_CLAIMS_CLERK'/'CREDIT_NOTE_POST'/
+// 'WARRANTY_CLAIMS_VIEW') and this frontend didn't follow, so a Designation-access grant
+// to some other role had no visible effect here. warrantyClaimsPermissions() stays the
+// single source of truth for every Warranty Claims check in the frontend - it just now
+// takes a `has` capability checker (from useMyCapabilities()) instead of a role name.
 export const WARRANTY_CLAIM_STATUSES = ['DRAFT', 'SUBMITTED', 'CREDIT_RECEIVED', 'CANCELLED'] as const;
 export type WarrantyClaimStatusValue = (typeof WARRANTY_CLAIM_STATUSES)[number];
-
-export const WARRANTY_CLAIM_CLERK_ROLES = ['WARRANTY_CLERK', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-export const WARRANTY_CLAIM_CREDIT_NOTE_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN'];
-export const WARRANTY_CLAIM_VIEW_ROLES = ['WARRANTY_CLERK', 'ACCOUNTANT', 'FINANCE_MANAGER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
 
 export interface WarrantyClaimsPermissions {
   canView: boolean;
@@ -26,17 +27,17 @@ export interface WarrantyClaimsPermissions {
   canRecordCreditNote: boolean;
 }
 
-// Single source of truth for every Warranty Claims role check in the frontend. Aggregate/
-// submit/cancel share one role list (CLERK_ROLES) in the backend, so they're collapsed to
-// one flag pair here too rather than three identical checks that could drift apart.
-export function warrantyClaimsPermissions(roleName: string | undefined): WarrantyClaimsPermissions {
-  const isClerk = !!roleName && WARRANTY_CLAIM_CLERK_ROLES.includes(roleName);
+// Aggregate/submit/cancel share one capability (WARRANTY_CLAIMS_CLERK) in the backend, so
+// they're collapsed to one flag here too rather than three identical checks that could
+// drift apart.
+export function warrantyClaimsPermissions(has: (key: string) => boolean): WarrantyClaimsPermissions {
+  const isClerk = has('WARRANTY_CLAIMS_CLERK');
   return {
-    canView: !!roleName && WARRANTY_CLAIM_VIEW_ROLES.includes(roleName),
+    canView: has('WARRANTY_CLAIMS_VIEW'),
     canAggregate: isClerk,
     canSubmit: isClerk,
     canCancel: isClerk,
-    canRecordCreditNote: !!roleName && WARRANTY_CLAIM_CREDIT_NOTE_ROLES.includes(roleName),
+    canRecordCreditNote: has('CREDIT_NOTE_POST'),
   };
 }
 

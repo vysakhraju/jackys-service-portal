@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { amcPermissions } from '../../lib/amcTypes';
 
 // Page-level self-check, like Delivery (Phase 8) - not a Finance-style (Phase 9)
@@ -16,8 +16,8 @@ const TABS: { label: string; path: string }[] = [
 ];
 
 export function AmcLayout() {
-  const { user } = useAuth();
-  const canView = amcPermissions(user?.role.name).canView;
+  const { has } = useMyCapabilities();
+  const canView = amcPermissions(has).canView;
 
   return (
     <div className="flex h-full flex-col">

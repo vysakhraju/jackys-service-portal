@@ -1,41 +1,46 @@
 import { describe, expect, it } from 'vitest';
 import { canPriceAsUser, canVerifyAsUser, dismantlingPermissions } from './dismantlingTypes';
 
+// 2026-09-14: dismantlingPermissions() takes a has()-style capability checker rather than a
+// role name - see dismantlingTypes.ts's own comment. capSet mirrors amcTypes.test.ts's helper.
+function capSet(keys: string[]) {
+  return (key: string) => keys.includes(key);
+}
+
 describe('dismantlingPermissions', () => {
-  it('grants only canHarvest to TECHNICIAN_WORKSHOP (a harvester, not a supervisor or manager)', () => {
-    expect(dismantlingPermissions('TECHNICIAN_WORKSHOP')).toEqual({ canView: true, canHarvest: true, canVerify: false, canPrice: false });
+  it('grants only canHarvest (default TECHNICIAN_WORKSHOP membership: DISMANTLING_VIEW + DISMANTLING_HARVEST)', () => {
+    expect(dismantlingPermissions(capSet(['DISMANTLING_VIEW', 'DISMANTLING_HARVEST']))).toEqual({ canView: true, canHarvest: true, canVerify: false, canPrice: false });
   });
 
-  it('grants only canHarvest to TECHNICIAN_FIELD', () => {
-    expect(dismantlingPermissions('TECHNICIAN_FIELD')).toEqual({ canView: true, canHarvest: true, canVerify: false, canPrice: false });
+  it('grants only canHarvest (default TECHNICIAN_FIELD membership)', () => {
+    expect(dismantlingPermissions(capSet(['DISMANTLING_VIEW', 'DISMANTLING_HARVEST']))).toEqual({ canView: true, canHarvest: true, canVerify: false, canPrice: false });
   });
 
-  it('grants canHarvest + canVerify (but not canPrice) to TECHNICAL_TEAM_LEADER', () => {
-    expect(dismantlingPermissions('TECHNICAL_TEAM_LEADER')).toEqual({ canView: true, canHarvest: true, canVerify: true, canPrice: false });
+  it('grants canHarvest + canVerify but not canPrice (default TECHNICAL_TEAM_LEADER membership)', () => {
+    expect(dismantlingPermissions(capSet(['DISMANTLING_VIEW', 'DISMANTLING_HARVEST', 'DISMANTLING_VERIFY']))).toEqual({ canView: true, canHarvest: true, canVerify: true, canPrice: false });
   });
 
-  it('grants only view + billing-adjacent visibility to ACCOUNTANT (view-only, no action roles)', () => {
-    expect(dismantlingPermissions('ACCOUNTANT')).toEqual({ canView: true, canHarvest: false, canVerify: false, canPrice: false });
+  it('grants only view (default ACCOUNTANT membership: view-only, no action capabilities)', () => {
+    expect(dismantlingPermissions(capSet(['DISMANTLING_VIEW']))).toEqual({ canView: true, canHarvest: false, canVerify: false, canPrice: false });
   });
 
-  it('grants only view to FINANCE_MANAGER', () => {
-    expect(dismantlingPermissions('FINANCE_MANAGER')).toEqual({ canView: true, canHarvest: false, canVerify: false, canPrice: false });
+  it('grants only view (default FINANCE_MANAGER membership)', () => {
+    expect(dismantlingPermissions(capSet(['DISMANTLING_VIEW']))).toEqual({ canView: true, canHarvest: false, canVerify: false, canPrice: false });
   });
 
-  it('grants everything to SERVICE_HEAD (in all four arrays)', () => {
-    expect(dismantlingPermissions('SERVICE_HEAD')).toEqual({ canView: true, canHarvest: true, canVerify: true, canPrice: true });
+  it('grants everything to a full-access caller (SUPER_ADMIN/SERVICE_HEAD bypass)', () => {
+    expect(dismantlingPermissions(() => true)).toEqual({ canView: true, canHarvest: true, canVerify: true, canPrice: true });
   });
 
-  it('grants everything to SUPER_ADMIN', () => {
-    expect(dismantlingPermissions('SUPER_ADMIN')).toEqual({ canView: true, canHarvest: true, canVerify: true, canPrice: true });
+  it('denies every flag to a caller with none of the dismantling capabilities', () => {
+    expect(dismantlingPermissions(capSet([]))).toEqual({ canView: false, canHarvest: false, canVerify: false, canPrice: false });
   });
 
-  it('denies every flag to a role in none of the four arrays', () => {
-    expect(dismantlingPermissions('DRIVER')).toEqual({ canView: false, canHarvest: false, canVerify: false, canPrice: false });
-  });
-
-  it('denies every flag when roleName is undefined', () => {
-    expect(dismantlingPermissions(undefined)).toEqual({ canView: false, canHarvest: false, canVerify: false, canPrice: false });
+  it('grants canPrice to a role holding DISMANTLING_MANAGE via Designation access, even though its catalog defaultRoles is empty', () => {
+    // The whole point of this round's fix: DISMANTLING_MANAGE has no default role membership
+    // at all (SUPER_ADMIN/SERVICE_HEAD bypass only) - a direct capability grant is the only
+    // way any other role ever sees canPrice, proven here independent of role name.
+    expect(dismantlingPermissions(capSet(['DISMANTLING_VIEW', 'DISMANTLING_MANAGE']))).toEqual({ canView: true, canHarvest: false, canVerify: false, canPrice: true });
   });
 });
 

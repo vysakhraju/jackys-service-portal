@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeDismantlingRecord, makeHarvestedComponent } from '../../test/fixtures';
 
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/dismantlingApi', () => ({
   createDismantlingRecord: vi.fn(),
   listDismantlingRecords: vi.fn(),
@@ -19,18 +20,38 @@ vi.mock('../../lib/dismantlingApi', () => ({
 vi.mock('../../lib/masterDataApi', () => ({ listYieldByModel: vi.fn() }));
 
 import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { createDismantlingRecord, getDismantlingRecord, listDismantlingRecords, verifyDismantlingRecord } from '../../lib/dismantlingApi';
 import { listYieldByModel } from '../../lib/masterDataApi';
 import { DismantlingPage } from './DismantlingPage';
 
-function mockUser(roleName: string, id = 'u1') {
+// useAuth is still mocked for the current user's id, used by canVerifyAsUser/
+// canPriceAsUser's own three-distinct-actor ownership check (AC-31) - deliberately NOT
+// converted, there's no capability for "must not be the same person," only for "can
+// attempt this action at all" (see dismantlingTypes.ts's own comment).
+function mockUser(id = 'u1') {
   vi.mocked(useAuth).mockReturnValue({
-    user: { id, firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } },
+    user: { id, firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: 'SERVICE_HEAD', displayName: 'Service Head' } },
     isLoading: false,
     isAuthenticated: true,
     login: vi.fn(),
     logout: vi.fn(),
   } as any);
+}
+
+// 2026-09-14: DismantlingPage now gates on the real capability (useMyCapabilities)
+// rather than four hardcoded role arrays - see dismantlingTypes.ts's own comment.
+// mockCapabilities replaces the old mockUser(roleName) role-array helper for gating;
+// mockUser above stays, narrowed to just the current user's id.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function renderPage(initialEntry = '/dismantling') {
@@ -50,7 +71,8 @@ beforeEach(() => {
   vi.mocked(getDismantlingRecord).mockReset();
   vi.mocked(verifyDismantlingRecord).mockReset();
   vi.mocked(listYieldByModel).mockReset().mockResolvedValue([]);
-  mockUser('SERVICE_HEAD');
+  mockUser();
+  mockCapabilities([], true);
 });
 
 describe('DismantlingPage - list + filters', () => {
@@ -77,12 +99,23 @@ describe('DismantlingPage - list + filters', () => {
     expect(screen.getByRole('button', { name: '+ New Record' })).toBeInTheDocument();
   });
 
-  it('hides "+ New Record" for a view-only role (ACCOUNTANT)', async () => {
-    mockUser('ACCOUNTANT');
+  it('hides "+ New Record" for a caller with only DISMANTLING_VIEW (no DISMANTLING_HARVEST)', async () => {
+    mockCapabilities(['DISMANTLING_VIEW']);
     vi.mocked(listDismantlingRecords).mockResolvedValue([]);
     renderPage();
     await screen.findByText('No dismantling records match this filter.');
     expect(screen.queryByRole('button', { name: '+ New Record' })).not.toBeInTheDocument();
+  });
+
+  it('shows "+ New Record" for a role granted DISMANTLING_HARVEST via Designation access, not just a default role', async () => {
+    // The whole point of this round's fix: a role with no default membership in
+    // DISMANTLING_HARVEST sees the button once Super Admin ticks the capability for
+    // them - proven here by mocking the capability directly, independent of role name.
+    mockCapabilities(['DISMANTLING_VIEW', 'DISMANTLING_HARVEST']);
+    vi.mocked(listDismantlingRecords).mockResolvedValue([]);
+    renderPage();
+    await screen.findByText('No dismantling records match this filter.');
+    expect(screen.getByRole('button', { name: '+ New Record' })).toBeInTheDocument();
   });
 });
 
@@ -137,7 +170,7 @@ describe('DismantlingPage - detail: status-gated actions', () => {
   });
 
   it('disables Verify with an AC-31 explanation when the current user is the harvester', async () => {
-    mockUser('SERVICE_HEAD', 'tech-1');
+    mockUser('tech-1');
     vi.mocked(listDismantlingRecords).mockResolvedValue([]);
     vi.mocked(getDismantlingRecord).mockResolvedValue(
       makeDismantlingRecord({ id: 'r1', status: 'COMPONENTS_LOGGED', harvestedByUserId: 'tech-1' }),
@@ -150,7 +183,7 @@ describe('DismantlingPage - detail: status-gated actions', () => {
   });
 
   it('enables Verify for a different, permitted person', async () => {
-    mockUser('SERVICE_HEAD', 'lead-1');
+    mockUser('lead-1');
     vi.mocked(listDismantlingRecords).mockResolvedValue([]);
     vi.mocked(getDismantlingRecord).mockResolvedValue(
       makeDismantlingRecord({ id: 'r1', status: 'COMPONENTS_LOGGED', harvestedByUserId: 'tech-1' }),
@@ -163,7 +196,7 @@ describe('DismantlingPage - detail: status-gated actions', () => {
   });
 
   it('disables Price & Post with an AC-31 explanation when the current user is the verifier', async () => {
-    mockUser('SERVICE_HEAD', 'lead-1');
+    mockUser('lead-1');
     vi.mocked(listDismantlingRecords).mockResolvedValue([]);
     vi.mocked(getDismantlingRecord).mockResolvedValue(
       makeDismantlingRecord({ id: 'r1', status: 'VERIFIED', harvestedByUserId: 'tech-1', verifiedByUserId: 'lead-1' }),
@@ -176,7 +209,7 @@ describe('DismantlingPage - detail: status-gated actions', () => {
   });
 
   it('enables Price & Post for a third, distinct person', async () => {
-    mockUser('SERVICE_HEAD', 'mgr-1');
+    mockUser('mgr-1');
     vi.mocked(listDismantlingRecords).mockResolvedValue([]);
     vi.mocked(getDismantlingRecord).mockResolvedValue(
       makeDismantlingRecord({ id: 'r1', status: 'VERIFIED', harvestedByUserId: 'tech-1', verifiedByUserId: 'lead-1' }),

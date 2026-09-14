@@ -7,7 +7,7 @@ import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getAppointment, searchAppointments } from '../../lib/appointmentsApi';
 import type { Appointment } from '../../lib/appointmentsTypes';
 import {
@@ -30,11 +30,6 @@ import type {
   TaskPauseReasonValue,
 } from '../../lib/jobCardsTypes';
 import { TASK_PAUSE_REASONS } from '../../lib/jobCardsTypes';
-
-// Same "one Technical Team Leader (or above)" list as the backend's WARRANTY_OVERRIDE_ROLES
-// in job-cards.controller.ts - shown here so the button only appears for someone who could
-// actually use it, not as a substitute for the server's own @Roles() check.
-const WARRANTY_OVERRIDE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
 
 // Statuses past which this phase's screens stop. WORKSHOP_ASSIGNED/IN_PROGRESS/
 // SPARE_PENDING/READY_FOR_QC now link to the Workshop screen (Frontend Phase 6) instead
@@ -211,8 +206,11 @@ export function JobCardsPage() {
   // #218/#251: see QcPage's identical field for why this isn't derived via an effect.
   const [pickedLabel, setPickedLabel] = useState<string | null>(null);
   const queryClient = useQueryClient();
-  const { user } = useAuth();
-  const canWarrantyOverride = !!user && WARRANTY_OVERRIDE_ROLES.includes(user.role.name);
+  // 2026-09-14: gated on the real capability (mirrors job-cards.controller.ts's
+  // @RequiresCapability('JOB_CARD_WARRANTY_OVERRIDE')) rather than a hardcoded role list,
+  // so a role granted this via Designation access sees the button too.
+  const { has } = useMyCapabilities();
+  const canWarrantyOverride = has('JOB_CARD_WARRANTY_OVERRIDE');
 
   const appointmentQuery = useQuery({
     queryKey: ['appointment', activeAppointmentId],

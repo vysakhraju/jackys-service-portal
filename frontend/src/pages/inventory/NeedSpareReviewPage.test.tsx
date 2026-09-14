@@ -5,13 +5,13 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeNeedSpareRequest } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/inventoryApi', () => ({
   getPendingNeedSpareRequests: vi.fn(),
   reviewNeedSpare: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getPendingNeedSpareRequests, reviewNeedSpare } from '../../lib/inventoryApi';
 import { NeedSpareReviewPage } from './NeedSpareReviewPage';
 
@@ -26,23 +26,18 @@ function renderPage() {
   );
 }
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: {
-      id: 'user-1',
-      firstName: 'Test',
-      lastName: 'User',
-      email: 't@example.com',
-      employeeId: 'E1',
-      status: 'ACTIVE',
-      lastLoginAt: null,
-      role: { id: 'r1', name: roleName, displayName: roleName },
-    },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14: NeedSpareReviewPage now gates on the real capability (useMyCapabilities)
+// rather than a hardcoded REVIEW_ROLES array - see NeedSpareReviewPage.tsx's own comment.
+// mockCapabilities replaces the old mockUser(roleName) role-array helper.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 beforeEach(() => {
@@ -51,9 +46,9 @@ beforeEach(() => {
   vi.mocked(reviewNeedSpare).mockReset();
 });
 
-describe('NeedSpareReviewPage - role gating', () => {
-  it('blocks a plain technician with a restricted-access notice, never fetching the list', async () => {
-    mockUser('TECHNICIAN_FIELD');
+describe('NeedSpareReviewPage - capability gating', () => {
+  it('blocks a caller with no INVENTORY_REVIEW capability with a restricted-access notice, never fetching the list', async () => {
+    mockCapabilities([]);
     renderPage();
     expect(
       await screen.findByText(/Need Spare review is restricted to Technical Team Leader/i),
@@ -61,8 +56,8 @@ describe('NeedSpareReviewPage - role gating', () => {
     expect(getPendingNeedSpareRequests).not.toHaveBeenCalled();
   });
 
-  it('allows a Technical Team Leader to see the listing', async () => {
-    mockUser('TECHNICAL_TEAM_LEADER');
+  it('allows a caller holding INVENTORY_REVIEW to see the listing - the whole point of this round\'s fix being that this is independent of role name, e.g. a role granted it only via Designation access', async () => {
+    mockCapabilities(['INVENTORY_REVIEW']);
     renderPage();
     expect(await screen.findByText('Nothing waiting for review right now.')).toBeInTheDocument();
   });
@@ -70,7 +65,7 @@ describe('NeedSpareReviewPage - role gating', () => {
 
 describe('NeedSpareReviewPage - listing and review actions', () => {
   it('renders a pending request with part, job card, and requester details', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities([], true);
     vi.mocked(getPendingNeedSpareRequests).mockResolvedValue([makeNeedSpareRequest()]);
     renderPage();
 
@@ -81,7 +76,7 @@ describe('NeedSpareReviewPage - listing and review actions', () => {
   });
 
   it('approving calls reviewNeedSpare with APPROVE and shows the reserved outcome', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     vi.mocked(getPendingNeedSpareRequests).mockResolvedValue([makeNeedSpareRequest()]);
     vi.mocked(reviewNeedSpare).mockResolvedValue(
       makeNeedSpareRequest({ status: 'HELD', quantityReserved: 2 }) as any,
@@ -98,7 +93,7 @@ describe('NeedSpareReviewPage - listing and review actions', () => {
   });
 
   it('a partial approval shows the partially-reserved quantity outcome', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     vi.mocked(getPendingNeedSpareRequests).mockResolvedValue([makeNeedSpareRequest()]);
     vi.mocked(reviewNeedSpare).mockResolvedValue(
       makeNeedSpareRequest({ status: 'PARTIALLY_RESERVED', quantityReserved: 1 }) as any,
@@ -114,7 +109,7 @@ describe('NeedSpareReviewPage - listing and review actions', () => {
   });
 
   it('rejecting calls reviewNeedSpare with REJECT and shows the rejected outcome, hiding the action buttons', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     vi.mocked(getPendingNeedSpareRequests).mockResolvedValue([makeNeedSpareRequest()]);
     vi.mocked(reviewNeedSpare).mockResolvedValue(makeNeedSpareRequest({ status: 'REJECTED' }) as any);
     const user = userEvent.setup();
@@ -131,7 +126,7 @@ describe('NeedSpareReviewPage - listing and review actions', () => {
   });
 
   it('reviewing one row of several only resolves that row, leaving the other pending', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     const first = makeNeedSpareRequest({ id: 'res-a', sparePart: { id: 'sp-a', code: 'SP-A', name: 'Part A' } });
     const second = makeNeedSpareRequest({ id: 'res-b', sparePart: { id: 'sp-b', code: 'SP-B', name: 'Part B' } });
     vi.mocked(getPendingNeedSpareRequests).mockResolvedValue([first, second]);

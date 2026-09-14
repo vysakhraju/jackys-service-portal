@@ -25,13 +25,12 @@ export type AmcPaymentTermsValue = (typeof AMC_PAYMENT_TERMS)[number];
 export const AMC_BILLING_STATUSES = ['DRAFT', 'PAID', 'CANCELLED'] as const;
 export type AmcBillingStatusValue = (typeof AMC_BILLING_STATUSES)[number];
 
-// Copied verbatim from amc.controller.ts's own const declarations - keep these two files
-// in sync if the backend's role sets ever change.
-export const AMC_MANAGEMENT_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'CCE'];
-export const AMC_VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'CCE', 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP', 'ACCOUNTANT', 'FINANCE_MANAGER'];
-export const AMC_TECHNICIAN_ROLES = ['TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-export const AMC_FINANCE_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SUPER_ADMIN', 'SERVICE_HEAD'];
-
+// 2026-09-14: was four hardcoded role arrays ("copied verbatim from amc.controller.ts's
+// own const declarations") - that comment is now stale, the backend migrated to
+// @RequiresCapability('AMC_MANAGE'/'AMC_VIEW'/'AMC_TECHNICIAN_VISIT'/'AMC_BILLING') and
+// this frontend didn't follow. amcPermissions() stays the single source of truth for
+// every AMC check in the frontend - every page/component below calls it once, it just
+// now takes a `has` capability checker (from useMyCapabilities()) instead of a role name.
 export interface AmcPermissions {
   canView: boolean;
   canManage: boolean;
@@ -39,14 +38,12 @@ export interface AmcPermissions {
   canBill: boolean;
 }
 
-// Single source of truth for every AMC role check in the frontend - every page/component
-// below calls this once instead of inlining `.includes()` against one of the four arrays.
-export function amcPermissions(roleName: string | undefined): AmcPermissions {
+export function amcPermissions(has: (key: string) => boolean): AmcPermissions {
   return {
-    canView: !!roleName && AMC_VIEW_ROLES.includes(roleName),
-    canManage: !!roleName && AMC_MANAGEMENT_ROLES.includes(roleName),
-    canCompleteVisits: !!roleName && AMC_TECHNICIAN_ROLES.includes(roleName),
-    canBill: !!roleName && AMC_FINANCE_ROLES.includes(roleName),
+    canView: has('AMC_VIEW'),
+    canManage: has('AMC_MANAGE'),
+    canCompleteVisits: has('AMC_TECHNICIAN_VISIT'),
+    canBill: has('AMC_BILLING'),
   };
 }
 

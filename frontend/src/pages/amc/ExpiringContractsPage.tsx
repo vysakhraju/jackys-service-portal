@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getExpiringAmcContracts, sendAmcRenewalReminder } from '../../lib/amcApi';
 import { amcPermissions, type AmcContract } from '../../lib/amcTypes';
 
@@ -14,8 +14,8 @@ import { amcPermissions, type AmcContract } from '../../lib/amcTypes';
 // to actually send anything) - each row now sends the reminder right here, plus a direct
 // link into the full contract detail.
 export function ExpiringContractsPage() {
-  const { user } = useAuth();
-  const perms = amcPermissions(user?.role.name);
+  const { has } = useMyCapabilities();
+  const perms = amcPermissions(has);
   const queryClient = useQueryClient();
   // Two pieces of state so the field can be cleared and retyped without snapping back to
   // the default mid-edit: withinDaysInput is exactly what's shown in the box; withinDays

@@ -2,15 +2,9 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ErrorNotice } from '../../components/DataTable';
 import { StatusBadge } from '../../components/StatusBadge';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getPendingNeedSpareRequests, reviewNeedSpare } from '../../lib/inventoryApi';
 import type { InventoryReservation, NeedSpareReviewDecisionValue } from '../../lib/inventoryTypes';
-
-// Same reviewer roles as InventoryController's own @Roles() on review-need-spare, and the
-// same set InventoryGateway admits for the live pop-up - shown here purely so buttons only
-// appear for someone who could actually use them, not as a substitute for the server's own
-// check (identical convention to InventoryPage.tsx's ReservationRow).
-const REVIEW_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
 
 export const PENDING_NEED_SPARE_QUERY_KEY = ['reservations', 'pending-need-spare'] as const;
 
@@ -24,8 +18,13 @@ export const PENDING_NEED_SPARE_QUERY_KEY = ['reservations', 'pending-need-spare
  * they are in the app; this page is where they act on it.
  */
 export function NeedSpareReviewPage() {
-  const { user } = useAuth();
-  const canReview = !!user && REVIEW_ROLES.includes(user.role.name);
+  // 2026-09-14: gated on the real capability (mirrors InventoryController's
+  // @RequiresCapability('INVENTORY_REVIEW') on review-need-spare) rather than a hardcoded
+  // role list, so a role granted this via Designation access sees the page too. Note:
+  // InventoryGateway's live pop-up (NeedSpareNotifier) still gates on its own backend
+  // hardcoded role list - that's Group C, not this page.
+  const { has } = useMyCapabilities();
+  const canReview = has('INVENTORY_REVIEW');
 
   const queryClient = useQueryClient();
   const pendingQuery = useQuery({

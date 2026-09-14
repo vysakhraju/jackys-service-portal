@@ -7,6 +7,7 @@ import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   cancelDismantlingRecord,
   createDismantlingRecord,
@@ -44,7 +45,8 @@ function emptyCreateForm(): CreateFormValues {
 
 export function DismantlingPage() {
   const { user } = useAuth();
-  const perms = dismantlingPermissions(user?.role.name);
+  const { has } = useMyCapabilities();
+  const perms = dismantlingPermissions(has);
   const [searchParams, setSearchParams] = useSearchParams();
   const activeId = searchParams.get('recordId') ?? '';
   const [statusFilter, setStatusFilter] = useState<DismantlingStatusValue | ''>('');

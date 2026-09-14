@@ -7,7 +7,7 @@ import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { NamePicker } from '../../components/pickers/NamePicker';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { listServiceCentres } from '../../lib/masterDataApi';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 import {
@@ -88,8 +88,8 @@ function emptyCreateForm(overrides: Partial<CreateFormValues> = {}): CreateFormV
 }
 
 export function ContractsPage() {
-  const { user } = useAuth();
-  const perms = amcPermissions(user?.role.name);
+  const { has } = useMyCapabilities();
+  const perms = amcPermissions(has);
   const [searchParams, setSearchParams] = useSearchParams();
   const activeId = searchParams.get('contractId') ?? '';
   const [statusFilter, setStatusFilter] = useState<AmcContractStatusValue | ''>('');

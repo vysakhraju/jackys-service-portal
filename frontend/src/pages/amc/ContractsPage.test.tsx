@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeAmcContract, makeAmcScheduleVisit } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/amcApi', () => ({
   createAmcContract: vi.fn(),
   listAmcContracts: vi.fn(),
@@ -27,7 +27,7 @@ vi.mock('../../lib/technicianScheduleApi', () => ({
   getGanttBoard: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   createAmcContract,
   getAmcBillingInvoicesForContract,
@@ -39,14 +39,18 @@ import { listServiceCentres } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { ContractsPage } from './ContractsPage';
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: { id: 'u1', firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14: ContractsPage now gates on the real capability (useMyCapabilities) rather
+// than four hardcoded role arrays - see amcTypes.ts's own comment. mockCapabilities
+// replaces the old mockUser(roleName) role-array helper.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function renderPage(initialEntry = '/amc/contracts') {
@@ -73,7 +77,7 @@ beforeEach(() => {
     unassignedAppointments: [],
     unassignedJobCards: [],
   } as any);
-  mockUser('SERVICE_HEAD');
+  mockCapabilities([], true);
 });
 
 describe('ContractsPage - list + filters', () => {
@@ -205,8 +209,8 @@ describe('ContractsPage - contract detail', () => {
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
   });
 
-  it('hides all management actions for a technician (view + complete-visits only, not canManage)', async () => {
-    mockUser('TECHNICIAN_FIELD');
+  it('hides all management actions for a caller holding only AMC_VIEW + AMC_TECHNICIAN_VISIT (not AMC_MANAGE)', async () => {
+    mockCapabilities(['AMC_VIEW', 'AMC_TECHNICIAN_VISIT']);
     vi.mocked(listAmcContracts).mockResolvedValue([makeAmcContract({ id: 'contract-1', status: 'ACTIVE' })]);
     vi.mocked(getAmcContract).mockResolvedValue(makeAmcContract({ id: 'contract-1', status: 'ACTIVE' }));
     vi.mocked(getAmcSchedule).mockResolvedValue([makeAmcScheduleVisit({ status: 'SCHEDULED' })]);

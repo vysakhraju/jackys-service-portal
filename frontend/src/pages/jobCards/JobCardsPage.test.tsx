@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeAppointment, makeJobCard } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/appointmentsApi', () => ({
   getAppointment: vi.fn(),
   searchAppointments: vi.fn(),
@@ -22,10 +22,24 @@ vi.mock('../../lib/jobCardsApi', () => ({
   warrantyOverride: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getAppointment, searchAppointments } from '../../lib/appointmentsApi';
 import { getJobCardByAppointment, getTaskPauses } from '../../lib/jobCardsApi';
 import { JobCardsPage } from './JobCardsPage';
+
+// 2026-09-14: canWarrantyOverride now gates on the real capability (useMyCapabilities)
+// rather than a hardcoded WARRANTY_OVERRIDE_ROLES array - see JobCardsPage.tsx's own
+// comment. mockCapabilities replaces the old useAuth role mock for this purpose.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
+}
 
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -39,22 +53,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
-  vi.mocked(useAuth).mockReturnValue({
-    user: {
-      id: 'user-1',
-      firstName: 'Test',
-      lastName: 'User',
-      email: 't@example.com',
-      employeeId: 'E1',
-      status: 'ACTIVE',
-      lastLoginAt: null,
-      role: { id: 'r1', name: 'CCE', displayName: 'CCE' },
-    },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+  mockCapabilities([]);
   vi.mocked(getAppointment).mockReset();
   vi.mocked(searchAppointments).mockReset();
   vi.mocked(getJobCardByAppointment).mockReset();
@@ -107,5 +106,37 @@ describe('JobCardsPage - #218 name-based appointment picker', () => {
 
     expect(await screen.findByText('Search failed - try again.')).toBeInTheDocument();
     expect(screen.queryByText('No matches.')).not.toBeInTheDocument();
+  });
+});
+
+// 2026-09-14: canWarrantyOverride converted from a hardcoded WARRANTY_OVERRIDE_ROLES
+// array to the real JOB_CARD_WARRANTY_OVERRIDE capability.
+describe('JobCardsPage - Warranty Override capability gate', () => {
+  async function loadJobCard() {
+    const appointment = makeAppointment({ id: 'appt-55', appointmentNumber: 'APT-0055' });
+    vi.mocked(searchAppointments).mockResolvedValue([appointment]);
+    vi.mocked(getAppointment).mockResolvedValue(appointment);
+    vi.mocked(getJobCardByAppointment).mockResolvedValue(makeJobCard({ appointmentId: 'appt-55' }));
+
+    renderPage();
+    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
+    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-0055' } });
+    fireEvent.click(await screen.findByText('APT-0055'));
+    await waitFor(() => expect(getJobCardByAppointment).toHaveBeenCalledWith('appt-55'));
+  }
+
+  it('hides the Warranty Override card for a caller with no JOB_CARD_WARRANTY_OVERRIDE capability', async () => {
+    mockCapabilities([]);
+    await loadJobCard();
+    expect(screen.queryByText(/Warranty Override/)).not.toBeInTheDocument();
+  });
+
+  it('shows the Warranty Override card for a role granted JOB_CARD_WARRANTY_OVERRIDE via Designation access, not just a default role', async () => {
+    // The whole point of this round's fix: a role with no default membership in
+    // JOB_CARD_WARRANTY_OVERRIDE sees the card once Super Admin ticks the capability for
+    // them - proven here by mocking the capability directly, independent of role name.
+    mockCapabilities(['JOB_CARD_WARRANTY_OVERRIDE']);
+    await loadJobCard();
+    expect(await screen.findByText(/Warranty Override/)).toBeInTheDocument();
   });
 });

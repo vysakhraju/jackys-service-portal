@@ -5,7 +5,7 @@ import { DataTable, ErrorNotice, type Column } from '../../components/DataTable'
 import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   aggregateWarrantyClaim,
   cancelWarrantyClaim,
@@ -35,8 +35,8 @@ const STATUS_FILTERS: { label: string; value: WarrantyClaimStatusValue | '' }[] 
 ];
 
 export function WarrantyClaimsPage() {
-  const { user } = useAuth();
-  const perms = warrantyClaimsPermissions(user?.role.name);
+  const { has } = useMyCapabilities();
+  const perms = warrantyClaimsPermissions(has);
   const [searchParams, setSearchParams] = useSearchParams();
   const activeId = searchParams.get('claimId') ?? '';
   const [statusFilter, setStatusFilter] = useState<WarrantyClaimStatusValue | ''>('');

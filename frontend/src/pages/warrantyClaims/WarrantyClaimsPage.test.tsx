@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeRecoveryRate, makeWarrantyClaim, makeWarrantyClaimLine } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/warrantyClaimsApi', () => ({
   aggregateWarrantyClaim: vi.fn(),
   listWarrantyClaims: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock('../../lib/warrantyClaimsApi', () => ({
   getWarrantyClaimRecoveryRate: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   aggregateWarrantyClaim,
   cancelWarrantyClaim,
@@ -28,14 +28,18 @@ import {
 } from '../../lib/warrantyClaimsApi';
 import { WarrantyClaimsPage } from './WarrantyClaimsPage';
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: { id: 'u1', firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14: WarrantyClaimsPage now gates on the real capability (useMyCapabilities)
+// rather than three hardcoded role arrays - see warrantyClaimsTypes.ts's own comment.
+// mockCapabilities replaces the old mockUser(roleName) role-array helper.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function renderPage(initialEntry = '/warranty-claims') {
@@ -57,12 +61,12 @@ beforeEach(() => {
   vi.mocked(cancelWarrantyClaim).mockReset();
   vi.mocked(recordWarrantyClaimCreditNote).mockReset();
   vi.mocked(getWarrantyClaimRecoveryRate).mockReset().mockResolvedValue(makeRecoveryRate());
-  mockUser('SERVICE_HEAD');
+  mockCapabilities([], true);
 });
 
-describe('WarrantyClaimsPage - role gate', () => {
-  it('shows a restricted message and fires no queries for a disallowed role', async () => {
-    mockUser('TECHNICIAN_FIELD');
+describe('WarrantyClaimsPage - capability gate (2026-09-14: converted from three hardcoded role arrays)', () => {
+  it('shows a restricted message and fires no queries for a caller with no WARRANTY_CLAIMS_VIEW capability', async () => {
+    mockCapabilities([]);
     renderPage();
 
     expect(await screen.findByText(/restricted to Warranty Clerk/)).toBeInTheDocument();
@@ -70,8 +74,21 @@ describe('WarrantyClaimsPage - role gate', () => {
     expect(getWarrantyClaimRecoveryRate).not.toHaveBeenCalled();
   });
 
-  it.each(['WARRANTY_CLERK', 'ACCOUNTANT', 'FINANCE_MANAGER', 'SERVICE_HEAD', 'SUPER_ADMIN'])('permits %s to view', async (role) => {
-    mockUser(role);
+  it.each([
+    ['a caller holding WARRANTY_CLAIMS_VIEW', ['WARRANTY_CLAIMS_VIEW'], false],
+    ['a full-access caller (SUPER_ADMIN/SERVICE_HEAD bypass)', [], true],
+  ])('permits %s to view', async (_label, capabilities, fullAccess) => {
+    mockCapabilities(capabilities as string[], fullAccess as boolean);
+    renderPage();
+    await screen.findByText('Warranty Claims');
+    expect(screen.queryByText(/restricted to Warranty Clerk/)).not.toBeInTheDocument();
+  });
+
+  it('permits view for a role granted WARRANTY_CLAIMS_VIEW via Designation access, not just a default role', async () => {
+    // The whole point of this round's fix: a role with no default membership in
+    // WARRANTY_CLAIMS_VIEW sees the page once Super Admin ticks the capability for them -
+    // proven here by mocking the capability directly, independent of role name.
+    mockCapabilities(['WARRANTY_CLAIMS_VIEW']);
     renderPage();
     await screen.findByText('Warranty Claims');
     expect(screen.queryByText(/restricted to Warranty Clerk/)).not.toBeInTheDocument();
@@ -117,7 +134,7 @@ describe('WarrantyClaimsPage - list + filters + recovery rate', () => {
   });
 
   it('hides "+ New Claim" for a view-only role (ACCOUNTANT)', async () => {
-    mockUser('ACCOUNTANT');
+    mockCapabilities(['WARRANTY_CLAIMS_VIEW']);
     renderPage();
     await screen.findByText('No warranty claims match this filter.');
     expect(screen.queryByRole('button', { name: '+ New Claim' })).not.toBeInTheDocument();
@@ -176,9 +193,11 @@ describe('WarrantyClaimsPage - detail: status-gated actions', () => {
   });
 
   it('shows Record Credit Note (not Mark Submitted or Cancel) on a SUBMITTED claim', async () => {
-    // Default beforeEach role is SERVICE_HEAD, which is clerk-level (submit/cancel) but not
-    // credit-note-level - use ACCOUNTANT so the Record Credit Note button is actually permitted.
-    mockUser('ACCOUNTANT');
+    // Default beforeEach is full-access (SERVICE_HEAD bypass), which is clerk-level
+    // (submit/cancel) but not credit-note-level in real usage - use an explicit
+    // WARRANTY_CLAIMS_VIEW + CREDIT_NOTE_POST mock so the Record Credit Note button is
+    // actually permitted (and clerk-only actions are NOT, proving the split is real).
+    mockCapabilities(['WARRANTY_CLAIMS_VIEW', 'CREDIT_NOTE_POST']);
     vi.mocked(getWarrantyClaim).mockResolvedValue(makeWarrantyClaim({ id: 'c1', status: 'SUBMITTED', claimReferenceNumber: 'VENDOR-1' }));
     renderPage('/warranty-claims?claimId=c1');
 
@@ -200,8 +219,8 @@ describe('WarrantyClaimsPage - detail: status-gated actions', () => {
     expect(screen.queryByRole('button', { name: 'Record Credit Note' })).not.toBeInTheDocument();
   });
 
-  it('never shows Record Credit Note to a clerk-only role, even on a SUBMITTED claim', async () => {
-    mockUser('WARRANTY_CLERK');
+  it('never shows Record Credit Note to a clerk-only caller, even on a SUBMITTED claim', async () => {
+    mockCapabilities(['WARRANTY_CLAIMS_VIEW', 'WARRANTY_CLAIMS_CLERK']);
     vi.mocked(getWarrantyClaim).mockResolvedValue(makeWarrantyClaim({ id: 'c1', status: 'SUBMITTED' }));
     renderPage('/warranty-claims?claimId=c1');
 
@@ -209,8 +228,8 @@ describe('WarrantyClaimsPage - detail: status-gated actions', () => {
     expect(screen.queryByRole('button', { name: 'Record Credit Note' })).not.toBeInTheDocument();
   });
 
-  it('never shows Mark Submitted/Cancel to a credit-note-only role (ACCOUNTANT), even on a DRAFT claim', async () => {
-    mockUser('ACCOUNTANT');
+  it('never shows Mark Submitted/Cancel to a credit-note-only caller, even on a DRAFT claim', async () => {
+    mockCapabilities(['WARRANTY_CLAIMS_VIEW', 'CREDIT_NOTE_POST']);
     vi.mocked(getWarrantyClaim).mockResolvedValue(makeWarrantyClaim({ id: 'c1', status: 'DRAFT' }));
     renderPage('/warranty-claims?claimId=c1');
 
@@ -252,9 +271,10 @@ describe('WarrantyClaimsPage - submit action', () => {
 
 describe('WarrantyClaimsPage - credit note action', () => {
   it('records a credit note with number and amount', async () => {
-    // Default beforeEach role is SERVICE_HEAD, which cannot record credit notes - switch to
-    // ACCOUNTANT so the action is permitted and the button actually renders.
-    mockUser('ACCOUNTANT');
+    // Default beforeEach is full-access (SERVICE_HEAD bypass) - use an explicit
+    // CREDIT_NOTE_POST mock so this proves the capability itself gates the action, not
+    // just the bypass.
+    mockCapabilities(['WARRANTY_CLAIMS_VIEW', 'CREDIT_NOTE_POST']);
     vi.mocked(getWarrantyClaim).mockResolvedValue(makeWarrantyClaim({ id: 'c1', status: 'SUBMITTED' }));
     vi.mocked(recordWarrantyClaimCreditNote).mockResolvedValue(makeWarrantyClaim({ id: 'c1', status: 'CREDIT_RECEIVED' }));
     const user = userEvent.setup();
@@ -272,7 +292,7 @@ describe('WarrantyClaimsPage - credit note action', () => {
   });
 
   it('does not allow a zero or negative credit amount', async () => {
-    mockUser('ACCOUNTANT');
+    mockCapabilities(['WARRANTY_CLAIMS_VIEW', 'CREDIT_NOTE_POST']);
     vi.mocked(getWarrantyClaim).mockResolvedValue(makeWarrantyClaim({ id: 'c1', status: 'SUBMITTED' }));
     const user = userEvent.setup();
     renderPage('/warranty-claims?claimId=c1');

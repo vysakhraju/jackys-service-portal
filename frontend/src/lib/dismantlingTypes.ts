@@ -3,10 +3,17 @@
 // AC-29-31). Standalone entity, NOT tied to JobCard - recovery of a whole write-off
 // appliance already sitting in Damage Location, not a step of an active repair.
 //
-// Four role arrays gate different actions on one record's lifecycle - the same
-// fragmentation risk the-fool flagged for AMC in Phase 10 (finding #2). Copied
-// verbatim from dismantling.controller.ts's own const declarations, collapsed into
-// one dismantlingPermissions() source of truth below, same fix as amcPermissions().
+// 2026-09-14: was four hardcoded role arrays ("copied verbatim from
+// dismantling.controller.ts's own const declarations") gating different actions on one
+// record's lifecycle - that comment is now stale, the backend migrated to
+// @RequiresCapability('DISMANTLING_HARVEST'/'DISMANTLING_VERIFY'/'DISMANTLING_MANAGE'/
+// 'DISMANTLING_VIEW') and this frontend didn't follow. dismantlingPermissions() stays the
+// single source of truth for every Dismantling check in the frontend - it just now takes
+// a `has` capability checker (from useMyCapabilities()) instead of a role name.
+// DISMANTLING_MANAGE's own catalog entry has an empty defaultRoles list (SUPER_ADMIN/
+// SERVICE_HEAD bypass only, by design - see the backend's own comment), so canPrice
+// behaves identically to before for every role that could already reach it; a
+// Designation-access grant to any other role is what actually changes.
 import type { RecoveryCategoryValue } from './masterDataTypes';
 
 export const DISMANTLING_STATUSES = ['PENDING_HARVEST', 'COMPONENTS_LOGGED', 'VERIFIED', 'POSTED', 'CANCELLED'] as const;
@@ -15,11 +22,6 @@ export type DismantlingStatusValue = (typeof DISMANTLING_STATUSES)[number];
 export const HARVESTED_COMPONENT_CONDITIONS = ['GOOD_WORKING', 'DAMAGED'] as const;
 export type HarvestedComponentConditionValue = (typeof HARVESTED_COMPONENT_CONDITIONS)[number];
 
-export const DISMANTLING_HARVEST_ROLES = ['TECHNICIAN_WORKSHOP', 'TECHNICIAN_FIELD', 'TECHNICAL_TEAM_LEADER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-export const DISMANTLING_VERIFY_ROLES = ['TECHNICAL_TEAM_LEADER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-export const DISMANTLING_MANAGER_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN'];
-export const DISMANTLING_VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER', 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP', 'ACCOUNTANT', 'FINANCE_MANAGER'];
-
 export interface DismantlingPermissions {
   canView: boolean;
   canHarvest: boolean;
@@ -27,13 +29,13 @@ export interface DismantlingPermissions {
   canPrice: boolean;
 }
 
-// Single source of truth for every Dismantling role check in the frontend.
-export function dismantlingPermissions(roleName: string | undefined): DismantlingPermissions {
+// Single source of truth for every Dismantling capability check in the frontend.
+export function dismantlingPermissions(has: (key: string) => boolean): DismantlingPermissions {
   return {
-    canView: !!roleName && DISMANTLING_VIEW_ROLES.includes(roleName),
-    canHarvest: !!roleName && DISMANTLING_HARVEST_ROLES.includes(roleName),
-    canVerify: !!roleName && DISMANTLING_VERIFY_ROLES.includes(roleName),
-    canPrice: !!roleName && DISMANTLING_MANAGER_ROLES.includes(roleName),
+    canView: has('DISMANTLING_VIEW'),
+    canHarvest: has('DISMANTLING_HARVEST'),
+    canVerify: has('DISMANTLING_VERIFY'),
+    canPrice: has('DISMANTLING_MANAGE'),
   };
 }
 
