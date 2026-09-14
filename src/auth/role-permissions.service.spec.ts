@@ -7,6 +7,7 @@ describe('RolePermissionsService', () => {
   let rolePermRepo: any;
   let rolesRepo: any;
   let usersRepo: any;
+  let roleAccessService: any;
 
   const role = (overrides: any = {}) =>
     ({ id: 'role-cce', name: RoleName.CCE, displayName: 'Customer Care Executive', ...overrides } as any);
@@ -21,7 +22,8 @@ describe('RolePermissionsService', () => {
     };
     rolesRepo = { findOne: jest.fn(), find: jest.fn() };
     usersRepo = { find: jest.fn() };
-    service = new RolePermissionsService(rolePermRepo, rolesRepo, usersRepo);
+    roleAccessService = { hasActiveAccessToAnyRole: jest.fn() };
+    service = new RolePermissionsService(rolePermRepo, rolesRepo, usersRepo, roleAccessService);
   });
 
   describe('roleHasCapability', () => {
@@ -71,6 +73,109 @@ describe('RolePermissionsService', () => {
       const result = await service.getMyCapabilities({ role: role() });
 
       expect(result).toEqual({ fullAccess: false, capabilities: [] });
+    });
+  });
+
+  // Extracted from RolesGuard.checkCapability() (Group C, 2026-09-14) so a non-HTTP caller
+  // (InventoryGateway.handleConnection()) can make the exact same access decision. These
+  // scenarios were previously covered at the guard level (roles.guard.spec.ts's
+  // "@RequiresCapability() path" describe block, against mocked roleHasCapability/
+  // getGrantedRoleNames) - moved here now that the guard is a thin wrapper around this
+  // method; roles.guard.spec.ts keeps a smaller set proving only that the guard delegates
+  // and turns a `false` into a ForbiddenException.
+  describe('userHasCapability', () => {
+    it('bypasses the matrix entirely for a MATRIX_LOCKED_ROLES role (SUPER_ADMIN), never touching the grants table', async () => {
+      const result = await service.userHasCapability(
+        { id: 'admin-1', role: role({ name: RoleName.SUPER_ADMIN }) },
+        'SCHEDULE_CCE_MANAGE',
+      );
+
+      expect(result).toBe(true);
+      expect(rolePermRepo.findOne).not.toHaveBeenCalled();
+      expect(rolePermRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('bypasses the matrix entirely for a MATRIX_LOCKED_ROLES role (SERVICE_HEAD) too', async () => {
+      const result = await service.userHasCapability(
+        { id: 'head-1', role: role({ name: RoleName.SERVICE_HEAD }) },
+        'QC_GATE_ACCESS',
+      );
+
+      expect(result).toBe(true);
+      expect(rolePermRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it("allows through on a direct RolePermission grant for the user's own role, without consulting delegated access", async () => {
+      rolePermRepo.findOne.mockResolvedValue({ id: 'g1', roleId: 'role-cce', capabilityKey: 'SCHEDULE_CCE_MANAGE' });
+
+      const result = await service.userHasCapability({ id: 'user-1', role: role() }, 'SCHEDULE_CCE_MANAGE');
+
+      expect(result).toBe(true);
+      expect(rolePermRepo.findOne).toHaveBeenCalledWith({ where: { roleId: 'role-cce', capabilityKey: 'SCHEDULE_CCE_MANAGE' } });
+      expect(roleAccessService.hasActiveAccessToAnyRole).not.toHaveBeenCalled();
+    });
+
+    it("falls back to delegated 'extra role access' when the user's own role lacks the capability directly, and allows through when one of the granted roles is actively delegated", async () => {
+      rolePermRepo.findOne.mockResolvedValue(null);
+      rolePermRepo.find.mockResolvedValue([{ roleId: 'role-tl', capabilityKey: 'SCHEDULE_ASSIGN_TECHNICIAN' }]);
+      rolesRepo.find.mockResolvedValue([role({ id: 'role-tl', name: RoleName.TECHNICAL_TEAM_LEADER })]);
+      roleAccessService.hasActiveAccessToAnyRole.mockResolvedValue(true);
+
+      const result = await service.userHasCapability({ id: 'user-1', role: role() }, 'SCHEDULE_ASSIGN_TECHNICIAN');
+
+      expect(result).toBe(true);
+      expect(roleAccessService.hasActiveAccessToAnyRole).toHaveBeenCalledWith('user-1', [RoleName.TECHNICAL_TEAM_LEADER]);
+    });
+
+    it('denies (returns false) when no role currently holds the capability at all, without calling RoleAccessService', async () => {
+      rolePermRepo.findOne.mockResolvedValue(null);
+      rolePermRepo.find.mockResolvedValue([]);
+
+      const result = await service.userHasCapability({ id: 'user-1', role: role() }, 'SCHEDULE_ASSIGN_TECHNICIAN');
+
+      expect(result).toBe(false);
+      expect(roleAccessService.hasActiveAccessToAnyRole).not.toHaveBeenCalled();
+    });
+
+    it('denies (returns false) when a role holds the capability but the user has no active delegated access to it', async () => {
+      rolePermRepo.findOne.mockResolvedValue(null);
+      rolePermRepo.find.mockResolvedValue([{ roleId: 'role-tl', capabilityKey: 'SCHEDULE_ASSIGN_TECHNICIAN' }]);
+      rolesRepo.find.mockResolvedValue([role({ id: 'role-tl', name: RoleName.TECHNICAL_TEAM_LEADER })]);
+      roleAccessService.hasActiveAccessToAnyRole.mockResolvedValue(false);
+
+      const result = await service.userHasCapability({ id: 'user-1', role: role() }, 'SCHEDULE_ASSIGN_TECHNICIAN');
+
+      expect(result).toBe(false);
+    });
+
+    it('fails CLOSED (returns false, never throws) when the direct grant lookup itself throws, but still tries the delegated fallback', async () => {
+      rolePermRepo.findOne.mockRejectedValue(new Error('DB is down'));
+      rolePermRepo.find.mockResolvedValue([]);
+
+      const result = await service.userHasCapability({ id: 'user-1', role: role() }, 'SCHEDULE_ASSIGN_TECHNICIAN');
+
+      expect(result).toBe(false);
+    });
+
+    it('fails CLOSED (returns false) when the delegated-roles lookup itself throws', async () => {
+      rolePermRepo.findOne.mockResolvedValue(null);
+      rolePermRepo.find.mockRejectedValue(new Error('DB is down'));
+
+      const result = await service.userHasCapability({ id: 'user-1', role: role() }, 'SCHEDULE_ASSIGN_TECHNICIAN');
+
+      expect(result).toBe(false);
+      expect(roleAccessService.hasActiveAccessToAnyRole).not.toHaveBeenCalled();
+    });
+
+    it('fails CLOSED (returns false) when the delegated access check itself throws, even though a role does hold the capability', async () => {
+      rolePermRepo.findOne.mockResolvedValue(null);
+      rolePermRepo.find.mockResolvedValue([{ roleId: 'role-tl', capabilityKey: 'SCHEDULE_ASSIGN_TECHNICIAN' }]);
+      rolesRepo.find.mockResolvedValue([role({ id: 'role-tl', name: RoleName.TECHNICAL_TEAM_LEADER })]);
+      roleAccessService.hasActiveAccessToAnyRole.mockRejectedValue(new Error('DB is down'));
+
+      const result = await service.userHasCapability({ id: 'user-1', role: role() }, 'SCHEDULE_ASSIGN_TECHNICIAN');
+
+      expect(result).toBe(false);
     });
   });
 

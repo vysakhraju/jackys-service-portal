@@ -1,7 +1,8 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { useMyCapabilities } from '../lib/useMyCapabilities';
 import { ToastProvider } from '../lib/toast';
-import { NeedSpareNotifier, REVIEW_ROLES } from './NeedSpareNotifier';
+import { NeedSpareNotifier } from './NeedSpareNotifier';
 import { NotificationPermissionBanner } from './NotificationPermissionBanner';
 
 // One row per module in the build plan. `path` is only set once that
@@ -31,6 +32,11 @@ const NAV_ITEMS: { label: string; path?: string }[] = [
 
 export function AppLayout() {
   const { user, logout } = useAuth();
+  // 2026-09-14 (Group C): same REVIEW_ROLES -> INVENTORY_REVIEW conversion as
+  // NeedSpareNotifier's own gate (see its doc comment) - was a hardcoded array kept in
+  // sync by hand.
+  const { has } = useMyCapabilities();
+  const canReviewNeedSpare = has('INVENTORY_REVIEW');
 
   return (
     <ToastProvider>
@@ -95,9 +101,9 @@ export function AppLayout() {
         </aside>
 
         <main className="flex flex-1 flex-col overflow-y-auto">
-          {/* Same reviewer gate as NeedSpareNotifier - only the roles who'd ever get a Need
-              Spare pop-up are asked to turn on OS notifications for it. */}
-          {!!user && REVIEW_ROLES.includes(user.role.name) && <NotificationPermissionBanner />}
+          {/* Same reviewer gate as NeedSpareNotifier - only whoever actually holds
+              INVENTORY_REVIEW is asked to turn on OS notifications for it. */}
+          {canReviewNeedSpare && <NotificationPermissionBanner />}
           <div className="flex-1">
             <Outlet />
           </div>

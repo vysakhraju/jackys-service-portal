@@ -4,7 +4,6 @@ import { ROLES_KEY } from '../decorators/roles.decorator';
 import { CAPABILITY_KEY } from '../decorators/requires-capability.decorator';
 import { RoleAccessService } from '../role-access.service';
 import { RolePermissionsService } from '../role-permissions.service';
-import { MATRIX_LOCKED_ROLES } from '../entities/role-permission.entity';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -76,47 +75,17 @@ export class RolesGuard implements CanActivate {
   // exactly (direct grant, then fall through to delegated "extra role access" on a miss,
   // fail CLOSED on any lookup error) so migrating an endpoint changes nothing about how
   // access decisions are made - only where the allowed-role list is stored.
+  //
+  // 2026-09-14 (Group C): the actual decision logic now lives in
+  // RolePermissionsService.userHasCapability() - extracted so InventoryGateway's
+  // handleConnection() (which can't reuse this HTTP-only guard, see that gateway's own
+  // doc comment) can make the exact same access decision instead of its own separate,
+  // hand-rolled hardcoded-role-array check. This method is now just the HTTP-specific
+  // wrapper: turn a `false` into the guard's own ForbiddenException.
   private async checkCapability(user: any, capabilityKey: string): Promise<boolean> {
-    // Hardcoded bypass - SUPER_ADMIN/SERVICE_HEAD always pass regardless of what the
-    // RolePermission table says, same as every one of today's @Roles() arrays already
-    // includes both (see MATRIX_LOCKED_ROLES's own comment). A bad row, an empty table, or
-    // a seed bug can never lock either of them out.
-    if (MATRIX_LOCKED_ROLES.includes(user.role.name)) {
-      return true;
-    }
+    const allowed = await this.rolePermissionsService.userHasCapability(user, capabilityKey);
 
-    let hasDirectGrant = false;
-    try {
-      hasDirectGrant = await this.rolePermissionsService.roleHasCapability(user.role.id, capabilityKey);
-    } catch {
-      hasDirectGrant = false;
-    }
-
-    if (hasDirectGrant) {
-      return true;
-    }
-
-    // Not covered by the user's own role's grants - fall back to delegated "extra role
-    // access", exactly like the @Roles() path: find every (non-locked) role that currently
-    // holds this capability, then ask RoleAccessService whether the user has active
-    // delegated access to any of them.
-    let rolesWithCapability: string[] = [];
-    try {
-      rolesWithCapability = await this.rolePermissionsService.getGrantedRoleNames(capabilityKey);
-    } catch {
-      rolesWithCapability = [];
-    }
-
-    let hasDelegatedAccess = false;
-    if (rolesWithCapability.length > 0) {
-      try {
-        hasDelegatedAccess = await this.roleAccessService.hasActiveAccessToAnyRole(user.id, rolesWithCapability);
-      } catch {
-        hasDelegatedAccess = false;
-      }
-    }
-
-    if (!hasDelegatedAccess) {
+    if (!allowed) {
       throw new ForbiddenException(`Access denied. Missing capability: ${capabilityKey}.`);
     }
 

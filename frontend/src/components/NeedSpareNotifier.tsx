@@ -1,15 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../lib/auth';
+import { useMyCapabilities } from '../lib/useMyCapabilities';
 import { useNeedSpareSocket } from '../lib/useNeedSpareSocket';
 import { useToast } from '../lib/toast';
 import { showBrowserNotification } from '../lib/browserNotifications';
 import { PENDING_NEED_SPARE_QUERY_KEY } from '../pages/inventory/NeedSpareReviewPage';
-
-// Same reviewer roles as NeedSpareReviewPage/InventoryController's own @Roles() on
-// review-need-spare, and the roles InventoryGateway itself admits - kept in sync by hand,
-// same convention every other role-list constant in this app already follows.
-export const REVIEW_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
 
 /**
  * Mounted once, app-wide, inside AppLayout (inside <ToastProvider>) - this is the "force a
@@ -18,10 +13,20 @@ export const REVIEW_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEAD
  * request into a toast plus a query invalidation, so NeedSpareReviewPage refreshes on its
  * own if the reviewer happens to already be looking at it. A non-reviewer role never even
  * opens the socket - useNeedSpareSocket no-ops while `enabled` is false.
+ *
+ * 2026-09-14 (Group C): was gated on a hardcoded REVIEW_ROLES = ['SUPER_ADMIN',
+ * 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'] array, same shape as (and kept in sync by hand
+ * with) InventoryGateway's own old VIEW_ROLES on the backend - a Designation-access grant
+ * of INVENTORY_REVIEW to some other role would pass NeedSpareReviewPage's already-real
+ * useMyCapabilities() gate (see that page's own comment) but never even open this socket to
+ * find out, since this component never checked the matrix at all. Now gated on the same
+ * real INVENTORY_REVIEW capability the review page and (as of this round) the backend
+ * gateway itself both check, so all three stay in lockstep with whatever Designation access
+ * actually grants.
  */
 export function NeedSpareNotifier() {
-  const { user } = useAuth();
-  const enabled = !!user && REVIEW_ROLES.includes(user.role.name);
+  const { has } = useMyCapabilities();
+  const enabled = has('INVENTORY_REVIEW');
   const { push } = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();

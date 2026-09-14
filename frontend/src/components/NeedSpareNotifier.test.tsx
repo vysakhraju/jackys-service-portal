@@ -10,7 +10,7 @@ const invalidateQueriesMock = vi.fn();
 // referencing a not-yet-hoisted const here throws "Cannot access before initialization".
 const { showBrowserNotificationMock } = vi.hoisted(() => ({ showBrowserNotificationMock: vi.fn() }));
 
-vi.mock('../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../lib/useNeedSpareSocket', () => ({ useNeedSpareSocket: vi.fn() }));
 vi.mock('../lib/toast', () => ({ useToast: () => ({ push: pushMock }) }));
 vi.mock('../lib/browserNotifications', () => ({ showBrowserNotification: showBrowserNotificationMock }));
@@ -22,29 +22,22 @@ vi.mock('../pages/inventory/NeedSpareReviewPage', () => ({
   PENDING_NEED_SPARE_QUERY_KEY: ['reservations', 'pending-need-spare'],
 }));
 
-import { useAuth } from '../lib/auth';
+import { useMyCapabilities } from '../lib/useMyCapabilities';
 import { useNeedSpareSocket } from '../lib/useNeedSpareSocket';
 import { NeedSpareNotifier } from './NeedSpareNotifier';
 
-function mockUser(roleName: string | null) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: roleName
-      ? {
-          id: 'user-1',
-          firstName: 'Test',
-          lastName: 'User',
-          email: 't@example.com',
-          employeeId: 'E1',
-          status: 'ACTIVE',
-          lastLoginAt: null,
-          role: { id: 'r1', name: roleName, displayName: roleName },
-        }
-      : null,
-    isLoading: false,
-    isAuthenticated: !!roleName,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14 (Group C): was gated on a hardcoded REVIEW_ROLES array read off useAuth() -
+// now gated on the real INVENTORY_REVIEW capability via useMyCapabilities(), same as
+// NeedSpareReviewPage.tsx's own gate and (as of this round) InventoryGateway itself.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 beforeEach(() => {
@@ -57,37 +50,37 @@ beforeEach(() => {
 
 describe('NeedSpareNotifier - enablement', () => {
   it('renders nothing (returns null)', () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities(['INVENTORY_REVIEW']);
     vi.mocked(useNeedSpareSocket).mockReturnValue({ pending: [] });
     const { container } = render(<NeedSpareNotifier />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('enables the socket for a reviewer role (Technical Team Leader)', () => {
-    mockUser('TECHNICAL_TEAM_LEADER');
+  it('enables the socket for a MATRIX_LOCKED_ROLES bypass (fullAccess), not just a direct grant', () => {
+    mockCapabilities([], true);
     vi.mocked(useNeedSpareSocket).mockReturnValue({ pending: [] });
     render(<NeedSpareNotifier />);
     expect(useNeedSpareSocket).toHaveBeenCalledWith(true, expect.any(Function));
   });
 
-  it('does not enable the socket for a non-reviewer role', () => {
-    mockUser('TECHNICIAN_FIELD');
+  it('does not enable the socket for a role without INVENTORY_REVIEW', () => {
+    mockCapabilities([]);
     vi.mocked(useNeedSpareSocket).mockReturnValue({ pending: [] });
     render(<NeedSpareNotifier />);
     expect(useNeedSpareSocket).toHaveBeenCalledWith(false, expect.any(Function));
   });
 
-  it('does not enable the socket when there is no logged-in user', () => {
-    mockUser(null);
+  it('enables the socket once INVENTORY_REVIEW is granted to any role via Designation access', () => {
+    mockCapabilities(['INVENTORY_REVIEW']);
     vi.mocked(useNeedSpareSocket).mockReturnValue({ pending: [] });
     render(<NeedSpareNotifier />);
-    expect(useNeedSpareSocket).toHaveBeenCalledWith(false, expect.any(Function));
+    expect(useNeedSpareSocket).toHaveBeenCalledWith(true, expect.any(Function));
   });
 });
 
 describe('NeedSpareNotifier - handling a newly-arrived request', () => {
   function renderAndCaptureCallback() {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities([], true);
     let onNewRequest: ((request: ReturnType<typeof makeNeedSpareRequest>) => void) | undefined;
     vi.mocked(useNeedSpareSocket).mockImplementation((_enabled, cb) => {
       onNewRequest = cb as any;

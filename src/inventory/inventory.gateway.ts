@@ -12,6 +12,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserStatus } from '../auth/entities/user.entity';
 import { JwtPayload } from '../auth/strategies/jwt.strategy';
+import { RolePermissionsService } from '../auth/role-permissions.service';
 import { InventoryService } from './inventory.service';
 
 /**
@@ -32,7 +33,17 @@ import { InventoryService } from './inventory.service';
  */
 const POLL_INTERVAL_MS = 5_000;
 const REVIEWERS_ROOM = 'need-spare-reviewers';
-const VIEW_ROLES = ['TECHNICAL_TEAM_LEADER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
+// 2026-09-14 (Group C): was a hardcoded VIEW_ROLES = ['TECHNICAL_TEAM_LEADER',
+// 'SERVICE_HEAD', 'SUPER_ADMIN'] array - a Designation-access grant of INVENTORY_REVIEW
+// to some other role (e.g. a CCE covering for a Team Leader) would open this exact channel
+// via useMyCapabilities() on the frontend, then get silently disconnected here the moment
+// the handshake actually ran, since this gateway never consulted the matrix at all. Now
+// checked via RolePermissionsService.userHasCapability() (see that method's own doc
+// comment) against the same capability every review-need-spare/release-reservation REST
+// endpoint requires (INVENTORY_REVIEW, inventory.controller.ts), so a role's access to
+// this socket can never drift out of sync with its access to the endpoints it's here to
+// get notified about.
+const REVIEW_CAPABILITY = 'INVENTORY_REVIEW';
 
 @WebSocketGateway({
   namespace: '/inventory',
@@ -62,6 +73,7 @@ export class InventoryGateway implements OnGatewayConnection, OnGatewayDisconnec
     private inventoryService: InventoryService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private rolePermissionsService: RolePermissionsService,
     @InjectRepository(User) private userRepo: Repository<User>,
   ) {}
 
@@ -87,7 +99,8 @@ export class InventoryGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       const user = await this.userRepo.findOne({ where: { id: payload.sub }, relations: { role: true } });
       if (!user || user.status !== UserStatus.ACTIVE) throw new Error('User not found or inactive');
-      if (!VIEW_ROLES.includes(user.role.name)) throw new Error('Role not permitted on the Need Spare review channel');
+      const allowed = await this.rolePermissionsService.userHasCapability(user, REVIEW_CAPABILITY);
+      if (!allowed) throw new Error('Missing capability on the Need Spare review channel');
 
       client.data.userId = user.id;
       client.join(REVIEWERS_ROOM);

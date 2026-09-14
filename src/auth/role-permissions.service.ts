@@ -5,6 +5,7 @@ import { RolePermission, MATRIX_LOCKED_ROLES } from './entities/role-permission.
 import { Role, RoleName } from './entities/role.entity';
 import { User } from './entities/user.entity';
 import { CAPABILITY_CATALOG, getMigratedCapability } from './capability-catalog';
+import { RoleAccessService } from './role-access.service';
 
 /**
  * The designation permission matrix: which roles hold which capabilities. See
@@ -21,6 +22,11 @@ export class RolePermissionsService {
     private rolesRepo: Repository<Role>,
     @InjectRepository(User)
     private usersRepo: Repository<User>,
+    // Needed only by userHasCapability() below - injected here (rather than left as a
+    // parameter callers pass in) so every caller gets the exact same access decision
+    // RolesGuard makes, without having to also wire RoleAccessService themselves. No
+    // circular dependency: RoleAccessService doesn't depend back on this service.
+    private roleAccessService: RoleAccessService,
   ) {}
 
   // The single call site RolesGuard uses. Deliberately narrow and exception-free on the
@@ -29,6 +35,62 @@ export class RolePermissionsService {
   async roleHasCapability(roleId: string, capabilityKey: string): Promise<boolean> {
     const row = await this.rolePermRepo.findOne({ where: { roleId, capabilityKey } });
     return !!row;
+  }
+
+  // Extracted from RolesGuard.checkCapability() (Group C, 2026-09-14) so a non-HTTP call
+  // site - a WebSocket gateway's handleConnection(), which can't reuse RolesGuard the way
+  // a controller does (see InventoryGateway's own doc comment) - can make the EXACT SAME
+  // access decision the guard makes for every @RequiresCapability() controller route,
+  // instead of maintaining a second, hand-rolled hardcoded-role-array check that silently
+  // drifts out of sync with the designation permission matrix (which is precisely the gap
+  // this extraction closes - see InventoryGateway's old VIEW_ROLES constant).
+  //
+  // Deliberately returns a plain boolean and never throws ITS OWN exception - unlike
+  // RolesGuard.checkCapability(), a caller here might not be in an HTTP request context at
+  // all (a WS gateway has no HTTP response to attach a ForbiddenException to), so the
+  // caller decides what a `false` means for it. Same fail-CLOSED behaviour as before on any
+  // lookup error: a thrown error from either dependency is swallowed and treated as "no",
+  // never "yes".
+  async userHasCapability(user: { id: string; role: { id: string; name: RoleName } }, capabilityKey: string): Promise<boolean> {
+    // Hardcoded bypass - SUPER_ADMIN/SERVICE_HEAD always pass regardless of what the
+    // RolePermission table says, same as every one of today's @Roles() arrays already
+    // includes both (see MATRIX_LOCKED_ROLES's own comment). A bad row, an empty table, or
+    // a seed bug can never lock either of them out.
+    if (MATRIX_LOCKED_ROLES.includes(user.role.name)) {
+      return true;
+    }
+
+    let hasDirectGrant = false;
+    try {
+      hasDirectGrant = await this.roleHasCapability(user.role.id, capabilityKey);
+    } catch {
+      hasDirectGrant = false;
+    }
+
+    if (hasDirectGrant) {
+      return true;
+    }
+
+    // Not covered by the user's own role's grants - fall back to delegated "extra role
+    // access", exactly like the @Roles() path: find every (non-locked) role that currently
+    // holds this capability, then ask RoleAccessService whether the user has active
+    // delegated access to any of them.
+    let rolesWithCapability: string[] = [];
+    try {
+      rolesWithCapability = await this.getGrantedRoleNames(capabilityKey);
+    } catch {
+      rolesWithCapability = [];
+    }
+
+    if (rolesWithCapability.length === 0) {
+      return false;
+    }
+
+    try {
+      return await this.roleAccessService.hasActiveAccessToAnyRole(user.id, rolesWithCapability);
+    } catch {
+      return false;
+    }
   }
 
   // Live-tested finding (2026-09-14): every @RequiresCapability() check RolesGuard makes

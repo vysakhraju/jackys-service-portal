@@ -43,7 +43,7 @@ describe('RolesGuard', () => {
   beforeEach(() => {
     reflector = { getAllAndOverride: jest.fn() };
     roleAccessService = { hasActiveAccessToAnyRole: jest.fn() };
-    rolePermissionsService = { roleHasCapability: jest.fn(), getGrantedRoleNames: jest.fn() };
+    rolePermissionsService = { roleHasCapability: jest.fn(), getGrantedRoleNames: jest.fn(), userHasCapability: jest.fn() };
     guard = new RolesGuard(
       reflector as Reflector,
       roleAccessService as RoleAccessService,
@@ -109,102 +109,33 @@ describe('RolesGuard', () => {
     });
   });
 
+  // 2026-09-14 (Group C): the actual bypass/direct-grant/delegated-fallback/fail-CLOSED
+  // decision logic that used to live in this guard's private checkCapability() was
+  // extracted to RolePermissionsService.userHasCapability() (see that method's own doc
+  // comment - InventoryGateway needs to make the identical decision outside an HTTP
+  // context). Every one of those scenarios is now covered directly against that method in
+  // role-permissions.service.spec.ts's own 'userHasCapability' describe block; what's left
+  // here is proving only that this guard delegates correctly and turns the result into the
+  // right outcome (return true, or throw its own ForbiddenException).
   describe('@RequiresCapability() path (designation permission matrix)', () => {
-    it('bypasses the matrix entirely for a MATRIX_LOCKED_ROLES role (SUPER_ADMIN), never touching RolePermissionsService', async () => {
+    it('allows the request through when RolePermissionsService.userHasCapability resolves true', async () => {
       mockMetadata(undefined, 'SCHEDULE_CCE_MANAGE');
+      rolePermissionsService.userHasCapability.mockResolvedValue(true);
 
-      const result = await guard.canActivate(contextWithUser({ id: 'admin-1', role: { name: 'SUPER_ADMIN' } }));
-
-      expect(result).toBe(true);
-      expect(rolePermissionsService.roleHasCapability).not.toHaveBeenCalled();
-      expect(rolePermissionsService.getGrantedRoleNames).not.toHaveBeenCalled();
-    });
-
-    it('bypasses the matrix entirely for a MATRIX_LOCKED_ROLES role (SERVICE_HEAD) too', async () => {
-      mockMetadata(undefined, 'QC_GATE_ACCESS');
-
-      const result = await guard.canActivate(contextWithUser({ id: 'head-1', role: { name: 'SERVICE_HEAD' } }));
+      const user = { id: 'user-1', role: { id: 'role-cce', name: 'CCE' } };
+      const result = await guard.canActivate(contextWithUser(user));
 
       expect(result).toBe(true);
-      expect(rolePermissionsService.roleHasCapability).not.toHaveBeenCalled();
+      expect(rolePermissionsService.userHasCapability).toHaveBeenCalledWith(user, 'SCHEDULE_CCE_MANAGE');
     });
 
-    it("allows through on a direct RolePermission grant for the user's own role, without consulting delegated access", async () => {
-      mockMetadata(undefined, 'SCHEDULE_CCE_MANAGE');
-      rolePermissionsService.roleHasCapability.mockResolvedValue(true);
-
-      const result = await guard.canActivate(contextWithUser({ id: 'user-1', role: { id: 'role-cce', name: 'CCE' } }));
-
-      expect(result).toBe(true);
-      expect(rolePermissionsService.roleHasCapability).toHaveBeenCalledWith('role-cce', 'SCHEDULE_CCE_MANAGE');
-      expect(roleAccessService.hasActiveAccessToAnyRole).not.toHaveBeenCalled();
-    });
-
-    it("falls back to delegated 'extra role access' when the user's own role lacks the capability directly, and allows through when one of the granted roles is actively delegated", async () => {
+    it('denies (ForbiddenException, naming the missing capability) when RolePermissionsService.userHasCapability resolves false', async () => {
       mockMetadata(undefined, 'SCHEDULE_ASSIGN_TECHNICIAN');
-      rolePermissionsService.roleHasCapability.mockResolvedValue(false);
-      rolePermissionsService.getGrantedRoleNames.mockResolvedValue(['TECHNICAL_TEAM_LEADER']);
-      roleAccessService.hasActiveAccessToAnyRole.mockResolvedValue(true);
-
-      const result = await guard.canActivate(contextWithUser({ id: 'user-1', role: { id: 'role-cce', name: 'CCE' } }));
-
-      expect(result).toBe(true);
-      expect(rolePermissionsService.getGrantedRoleNames).toHaveBeenCalledWith('SCHEDULE_ASSIGN_TECHNICIAN');
-      expect(roleAccessService.hasActiveAccessToAnyRole).toHaveBeenCalledWith('user-1', ['TECHNICAL_TEAM_LEADER']);
-    });
-
-    it('denies when no role currently holds the capability at all (nothing to delegate from), without calling RoleAccessService', async () => {
-      mockMetadata(undefined, 'SCHEDULE_ASSIGN_TECHNICIAN');
-      rolePermissionsService.roleHasCapability.mockResolvedValue(false);
-      rolePermissionsService.getGrantedRoleNames.mockResolvedValue([]);
+      rolePermissionsService.userHasCapability.mockResolvedValue(false);
 
       await expect(
         guard.canActivate(contextWithUser({ id: 'user-1', role: { id: 'role-cce', name: 'CCE' } })),
-      ).rejects.toThrow(ForbiddenException);
-      expect(roleAccessService.hasActiveAccessToAnyRole).not.toHaveBeenCalled();
-    });
-
-    it('denies when a role holds the capability but the user has no active delegated access to it', async () => {
-      mockMetadata(undefined, 'SCHEDULE_ASSIGN_TECHNICIAN');
-      rolePermissionsService.roleHasCapability.mockResolvedValue(false);
-      rolePermissionsService.getGrantedRoleNames.mockResolvedValue(['TECHNICAL_TEAM_LEADER']);
-      roleAccessService.hasActiveAccessToAnyRole.mockResolvedValue(false);
-
-      await expect(
-        guard.canActivate(contextWithUser({ id: 'user-1', role: { id: 'role-cce', name: 'CCE' } })),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('fails CLOSED when the direct grant lookup throws but still tries the delegated fallback, denying if that also comes up empty', async () => {
-      mockMetadata(undefined, 'SCHEDULE_ASSIGN_TECHNICIAN');
-      rolePermissionsService.roleHasCapability.mockRejectedValue(new Error('DB is down'));
-      rolePermissionsService.getGrantedRoleNames.mockResolvedValue([]);
-
-      await expect(
-        guard.canActivate(contextWithUser({ id: 'user-1', role: { id: 'role-cce', name: 'CCE' } })),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('fails CLOSED (never silently allows) when the delegated-roles lookup itself throws', async () => {
-      mockMetadata(undefined, 'SCHEDULE_ASSIGN_TECHNICIAN');
-      rolePermissionsService.roleHasCapability.mockResolvedValue(false);
-      rolePermissionsService.getGrantedRoleNames.mockRejectedValue(new Error('DB is down'));
-
-      await expect(
-        guard.canActivate(contextWithUser({ id: 'user-1', role: { id: 'role-cce', name: 'CCE' } })),
-      ).rejects.toThrow(ForbiddenException);
-      expect(roleAccessService.hasActiveAccessToAnyRole).not.toHaveBeenCalled();
-    });
-
-    it('fails CLOSED when the delegated access check itself throws, even though a role does hold the capability', async () => {
-      mockMetadata(undefined, 'SCHEDULE_ASSIGN_TECHNICIAN');
-      rolePermissionsService.roleHasCapability.mockResolvedValue(false);
-      rolePermissionsService.getGrantedRoleNames.mockResolvedValue(['TECHNICAL_TEAM_LEADER']);
-      roleAccessService.hasActiveAccessToAnyRole.mockRejectedValue(new Error('DB is down'));
-
-      await expect(
-        guard.canActivate(contextWithUser({ id: 'user-1', role: { id: 'role-cce', name: 'CCE' } })),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(/Missing capability: SCHEDULE_ASSIGN_TECHNICIAN/);
     });
 
     it('a capability-gated route never falls back to the old @Roles() array check, even if one happened to also be present', async () => {
@@ -212,15 +143,15 @@ describe('RolesGuard', () => {
       // @RequiresCapability(), never both) - this proves the guard's own precedence, not
       // reliance on that convention being followed.
       mockMetadata(['SUPER_ADMIN'], 'SCHEDULE_ASSIGN_TECHNICIAN');
-      rolePermissionsService.roleHasCapability.mockResolvedValue(false);
-      rolePermissionsService.getGrantedRoleNames.mockResolvedValue([]);
+      rolePermissionsService.userHasCapability.mockResolvedValue(false);
 
       await expect(
         guard.canActivate(contextWithUser({ id: 'user-1', role: { id: 'role-cce', name: 'CCE' } })),
       ).rejects.toThrow(ForbiddenException);
       // Never consults the plain role-name check that would have passed 'SUPER_ADMIN' by
       // itself - only the capability path ran.
-      expect(rolePermissionsService.roleHasCapability).toHaveBeenCalled();
+      expect(rolePermissionsService.userHasCapability).toHaveBeenCalled();
+      expect(roleAccessService.hasActiveAccessToAnyRole).not.toHaveBeenCalled();
     });
   });
 });

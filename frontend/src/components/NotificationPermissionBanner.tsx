@@ -8,8 +8,8 @@ import {
 const DISMISSED_KEY = 'jsp:notification-banner-dismissed';
 
 /**
- * Shown only to reviewer roles (gated by the caller, same REVIEW_ROLES as
- * NeedSpareNotifier) so the Need Spare pop-up can actually reach the OS level instead of
+ * Shown only to whoever holds INVENTORY_REVIEW (gated by the caller, same capability check
+ * as NeedSpareNotifier) so the Need Spare pop-up can actually reach the OS level instead of
  * just the in-app toast - browsers require a user gesture (this button click) before
  * `Notification.requestPermission()` is allowed to prompt at all, so this can't be done
  * automatically on page load.
