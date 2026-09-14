@@ -13,6 +13,7 @@ vi.mock('../../lib/deliveryApi', () => ({
   dispatchDelivery: vi.fn(),
   capturePod: vi.fn(),
   cancelDelivery: vi.fn(),
+  listDrivers: vi.fn(), // #218
 }));
 vi.mock('../../lib/invoicingApi', () => ({
   getInvoiceByJobCard: vi.fn(),
@@ -28,6 +29,7 @@ import {
   getDelivery,
   getDeliveryJobCards,
   listDeliveries,
+  listDrivers,
 } from '../../lib/deliveryApi';
 import { DeliveriesPage } from './DeliveriesPage';
 
@@ -68,6 +70,7 @@ beforeEach(() => {
   vi.mocked(dispatchDelivery).mockReset();
   vi.mocked(capturePod).mockReset();
   vi.mocked(cancelDelivery).mockReset();
+  vi.mocked(listDrivers).mockReset().mockResolvedValue([{ id: 'driver-7', name: 'Zayed Al Nahyan' }]);
 });
 
 describe('DeliveriesPage - list and status filter', () => {
@@ -109,10 +112,26 @@ describe('DeliveriesPage - PENDING delivery: dispatch', () => {
     renderPage('/delivery/deliveries?deliveryId=del-1');
 
     await screen.findByText(/Job cards in this delivery/i);
-    await user.type(screen.getByLabelText(/Driver user id/i), 'driver-7');
+    await user.click(screen.getByTestId('name-picker-input'));
+    await user.click(await screen.findByText('Zayed Al Nahyan'));
     await user.click(screen.getByRole('button', { name: 'Dispatch' }));
 
     expect(dispatchDelivery).toHaveBeenCalledWith('del-1', { driverUserId: 'driver-7' });
+  });
+
+  it('dispatches with no driver at all - it is optional', async () => {
+    mockUser('LOGISTICS_DISPATCHER');
+    vi.mocked(listDeliveries).mockResolvedValue([]);
+    vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-1', status: 'PENDING' }));
+    vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
+    vi.mocked(dispatchDelivery).mockResolvedValue(makeDelivery({ id: 'del-1', status: 'DISPATCHED' }));
+    const user = userEvent.setup();
+    renderPage('/delivery/deliveries?deliveryId=del-1');
+
+    await screen.findByText(/Job cards in this delivery/i);
+    await user.click(screen.getByRole('button', { name: 'Dispatch' }));
+
+    expect(dispatchDelivery).toHaveBeenCalledWith('del-1', { driverUserId: undefined });
   });
 
   it('cancels with the entered reason', async () => {

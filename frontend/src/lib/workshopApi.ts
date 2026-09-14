@@ -29,6 +29,11 @@ export const startWip = (jobCardId: string) => api.post<JobCard>(`${BASE}/${jobC
 export const requestSpare = (jobCardId: string, data: RequestSpareInput) =>
   api.post<InventoryReservation>(`${BASE}/${jobCardId}/request-spare`, data).then((r) => r.data);
 
+// #218 (2026-09-14): backs the Request Spare rework-approver picker - same WORKSHOP_ACTION
+// gate as request-spare itself, so this resolves for every caller who can even reach the
+// form it's used from.
+export const listReworkApprovers = () => api.get<{ id: string; name: string }[]>(`${BASE}/rework-approvers`).then((r) => r.data);
+
 export const completeWorkshop = (jobCardId: string) => api.post<JobCard>(`${BASE}/${jobCardId}/complete`).then((r) => r.data);
 
 export const getWorkshopState = (jobCardId: string) => api.get<WorkshopState>(`${BASE}/${jobCardId}`).then((r) => r.data);

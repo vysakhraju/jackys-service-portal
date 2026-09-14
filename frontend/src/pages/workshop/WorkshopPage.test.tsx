@@ -11,6 +11,7 @@ vi.mock('../../lib/workshopApi', () => ({
   requestSpare: vi.fn(),
   completeWorkshop: vi.fn(),
   getWorkshopState: vi.fn(),
+  listReworkApprovers: vi.fn(), // #218
 }));
 vi.mock('../../lib/inventoryApi', () => ({
   requestReturn: vi.fn(),
@@ -25,7 +26,7 @@ vi.mock('../../lib/technicianScheduleApi', () => ({
 }));
 
 import { useAuth } from '../../lib/auth';
-import { assignWorkshopTechnician, getWorkshopState } from '../../lib/workshopApi';
+import { assignWorkshopTechnician, getWorkshopState, listReworkApprovers, requestSpare } from '../../lib/workshopApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { WorkshopPage } from './WorkshopPage';
@@ -65,6 +66,7 @@ beforeEach(() => {
   vi.mocked(listSpareParts).mockReset();
   vi.mocked(listSpareParts).mockResolvedValue([]);
   vi.mocked(assignWorkshopTechnician).mockReset();
+  vi.mocked(listReworkApprovers).mockReset().mockResolvedValue([{ id: 'tl-1', name: 'Fatima Noor' }]);
   vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
     date: '2026-09-14',
     rows: [
@@ -136,6 +138,32 @@ describe('WorkshopPage - rework re-request hint', () => {
     renderPage();
     await screen.findByText('Request a spare part (FR-09: reserves, does not deduct)');
     expect(screen.queryByText(/QC-rejected before/i)).not.toBeInTheDocument();
+  });
+
+  // #218: the rework sign-off "Approver" field is now a NamePicker (backed by
+  // GET /workshop/rework-approvers), not a raw-paste user id.
+  it('picks the rework approver by name and submits their real id', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue({
+      jobCard: { ...makeWorkshopState().jobCard, qcRejectionCount: 1 },
+      staleReservations: [],
+    });
+    vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
+    vi.mocked(requestSpare).mockResolvedValue(makeReservation());
+    renderPage();
+
+    await screen.findByText(/QC-rejected before \(1x\)/i);
+    await screen.findByText('SP-001 — Compressor'); // wait for the spare-parts query to resolve
+    fireEvent.click(screen.getByText(/Rework sign-off/));
+
+    fireEvent.change(screen.getByLabelText('Spare part'), { target: { value: 'sp-1' } });
+    fireEvent.focus(screen.getByTestId('name-picker-input'));
+    fireEvent.click(await screen.findByText('Fatima Noor'));
+    fireEvent.click(screen.getByRole('button', { name: 'Request Spare' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(requestSpare)).toHaveBeenCalledWith('jc-1', expect.objectContaining({ approverId: 'tl-1' })),
+    );
   });
 });
 

@@ -19,6 +19,10 @@ import type { WarrantyStatusValue } from './appointmentsTypes';
 
 const BASE = '/delivery';
 
+// #218 (2026-09-14): backs the Dispatch delivery driver picker - same DELIVERY_MANAGE gate
+// as everything else here, so unlike some other #218 pickers this one needs no fallback.
+export const listDrivers = () => api.get<{ id: string; name: string }[]>(`${BASE}/drivers`).then((r) => r.data);
+
 export const getReadyForDelivery = (warrantyStatus?: WarrantyStatusValue) =>
   api.get<ReadyForDeliveryRow[]>(`${BASE}/ready`, { params: warrantyStatus ? { warrantyStatus } : undefined }).then((r) => r.data);
 

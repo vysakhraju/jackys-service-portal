@@ -7,6 +7,7 @@ import { DataTable, ErrorNotice, type Column } from '../../components/DataTable'
 import { Field, inputClass } from '../../components/Field';
 import { SignaturePad } from '../../components/SignaturePad';
 import { StatusBadge } from '../../components/StatusBadge';
+import { NamePicker } from '../../components/pickers/NamePicker';
 import { useAuth } from '../../lib/auth';
 import {
   cancelDelivery,
@@ -15,6 +16,7 @@ import {
   getDelivery,
   getDeliveryJobCards,
   listDeliveries,
+  listDrivers,
 } from '../../lib/deliveryApi';
 import type { Delivery, DeliveryBlocker, DeliveryStatusValue } from '../../lib/deliveryTypes';
 import { DeliveryBlockersNotice } from './DeliveryBlockersNotice';
@@ -172,10 +174,14 @@ function DeliveryDetail({ id }: { id: string }) {
 }
 
 function DispatchAndCancel({ delivery, onChanged }: { delivery: Delivery; onChanged: () => void }) {
-  const { register, handleSubmit } = useForm<{ driverUserId: string }>({ defaultValues: { driverUserId: '' } });
   const { register: registerCancel, handleSubmit: handleCancelSubmit } = useForm<{ reason: string }>({ defaultValues: { reason: '' } });
+  const [driverUserId, setDriverUserId] = useState<string | null>(null);
+  // #218: DELIVERY_MANAGE-gated, same capability as the dispatch action itself, so this
+  // resolves for every caller who can even reach this form - no raw-paste fallback needed.
+  const { data: drivers, isLoading: driversLoading } = useQuery({ queryKey: ['delivery', 'drivers'], queryFn: listDrivers });
+  const driverOptions = drivers ?? [];
   const dispatchMutation = useMutation({
-    mutationFn: (driverUserId?: string) => dispatchDelivery(delivery.id, { driverUserId: driverUserId || undefined }),
+    mutationFn: (id: string | null) => dispatchDelivery(delivery.id, { driverUserId: id ?? undefined }),
     onSuccess: onChanged,
   });
   const cancelMutation = useMutation({
@@ -188,14 +194,14 @@ function DispatchAndCancel({ delivery, onChanged }: { delivery: Delivery; onChan
       <div>
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Dispatch</p>
         <ErrorNotice error={dispatchMutation.error} />
-        <p className="mb-2 text-xs text-slate-400">
-          Driver is optional and can be recorded later - same "paste a user id" convention as
-          Permissions grants (there's no user-picker anywhere in this app yet).
-        </p>
-        <form onSubmit={handleSubmit((v) => dispatchMutation.mutate(v.driverUserId.trim()))} className="flex items-end gap-2">
+        <p className="mb-2 text-xs text-slate-400">Driver is optional and can be recorded later.</p>
+        <form
+          onSubmit={(e) => { e.preventDefault(); dispatchMutation.mutate(driverUserId); }}
+          className="flex items-end gap-2"
+        >
           <div className="flex-1">
-            <Field label="Driver user id (optional)">
-              <input className={inputClass} {...register('driverUserId')} placeholder="Paste the driver's user id" />
+            <Field label="Driver (optional)">
+              <NamePicker value={driverUserId} onChange={setDriverUserId} options={driverOptions} loading={driversLoading} />
             </Field>
           </div>
           <button

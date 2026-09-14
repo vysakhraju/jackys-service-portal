@@ -12,6 +12,7 @@ import {
   assignWorkshopTechnician,
   completeWorkshop,
   getWorkshopState,
+  listReworkApprovers,
   requestSpare,
   startWip,
 } from '../../lib/workshopApi';
@@ -324,7 +325,7 @@ function RequestSpareCard({
     queryKey: ['spare-parts', 'active'],
     queryFn: () => listSpareParts({ active: true }),
   });
-  const { register, handleSubmit, reset } = useForm<{
+  const { register, handleSubmit, reset, setValue, watch } = useForm<{
     sparePartId: string;
     quantity: number;
     approverId: string;
@@ -333,6 +334,10 @@ function RequestSpareCard({
   }>({
     defaultValues: { sparePartId: '', quantity: 1, approverId: '', verbalOverrideBy: '', verbalOverrideNotes: '' },
   });
+  // #218: WORKSHOP_ACTION-gated, same capability as request-spare itself, so this resolves
+  // for every caller who can even reach this form - no raw-paste fallback needed.
+  const reworkApproversQuery = useQuery({ queryKey: ['workshop', 'rework-approvers'], queryFn: listReworkApprovers });
+  const reworkApproverOptions = reworkApproversQuery.data ?? [];
   const [justReserved, setJustReserved] = useState<InventoryReservation | null>(null);
   const { user } = useAuth();
   const isPrivileged = !!user && PRIVILEGED_ROLES.includes(user.role.name);
@@ -408,10 +413,16 @@ function RequestSpareCard({
             </summary>
             <div className="mt-2 space-y-2">
               <Field
-                label="Approver user id"
-                hint="A different user (not you) holding the REWORK_APPROVAL grant. If you don't have their id handy, use verbal override below instead."
+                label="Approver"
+                hint="A different user (not you) holding the REWORK_APPROVAL grant. If none is available, use verbal override below instead."
               >
-                <input className={inputClass} {...register('approverId')} />
+                <NamePicker
+                  value={watch('approverId') || null}
+                  options={reworkApproverOptions}
+                  loading={reworkApproversQuery.isLoading}
+                  onChange={(id) => setValue('approverId', id ?? '')}
+                  emptyMessage="No one currently holds the rework-approval grant."
+                />
               </Field>
               <Field label="Verbal override by" hint="Name/identifier of who gave verbal approval, if no approver id is at hand.">
                 <input className={inputClass} {...register('verbalOverrideBy')} />
