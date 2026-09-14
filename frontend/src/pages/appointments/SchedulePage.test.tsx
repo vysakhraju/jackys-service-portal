@@ -19,9 +19,18 @@ vi.mock('../../lib/appointmentsApi', () => ({
   markAppointmentOnSite: vi.fn(),
   resolveMapLink: vi.fn(),
 }));
+// #218: Service centre/Technician filter+form fields are now NamePickers backed by these.
+vi.mock('../../lib/masterDataApi', () => ({
+  listServiceCentres: vi.fn(),
+}));
+vi.mock('../../lib/technicianScheduleApi', () => ({
+  getGanttBoard: vi.fn(),
+}));
 
 import { useAuth } from '../../lib/auth';
-import { createAppointment, getAppointmentDashboardStats, getSchedulingGrid, listAppointments, resolveMapLink } from '../../lib/appointmentsApi';
+import { assignTechnician, createAppointment, getAppointmentDashboardStats, getSchedulingGrid, listAppointments, resolveMapLink } from '../../lib/appointmentsApi';
+import { listServiceCentres } from '../../lib/masterDataApi';
+import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { SchedulePage } from './SchedulePage';
 
 // One technician, one hour, all free - just enough for fillRequiredCreateFields() below to
@@ -85,6 +94,13 @@ beforeEach(() => {
   vi.mocked(createAppointment).mockReset();
   vi.mocked(resolveMapLink).mockReset();
   vi.mocked(getSchedulingGrid).mockReset().mockResolvedValue(schedulingGridFixture());
+  vi.mocked(listServiceCentres).mockReset().mockResolvedValue([{ id: 'sc-1', name: 'Dubai Service Centre' }] as any);
+  vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
+    date: '2026-09-09',
+    rows: [],
+    unassignedAppointments: [],
+    unassignedJobCards: [],
+  } as any);
   mockUser();
 });
 
@@ -112,7 +128,8 @@ async function openCreateModal() {
 async function fillRequiredCreateFields(form: ReturnType<typeof within>) {
   fireEvent.change(form.getByLabelText('Customer name', { exact: false }), { target: { value: 'Jane Doe' } });
   fireEvent.change(form.getByLabelText('Customer phone', { exact: false }), { target: { value: '+971500000000' } });
-  fireEvent.change(form.getByLabelText('Service centre id', { exact: false }), { target: { value: 'sc-1' } });
+  fireEvent.focus(form.getByTestId('name-picker-input'));
+  fireEvent.click(await form.findByText('Dubai Service Centre'));
   fireEvent.click(await form.findByTestId('chip-tech-1-08:00'));
 }
 
@@ -326,5 +343,75 @@ describe('SchedulePage - Google Maps link resolve', () => {
       );
     });
     expect(vi.mocked(resolveMapLink)).not.toHaveBeenCalled();
+  });
+});
+
+// #218: the Service centre/Technician filters and the Assign Technician modal are now
+// name-based NamePickers instead of raw-uuid text inputs.
+describe('SchedulePage - #218 name-based pickers', () => {
+  it('filters by service centre name (not a pasted uuid), and the filter drives the real query param', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    renderPage();
+    await screen.findByText('No appointments match these filters yet.');
+
+    // Service centre is the first of the two filter-bar NamePickers (Service centre,
+    // then Technician).
+    fireEvent.focus(screen.getAllByTestId('name-picker-input')[0]);
+    fireEvent.click(await screen.findByText('Dubai Service Centre'));
+
+    await waitFor(() => {
+      expect(vi.mocked(listAppointments)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ serviceCentreId: 'sc-1' }),
+      );
+    });
+  });
+
+  it('Assign Technician modal shows a NamePicker (not a raw-paste input) when the technician list is accessible (e.g. Team Leader)', async () => {
+    vi.mocked(getGanttBoard).mockResolvedValue({
+      date: '2026-09-09',
+      rows: [{ technicianId: 'tech-9', technicianName: 'Sanjay Rao', role: 'TECHNICIAN_FIELD', blocks: [], hasConflict: false }],
+      unassignedAppointments: [],
+      unassignedJobCards: [],
+    } as any);
+    vi.mocked(assignTechnician).mockResolvedValue(makeAppointment());
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0001');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Assign' }));
+    const heading = await screen.findByRole('heading', { name: /Assign technician/ });
+    const modal = within(heading.closest('.max-w-lg') as HTMLElement);
+    expect(modal.queryByText(/paste the technician's/)).not.toBeInTheDocument();
+
+    fireEvent.focus(modal.getByTestId('name-picker-input'));
+    fireEvent.click(await modal.findByText('Sanjay Rao'));
+    fireEvent.click(modal.getByRole('button', { name: 'Assign' }));
+
+    await waitFor(() => expect(vi.mocked(assignTechnician)).toHaveBeenCalledWith('appt-1', 'tech-9'));
+  });
+
+  it('Assign Technician modal falls back to a raw-paste input when the technician list 403s (e.g. CCE)', async () => {
+    vi.mocked(getGanttBoard).mockRejectedValue(new Error('Forbidden'));
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-2', appointmentNumber: 'APT-0002', status: 'SCHEDULED' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0002');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Assign' }));
+    const heading = await screen.findByRole('heading', { name: /Assign technician/ });
+    const modal = within(heading.closest('.max-w-lg') as HTMLElement);
+
+    await modal.findByText(/paste the technician's/);
+    expect(modal.getByLabelText('Technician user id')).toBeInTheDocument();
+    expect(modal.queryByTestId('name-picker-input')).not.toBeInTheDocument();
   });
 });

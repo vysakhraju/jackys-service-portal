@@ -6,7 +6,10 @@ import { DataTable, ErrorNotice, type Column } from '../../components/DataTable'
 import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
+import { NamePicker } from '../../components/pickers/NamePicker';
 import { useAuth } from '../../lib/auth';
+import { listServiceCentres } from '../../lib/masterDataApi';
+import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 import {
   cancelAmcContract,
   createAmcContract,
@@ -97,9 +100,17 @@ export function ContractsPage() {
   });
 
   const [createOpen, setCreateOpen] = useState(false);
-  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<CreateFormValues>({
+  const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<CreateFormValues>({
     defaultValues: emptyCreateForm(),
   });
+  // #218: serviceCentreId/assignedTechnicianId are now NamePickers driven via
+  // setValue()/watch() rather than native <input {...register()}> - serviceCentreId keeps
+  // its `required` rule registered here (not spread onto any element) so validation still
+  // runs; assignedTechnicianId has no rule, so it needs no equivalent registration.
+  register('serviceCentreId', { required: 'Required' });
+  const { data: serviceCentres } = useQuery({ queryKey: ['master-data', 'service-centres'], queryFn: () => listServiceCentres() });
+  const serviceCentreOptions = (serviceCentres ?? []).map((sc) => ({ id: sc.id, name: sc.name }));
+  const technicianOptions = useTechnicianOptions();
   const createMutation = useMutation({
     mutationFn: (data: CreateAmcContractInput) => createAmcContract(data),
     onSuccess: (contract) => {
@@ -243,11 +254,27 @@ export function ContractsPage() {
             <input className={inputClass} {...register('customerAddress')} />
           </Field>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Service centre id" error={errors.serviceCentreId?.message} hint="paste uuid from Master Data">
-              <input className={inputClass} {...register('serviceCentreId', { required: 'Required' })} />
+            <Field label="Service centre" error={errors.serviceCentreId?.message}>
+              <NamePicker
+                value={watch('serviceCentreId') || null}
+                options={serviceCentreOptions}
+                onChange={(id) => setValue('serviceCentreId', id ?? '', { shouldValidate: true })}
+              />
             </Field>
-            <Field label="Assigned technician id (optional)">
-              <input className={inputClass} {...register('assignedTechnicianId')} />
+            <Field
+              label="Assigned technician (optional)"
+              hint={!technicianOptions.accessible ? 'paste uuid - name list needs Team Leader access' : undefined}
+            >
+              {technicianOptions.accessible ? (
+                <NamePicker
+                  value={watch('assignedTechnicianId') || null}
+                  options={technicianOptions.options}
+                  loading={technicianOptions.loading}
+                  onChange={(id) => setValue('assignedTechnicianId', id ?? '')}
+                />
+              ) : (
+                <input className={inputClass} {...register('assignedTechnicianId')} />
+              )}
             </Field>
           </div>
           <Field label="Covered serial numbers" hint="Comma-separated - a contract can cover more than one unit (e.g. a fleet/site AMC)" error={errors.coveredSerialNumbers?.message}>

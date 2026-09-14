@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeReservation, makeWorkshopState } from '../../test/fixtures';
@@ -19,10 +19,15 @@ vi.mock('../../lib/inventoryApi', () => ({
 vi.mock('../../lib/masterDataApi', () => ({
   listSpareParts: vi.fn(),
 }));
+// #218: the assign-technician form is now a NamePicker backed by this.
+vi.mock('../../lib/technicianScheduleApi', () => ({
+  getGanttBoard: vi.fn(),
+}));
 
 import { useAuth } from '../../lib/auth';
-import { getWorkshopState } from '../../lib/workshopApi';
+import { assignWorkshopTechnician, getWorkshopState } from '../../lib/workshopApi';
 import { listSpareParts } from '../../lib/masterDataApi';
+import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { WorkshopPage } from './WorkshopPage';
 
 function renderPage(jobCardId = 'jc-1') {
@@ -59,6 +64,16 @@ beforeEach(() => {
   vi.mocked(getWorkshopState).mockReset();
   vi.mocked(listSpareParts).mockReset();
   vi.mocked(listSpareParts).mockResolvedValue([]);
+  vi.mocked(assignWorkshopTechnician).mockReset();
+  vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
+    date: '2026-09-14',
+    rows: [
+      { technicianId: 'wt-1', technicianName: 'Sanjay Rao', role: 'TECHNICIAN_WORKSHOP', blocks: [], hasConflict: false },
+      { technicianId: 'ft-1', technicianName: 'Ahmed Al Farsi', role: 'TECHNICIAN_FIELD', blocks: [], hasConflict: false },
+    ],
+    unassignedAppointments: [],
+    unassignedJobCards: [],
+  } as any);
 });
 
 describe('WorkshopPage - ownership gating (the-fool pre-mortem finding #4)', () => {
@@ -135,5 +150,43 @@ describe('WorkshopPage - stale reservation visibility gap is documented', () => 
     expect(
       screen.getByText(/won't appear until it goes stale/i),
     ).toBeInTheDocument();
+  });
+});
+
+// #218: the "Assign a workshop technician" form is now a NamePicker (workshop technicians
+// only), not a raw-paste text input.
+describe('WorkshopPage - #218 name-based assign-technician picker', () => {
+  it('shows only TECHNICIAN_WORKSHOP options (not field technicians) and submits the real id', async () => {
+    mockUser({ roleName: 'SUPER_ADMIN' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({ jobCard: { ...makeWorkshopState().jobCard, status: 'SECTION_ASSIGNED', section: 'WORKSHOP', assignedWorkshopTechnicianId: null } }),
+    );
+    renderPage();
+
+    await screen.findByText('Assign a workshop technician');
+    expect(screen.queryByText(/paste the technician's/)).not.toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByTestId('name-picker-input')).not.toBeDisabled());
+    fireEvent.focus(screen.getByTestId('name-picker-input'));
+    expect(screen.getByText('Sanjay Rao')).toBeInTheDocument();
+    expect(screen.queryByText('Ahmed Al Farsi')).not.toBeInTheDocument(); // field technician, filtered out
+
+    fireEvent.click(screen.getByText('Sanjay Rao'));
+    fireEvent.click(screen.getByRole('button', { name: 'Assign' }));
+
+    await waitFor(() => expect(vi.mocked(assignWorkshopTechnician)).toHaveBeenCalledWith('jc-1', { technicianId: 'wt-1' }));
+  });
+
+  it('falls back to a raw-paste input when the technician name list 403s', async () => {
+    vi.mocked(getGanttBoard).mockRejectedValue(new Error('Forbidden'));
+    mockUser({ roleName: 'SUPER_ADMIN' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({ jobCard: { ...makeWorkshopState().jobCard, status: 'SECTION_ASSIGNED', section: 'WORKSHOP', assignedWorkshopTechnicianId: null } }),
+    );
+    renderPage();
+
+    await screen.findByText(/name list needs Team Leader access/);
+    expect(screen.queryByTestId('name-picker-input')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Technician')).toBeInTheDocument();
   });
 });

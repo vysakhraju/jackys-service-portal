@@ -7,6 +7,7 @@ import { DataTable, ErrorNotice, type Column } from '../../components/DataTable'
 import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
+import { NamePicker } from '../../components/pickers/NamePicker';
 import { DashboardStatsWidget } from './DashboardStatsWidget';
 import { SchedulingGridPicker, type SchedulingSelection } from './SchedulingGrid';
 import {
@@ -30,6 +31,8 @@ import {
   type AppointmentStatusValue,
   type CreateAppointmentInput,
 } from '../../lib/appointmentsTypes';
+import { listServiceCentres } from '../../lib/masterDataApi';
+import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 
 type FormValues = {
   type: string;
@@ -144,6 +147,11 @@ export function SchedulePage() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
+  // #218: name-based pickers for the filter bar/forms below, replacing raw pasted uuids.
+  const { data: serviceCentres } = useQuery({ queryKey: ['master-data', 'service-centres'], queryFn: () => listServiceCentres() });
+  const serviceCentreOptions = (serviceCentres ?? []).map((sc) => ({ id: sc.id, name: sc.name }));
+  const technicianOptions = useTechnicianOptions();
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['appointments', filters, page],
     queryFn: () =>
@@ -186,6 +194,11 @@ export function SchedulePage() {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ defaultValues: EMPTY_FORM });
   const watchedServiceCentreId = watch('serviceCentreId');
+  // #218: serviceCentreId is now driven by NamePicker via setValue()/watch() rather than a
+  // native <input {...register()}>, so it's registered here (not spread onto any element)
+  // purely to keep its `required` validation active - the documented RHF pattern for wiring
+  // a non-native controlled input into the form without <Controller>.
+  register('serviceCentreId', { required: 'Required' });
 
   const [mapLinkInput, setMapLinkInput] = useState('');
   const resolveMapLinkMutation = useMutation({
@@ -327,21 +340,33 @@ export function SchedulePage() {
       </div>
 
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4">
-        <Field label="Service centre id">
-          <input
-            className={`${inputClass} w-48`}
-            placeholder="paste uuid"
-            value={filters.serviceCentreId}
-            onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, serviceCentreId: e.target.value })); }}
-          />
+        <Field label="Service centre">
+          <div className="w-48">
+            <NamePicker
+              value={filters.serviceCentreId || null}
+              options={serviceCentreOptions}
+              onChange={(id) => { setPage(1); setFilters((f) => ({ ...f, serviceCentreId: id ?? '' })); }}
+            />
+          </div>
         </Field>
-        <Field label="Technician id">
-          <input
-            className={`${inputClass} w-48`}
-            placeholder="paste uuid"
-            value={filters.technicianId}
-            onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, technicianId: e.target.value })); }}
-          />
+        <Field label="Technician" hint={!technicianOptions.accessible ? 'paste uuid - name list needs Team Leader access' : undefined}>
+          <div className="w-48">
+            {technicianOptions.accessible ? (
+              <NamePicker
+                value={filters.technicianId || null}
+                options={technicianOptions.options}
+                loading={technicianOptions.loading}
+                onChange={(id) => { setPage(1); setFilters((f) => ({ ...f, technicianId: id ?? '' })); }}
+              />
+            ) : (
+              <input
+                className={inputClass}
+                placeholder="paste uuid"
+                value={filters.technicianId}
+                onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, technicianId: e.target.value })); }}
+              />
+            )}
+          </div>
         </Field>
         <Field label="Status">
           <select
@@ -598,8 +623,12 @@ export function SchedulePage() {
           <Field label="Problem description (optional)">
             <textarea className={inputClass} rows={2} {...register('problemDescription')} />
           </Field>
-          <Field label="Service centre id" error={errors.serviceCentreId?.message} hint="paste uuid from Master Data">
-            <input className={inputClass} {...register('serviceCentreId', { required: 'Required' })} />
+          <Field label="Service centre" error={errors.serviceCentreId?.message}>
+            <NamePicker
+              value={watchedServiceCentreId || null}
+              options={serviceCentreOptions}
+              onChange={(id) => setValue('serviceCentreId', id ?? '', { shouldValidate: true })}
+            />
           </Field>
 
           <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -644,14 +673,28 @@ export function SchedulePage() {
         {assignTarget && (
           <div className="space-y-4">
             <ErrorNotice error={actionError} />
-            <p className="text-sm text-slate-500">
-              There's no "list technicians" endpoint in this app yet - paste the technician's
-              user id (from the seed script output, Section 4 of TESTING_GUIDE.md). The
-              backend rejects anyone whose role isn't Technician Field/Workshop.
-            </p>
-            <Field label="Technician user id">
-              <input className={inputClass} value={assignTechId} onChange={(e) => setAssignTechId(e.target.value)} />
-            </Field>
+            {technicianOptions.accessible ? (
+              <Field label="Technician">
+                <NamePicker
+                  value={assignTechId || null}
+                  options={technicianOptions.options}
+                  loading={technicianOptions.loading}
+                  onChange={(id) => setAssignTechId(id ?? '')}
+                />
+              </Field>
+            ) : (
+              <>
+                <p className="text-sm text-slate-500">
+                  The technician name list needs Team Leader access - paste the technician's
+                  user id instead (from the seed script output, Section 4 of
+                  TESTING_GUIDE.md). The backend rejects anyone whose role isn't Technician
+                  Field/Workshop.
+                </p>
+                <Field label="Technician user id">
+                  <input className={inputClass} value={assignTechId} onChange={(e) => setAssignTechId(e.target.value)} />
+                </Field>
+              </>
+            )}
             <div className="flex justify-end gap-2">
               <button onClick={() => setAssignTarget(null)} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600">
                 Cancel

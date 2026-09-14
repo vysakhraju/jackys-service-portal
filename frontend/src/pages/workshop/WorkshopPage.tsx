@@ -5,7 +5,9 @@ import { useForm } from 'react-hook-form';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
+import { NamePicker } from '../../components/pickers/NamePicker';
 import { useAuth } from '../../lib/auth';
+import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 import {
   assignWorkshopTechnician,
   completeWorkshop,
@@ -264,27 +266,44 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
 }
 
 function AssignTechnicianCard({ mutation }: { mutation: UseMutationResult<unknown, unknown, string> }) {
-  const { register, handleSubmit, reset } = useForm<{ technicianId: string }>({ defaultValues: { technicianId: '' } });
+  const { handleSubmit, reset, setValue, watch } = useForm<{ technicianId: string }>({ defaultValues: { technicianId: '' } });
+  // #218: workshop technicians only - GET /technician-schedule/gantt is TECHNICIAN_SCHEDULE_
+  // GANTT-gated (Team Leader), same floor as WORKSHOP_ASSIGN (who can even open this card),
+  // so this resolves for the common case; falls back to the old raw-paste input for anyone
+  // it still 403s for.
+  const technicianOptions = useTechnicianOptions('TECHNICIAN_WORKSHOP');
+  const technicianId = watch('technicianId');
   return (
     <ActionCard title="Assign a workshop technician">
-      <p className="mb-2 text-xs text-slate-400">
-        There's no "list technicians" endpoint in this app - paste the technician's user
-        id directly (same convention as Appointments). The backend rejects anyone whose
-        role isn't a real workshop technician / TL+.
-      </p>
+      {!technicianOptions.accessible && (
+        <p className="mb-2 text-xs text-slate-400">
+          The technician name list needs Team Leader access - paste the technician's user
+          id directly (same convention as Appointments). The backend rejects anyone whose
+          role isn't a real workshop technician / TL+.
+        </p>
+      )}
       <ErrorNotice error={mutation.error} />
       <form
         onSubmit={handleSubmit((values) => mutation.mutate(values.technicianId, { onSuccess: () => reset() }))}
         className="flex items-end gap-2"
       >
         <div className="flex-1">
-          <Field label="Technician user id">
-            <input className={inputClass} {...register('technicianId', { required: true })} />
+          <Field label="Technician">
+            {technicianOptions.accessible ? (
+              <NamePicker
+                value={technicianId || null}
+                options={technicianOptions.options}
+                loading={technicianOptions.loading}
+                onChange={(id) => setValue('technicianId', id ?? '')}
+              />
+            ) : (
+              <input className={inputClass} value={technicianId} onChange={(e) => setValue('technicianId', e.target.value)} />
+            )}
           </Field>
         </div>
         <button
           type="submit"
-          disabled={mutation.isPending}
+          disabled={mutation.isPending || !technicianId}
           className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
         >
           Assign
