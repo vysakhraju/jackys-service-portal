@@ -4,8 +4,10 @@ import { useForm } from 'react-hook-form';
 import { ActiveBadge, DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Checkbox, Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
+import { NamePicker } from '../../components/pickers/NamePicker';
 import { createComponentYield, listYieldByCategory, listYieldByModel } from '../../lib/masterDataApi';
 import { RECOVERY_CATEGORIES, type ComponentYieldMatrix, type CreateComponentYieldInput } from '../../lib/masterDataTypes';
+import { useSparePartModelOptions } from '../../lib/useSparePartModelOptions';
 
 type FormValues = {
   modelId: string;
@@ -22,7 +24,6 @@ export function ComponentYieldPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [mode, setMode] = useState<'category' | 'model'>('category');
   const [category, setCategory] = useState<string>(RECOVERY_CATEGORIES[0]);
-  const [modelId, setModelId] = useState('');
   const [modelIdSearched, setModelIdSearched] = useState('');
   const [mutationError, setMutationError] = useState<unknown>(null);
 
@@ -44,6 +45,8 @@ export function ComponentYieldPage() {
     register,
     handleSubmit,
     reset,
+    setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     defaultValues: {
@@ -56,6 +59,11 @@ export function ComponentYieldPage() {
       isActive: true,
     },
   });
+  const modelOptions = useSparePartModelOptions();
+  // #218: modelId is now driven by NamePicker via setValue()/watch(), not a native
+  // <input {...register()}> - registered here (not spread onto any element) to keep its
+  // `required` validation active.
+  register('modelId', { required: 'Required' });
 
   const createMutation = useMutation({
     mutationFn: (data: CreateComponentYieldInput) => createComponentYield(data),
@@ -122,21 +130,16 @@ export function ComponentYieldPage() {
             ))}
           </select>
         ) : (
-          <>
-            <input
-              className={`${inputClass} w-auto`}
-              placeholder="Model ID, e.g. WA80J5710"
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
+          <div className="w-64">
+            <NamePicker
+              value={modelIdSearched || null}
+              options={modelOptions.options}
+              loading={modelOptions.loading}
+              onChange={(id) => setModelIdSearched(id ?? '')}
+              getOptionSubtext={(o) => o.id}
+              placeholder="Pick a model to search…"
             />
-            <button
-              onClick={() => setModelIdSearched(modelId)}
-              disabled={!modelId}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-50"
-            >
-              Search
-            </button>
-          </>
+          </div>
         )}
       </div>
 
@@ -157,8 +160,14 @@ export function ComponentYieldPage() {
         >
           <ErrorNotice error={mutationError} />
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Model ID" error={errors.modelId?.message}>
-              <input className={inputClass} placeholder="WA80J5710" {...register('modelId', { required: 'Required' })} />
+            <Field label="Model" error={errors.modelId?.message}>
+              <NamePicker
+                value={watch('modelId') || null}
+                options={modelOptions.options}
+                loading={modelOptions.loading}
+                onChange={(id) => setValue('modelId', id ?? '', { shouldValidate: true })}
+                getOptionSubtext={(o) => o.id}
+              />
             </Field>
             <Field label="Original BOM item code" error={errors.originalBomItemCode?.message}>
               <input className={inputClass} placeholder="BOM-4471" {...register('originalBomItemCode', { required: 'Required' })} />

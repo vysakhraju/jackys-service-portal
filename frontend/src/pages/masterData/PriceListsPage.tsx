@@ -4,8 +4,10 @@ import { useForm } from 'react-hook-form';
 import { ActiveBadge, DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Checkbox, Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
+import { NamePicker } from '../../components/pickers/NamePicker';
 import { createPriceList, getPriceList } from '../../lib/masterDataApi';
 import { SERVICE_ACTIVITY_TYPES, type CreatePriceListInput, type ServicePriceList } from '../../lib/masterDataTypes';
+import { useSparePartModelOptions } from '../../lib/useSparePartModelOptions';
 
 type FormValues = {
   activityType: string;
@@ -34,6 +36,8 @@ export function PriceListsPage() {
     register,
     handleSubmit,
     reset,
+    setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     defaultValues: {
@@ -47,6 +51,7 @@ export function PriceListsPage() {
       isActive: true,
     },
   });
+  const modelOptions = useSparePartModelOptions();
 
   const createMutation = useMutation({
     mutationFn: (data: CreatePriceListInput) => createPriceList(data),
@@ -98,13 +103,16 @@ export function PriceListsPage() {
             </option>
           ))}
         </select>
-        <label className="ml-2 text-xs font-medium text-slate-500">Model ID (optional)</label>
-        <input
-          className={`${inputClass} w-auto`}
-          placeholder="e.g. WA80J5710"
-          value={modelIdFilter}
-          onChange={(e) => setModelIdFilter(e.target.value)}
-        />
+        <label className="ml-2 text-xs font-medium text-slate-500">Model (optional)</label>
+        <div className="w-56">
+          <NamePicker
+            value={modelIdFilter || null}
+            options={modelOptions.options}
+            loading={modelOptions.loading}
+            onChange={(id) => setModelIdFilter(id ?? '')}
+            getOptionSubtext={(o) => o.id}
+          />
+        </div>
       </div>
 
       <DataTable
@@ -133,8 +141,14 @@ export function PriceListsPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Model ID" hint="Leave blank for a price that applies to all models">
-              <input className={inputClass} {...register('modelId')} />
+            <Field label="Model" hint="Leave blank for a price that applies to all models">
+              <NamePicker
+                value={watch('modelId') || null}
+                options={modelOptions.options}
+                loading={modelOptions.loading}
+                onChange={(id) => setValue('modelId', id ?? '')}
+                getOptionSubtext={(o) => o.id}
+              />
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-4">
