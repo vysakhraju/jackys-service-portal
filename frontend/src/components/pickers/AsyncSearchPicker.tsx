@@ -19,6 +19,7 @@ export function AsyncSearchPicker<T>({
   disabled = false,
   selectedLabel,
   onClear,
+  emptyMessage = 'No matches.',
 }: {
   onSelect: (item: T) => void;
   search: (query: string) => Promise<T[]>;
@@ -31,6 +32,13 @@ export function AsyncSearchPicker<T>({
   /** When set, shows this as the current selection instead of the search box. */
   selectedLabel?: string | null;
   onClear?: () => void;
+  /**
+   * #218 pre-mortem follow-up (2026-09-14): shown when a search comes back empty. Override
+   * this for a picker whose search() isn't a real narrowing search (e.g. an exact-match
+   * lookup adapter) so a zero-result state reads as "check what you typed", not "the system
+   * might be broken" - the generic default is fine for a real partial-match search.
+   */
+  emptyMessage?: string;
 }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<T[]>([]);
@@ -131,7 +139,7 @@ export function AsyncSearchPicker<T>({
           ) : error ? (
             <li className="px-3 py-1.5 text-red-600">{error}</li>
           ) : results.length === 0 ? (
-            <li className="px-3 py-1.5 text-slate-400">No matches.</li>
+            <li className="px-3 py-1.5 text-slate-400">{emptyMessage}</li>
           ) : (
             results.map((item, idx) => (
               <li key={getOptionLabel(item) + idx}>

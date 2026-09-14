@@ -125,6 +125,8 @@ export interface AppointmentListFilters {
   dateTo?: string;
   page?: number;
   limit?: number;
+  /** Free-text search across appointment #, customer name, and phone - see appointmentsApi's searchAppointments(). */
+  q?: string;
 }
 
 export interface ResolvedMapLink {

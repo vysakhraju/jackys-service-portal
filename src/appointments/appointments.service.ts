@@ -209,6 +209,10 @@ export class AppointmentsService {
     unassigned?: boolean;
     page?: number;
     limit?: number;
+    // #218 pre-mortem follow-up (2026-09-14): free-text search across appointmentNumber/
+    // customerName/customerPhone, for JobCardsPage's "find the appointment" picker - see the
+    // ILIKE-escaping comment below for why the wildcard characters are escaped.
+    q?: string;
   }): Promise<{ data: Appointment[]; total: number; page: number; limit: number }> {
     const query = this.appointmentRepository
       .createQueryBuilder('apt')
@@ -255,6 +259,21 @@ export class AppointmentsService {
 
     if (filters?.dateTo) {
       query.andWhere('apt.scheduledAt <= :dateTo', { dateTo: filters.dateTo });
+    }
+
+    const trimmedQ = filters?.q?.trim();
+    if (trimmedQ) {
+      // Same ILIKE-with-escaping pattern as JobCardJourneyService.search(): TypeORM's :like
+      // binding already parameterizes the value (no SQL injection risk), but a literal '%',
+      // '_' or '\' the user typed - e.g. in a phone number - would otherwise be interpreted
+      // as an ILIKE wildcard/escape character instead of a literal one, silently widening
+      // the match. Escaping them plus the explicit ESCAPE clause keeps the search literal.
+      const escaped = trimmedQ.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const like = `%${escaped}%`;
+      query.andWhere(
+        "(apt.appointmentNumber ILIKE :q ESCAPE '\\' OR apt.customerName ILIKE :q ESCAPE '\\' OR apt.customerPhone ILIKE :q ESCAPE '\\')",
+        { q: like },
+      );
     }
 
     const page = filters?.page || 1;

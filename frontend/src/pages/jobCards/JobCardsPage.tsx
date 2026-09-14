@@ -8,7 +8,7 @@ import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useAuth } from '../../lib/auth';
-import { getAppointment, getAppointmentByNumber } from '../../lib/appointmentsApi';
+import { getAppointment, searchAppointments } from '../../lib/appointmentsApi';
 import type { Appointment } from '../../lib/appointmentsTypes';
 import {
   approveCustomer,
@@ -193,21 +193,6 @@ function JobCardProgressStepper({ jobCard }: { jobCard: Pick<JobCard, 'status' |
   );
 }
 
-// #218/#251: there is no free-text "search appointments" endpoint (only get-by-id and
-// get-by-number), so this adapts the existing by-number lookup into the single/empty-result
-// shape AsyncSearchPicker expects - it's an exact lookup once the full appointment number is
-// typed, not a fuzzy narrowing search, and a plain 404 miss is treated as "no matches" rather
-// than an error.
-async function searchAppointmentsByNumber(query: string): Promise<Appointment[]> {
-  try {
-    const appointment = await getAppointmentByNumber(query.trim());
-    return [appointment];
-  } catch (err) {
-    if ((err as AxiosError)?.response?.status === 404) return [];
-    throw err;
-  }
-}
-
 function renderAppointmentOption(item: Appointment) {
   return (
     <div>
@@ -271,14 +256,14 @@ export function JobCardsPage() {
       <div className="max-w-sm">
         <Field label="Appointment">
           <AsyncSearchPicker<Appointment>
-            search={searchAppointmentsByNumber}
+            search={searchAppointments}
             onSelect={(item) => {
               setPickedLabel(item.appointmentNumber);
               setActiveAppointmentId(item.id);
             }}
             renderOption={renderAppointmentOption}
             getOptionLabel={(item) => `${item.appointmentNumber} — ${item.customerName}`}
-            placeholder="Enter the exact appointment number…"
+            placeholder="Search by appointment #, customer name, or phone…"
             selectedLabel={selectedLabel}
             onClear={() => {
               setPickedLabel(null);

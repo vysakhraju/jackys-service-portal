@@ -7,7 +7,7 @@ import { makeAppointment, makeJobCard } from '../../test/fixtures';
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/appointmentsApi', () => ({
   getAppointment: vi.fn(),
-  getAppointmentByNumber: vi.fn(),
+  searchAppointments: vi.fn(),
 }));
 vi.mock('../../lib/jobCardsApi', () => ({
   approveCustomer: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock('../../lib/jobCardsApi', () => ({
 }));
 
 import { useAuth } from '../../lib/auth';
-import { getAppointment, getAppointmentByNumber } from '../../lib/appointmentsApi';
+import { getAppointment, searchAppointments } from '../../lib/appointmentsApi';
 import { getJobCardByAppointment, getTaskPauses } from '../../lib/jobCardsApi';
 import { JobCardsPage } from './JobCardsPage';
 
@@ -56,50 +56,49 @@ beforeEach(() => {
     logout: vi.fn(),
   } as any);
   vi.mocked(getAppointment).mockReset();
-  vi.mocked(getAppointmentByNumber).mockReset();
+  vi.mocked(searchAppointments).mockReset();
   vi.mocked(getJobCardByAppointment).mockReset();
   vi.mocked(getTaskPauses).mockReset().mockResolvedValue([]);
 });
 
-// #218/#251: the "paste the appointment's id" input is now an AsyncSearchPicker adapted
-// over GET /appointments/number/:appointmentNumber (there is no free-text search endpoint
-// for appointments, so this is an exact by-number lookup shaped like a search).
+// #218 pre-mortem follow-up (2026-09-14): the "paste the appointment's id" input is now an
+// AsyncSearchPicker backed by a real GET /appointments?q= search (searchAppointments()) -
+// narrows on partial input by appointment #, customer name, or phone, same as every other
+// #218 picker. It used to wrap an exact-by-number-only lookup (GET /appointments/number/:n),
+// which was the one picker in the whole conversion that didn't narrow on partial typing - a
+// pre-mortem flagged that inconsistency as likely to read as "the search is broken" to a
+// CCE used to every other picker suggesting-as-you-type; this endpoint change is the fix.
 describe('JobCardsPage - #218 name-based appointment picker', () => {
-  it('finds an appointment by number and loads its job card', async () => {
+  it('finds a matching appointment on partial input and loads its job card', async () => {
     const appointment = makeAppointment({ id: 'appt-55', appointmentNumber: 'APT-0055', customerName: 'Rashid Khan' });
-    vi.mocked(getAppointmentByNumber).mockResolvedValue(appointment);
+    vi.mocked(searchAppointments).mockResolvedValue([appointment]);
     vi.mocked(getAppointment).mockResolvedValue(appointment);
     vi.mocked(getJobCardByAppointment).mockResolvedValue(makeJobCard({ appointmentId: 'appt-55' }));
 
     renderPage();
 
     fireEvent.focus(screen.getByTestId('async-search-picker-input'));
-    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-0055' } });
+    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-005' } });
     fireEvent.click(await screen.findByText('APT-0055'));
 
-    await waitFor(() => expect(getAppointmentByNumber).toHaveBeenCalledWith('APT-0055'));
+    await waitFor(() => expect(searchAppointments).toHaveBeenCalledWith('APT-005'));
     await waitFor(() => expect(getJobCardByAppointment).toHaveBeenCalledWith('appt-55'));
     expect(await screen.findByText(/Rashid Khan/)).toBeInTheDocument();
   });
 
-  it('shows no matches for an appointment number that does not exist (404 treated as empty, not an error)', async () => {
-    const notFoundError = { response: { status: 404 } };
-    vi.mocked(getAppointmentByNumber).mockRejectedValue(notFoundError);
+  it('shows no matches when the search comes back empty', async () => {
+    vi.mocked(searchAppointments).mockResolvedValue([]);
 
     renderPage();
 
     fireEvent.focus(screen.getByTestId('async-search-picker-input'));
-    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-9999' } });
+    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'zzz-no-such-thing' } });
 
     expect(await screen.findByText('No matches.')).toBeInTheDocument();
   });
 
-  // QA follow-up (2026-09-14): searchAppointmentsByNumber() re-throws anything that isn't a
-  // 404 (a 500, a network failure, ...) rather than swallowing it alongside the "not found"
-  // case - confirm AsyncSearchPicker actually surfaces its error state for that path, not a
-  // silent "No matches." that would look identical to a real not-found to the user.
-  it('shows the search-failed error state (not "No matches.") for a non-404 failure, e.g. a 500', async () => {
-    vi.mocked(getAppointmentByNumber).mockRejectedValue({ response: { status: 500 } });
+  it('shows the search-failed error state (not "No matches.") when the search request itself fails, e.g. a 500', async () => {
+    vi.mocked(searchAppointments).mockRejectedValue({ response: { status: 500 } });
 
     renderPage();
 

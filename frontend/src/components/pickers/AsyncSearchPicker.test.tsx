@@ -121,6 +121,34 @@ describe('AsyncSearchPicker', () => {
     expect(screen.queryByText('JC-0100')).not.toBeInTheDocument();
   });
 
+  // #218 pre-mortem follow-up (2026-09-14): lets a caller override the empty-results message
+  // for a picker whose search() isn't a real free-text search (still supported for that
+  // case, though JobCardsPage itself no longer needs it now that it has a real search).
+  it('uses a custom emptyMessage when provided, instead of the generic "No matches."', async () => {
+    const search = vi.fn().mockResolvedValue([]);
+    render(
+      <AsyncSearchPicker
+        onSelect={vi.fn()}
+        search={search}
+        renderOption={renderOption}
+        getOptionLabel={getOptionLabel}
+        emptyMessage="No appointment found with that exact number."
+      />,
+    );
+
+    const input = screen.getByTestId('async-search-picker-input');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'nomatch' } });
+    await vi.advanceTimersByTimeAsync(400);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('async-search-picker-options')).toHaveTextContent(
+        'No appointment found with that exact number.',
+      ),
+    );
+    expect(screen.queryByText('No matches.')).not.toBeInTheDocument();
+  });
+
   it('shows a fixed selected label with a Change action instead of the search box once something is selected', () => {
     const onClear = vi.fn();
     render(

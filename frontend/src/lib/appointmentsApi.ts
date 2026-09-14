@@ -37,9 +37,18 @@ export const listAppointments = (filters: AppointmentListFilters) =>
         dateTo: filters.dateTo || undefined,
         page: filters.page,
         limit: filters.limit,
+        q: filters.q || undefined,
       },
     })
     .then((r) => r.data);
+
+// #218 pre-mortem follow-up (2026-09-14): JobCardsPage's "find the appointment" picker used
+// to be the one #218 picker that didn't narrow on partial input (it wrapped an exact-number
+// lookup, GET /appointments/number/:appointmentNumber) - inconsistent with every other
+// converted picker and easy to mistake for broken. This wraps the real GET /appointments?q=
+// search instead, capped to a small page since it only backs a picker's dropdown.
+export const searchAppointments = (query: string): Promise<Appointment[]> =>
+  listAppointments({ q: query, limit: 8 }).then((r) => r.data);
 
 export const getAppointmentDashboardStats = (serviceCentreId?: string) =>
   api

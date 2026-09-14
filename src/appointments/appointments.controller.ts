@@ -73,6 +73,7 @@ export class AppointmentsController {
   @ApiQuery({ name: 'unassigned', required: false, type: Boolean, description: 'Only appointments with no technicianId - ignored if technicianId is also given' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'q', required: false, type: String, description: 'Free-text search across appointment #, customer name, and customer phone' })
   @ApiResponse({ status: 200 })
   async findAll(
     @Query('serviceCentreId') serviceCentreId?: string,
@@ -85,6 +86,7 @@ export class AppointmentsController {
     @Query('unassigned') unassigned?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('q') q?: string,
   ) {
     return this.appointmentsService.findAll({
       serviceCentreId,
@@ -97,6 +99,7 @@ export class AppointmentsController {
       unassigned: unassigned === 'true',
       page,
       limit,
+      q,
     });
   }
 

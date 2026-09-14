@@ -237,6 +237,41 @@ describe('AppointmentsService', () => {
       expect(qb.andWhere).toHaveBeenCalledWith('apt.technicianId = :technicianId', { technicianId: 'tech-1' });
       expect(qb.andWhere).not.toHaveBeenCalledWith('apt.technicianId IS NULL');
     });
+
+    // #218 pre-mortem follow-up (2026-09-14): JobCardsPage's appointment picker used to be
+    // the one #218 picker that didn't narrow on partial input (an exact-number-only lookup),
+    // which read as "broken" next to every other picker that does. This `q` filter is the
+    // real fix - a true ILIKE search across appointment #, customer name, and phone - so it
+    // behaves like every other converted picker.
+    it('q: ILIKE-searches appointment #, customer name, and phone together, wrapped in %...%', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ q: 'APT-005' });
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "(apt.appointmentNumber ILIKE :q ESCAPE '\\' OR apt.customerName ILIKE :q ESCAPE '\\' OR apt.customerPhone ILIKE :q ESCAPE '\\')",
+        { q: '%APT-005%' },
+      );
+    });
+
+    it('q: escapes literal %, _, and \\ in the search term so they match literally, not as ILIKE wildcards', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ q: '50%_off\\promo' });
+
+      expect(qb.andWhere).toHaveBeenCalledWith(expect.any(String), { q: '%50\\%\\_off\\\\promo%' });
+    });
+
+    it('q: a blank/whitespace-only search term is ignored, not turned into a %  %-matches-everything filter', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ q: '   ' });
+
+      expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('ILIKE'), expect.anything());
+    });
   });
 
   describe('findById / findByAppointmentNumber', () => {
