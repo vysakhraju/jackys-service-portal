@@ -6,6 +6,7 @@ import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
 import { NamePicker } from '../../components/pickers/NamePicker';
+import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useAuth } from '../../lib/auth';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 import {
@@ -20,6 +21,19 @@ import { requestReturn, reviewReservation } from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import type { WorkshopState } from '../../lib/workshopTypes';
 import type { InventoryReservation, InventoryReservationWithAge } from '../../lib/inventoryTypes';
+import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
+import type { JourneySearchResult } from '../../lib/jobCardJourneyTypes';
+
+function renderJobCardOption(item: JourneySearchResult) {
+  return (
+    <div>
+      <div className="font-medium text-slate-900">{item.jobCardNumber}</div>
+      <div className="text-xs text-slate-500">
+        {item.customerName} · {item.appointmentNumber} · {item.jobCardStatus.replace(/_/g, ' ')}
+      </div>
+    </div>
+  );
+}
 
 // TL+ roles that can act on ANY workshop job, mirroring WorkshopController's
 // ASSIGN_ROLES/PRIVILEGED_ROLES exactly. A plain TECHNICIAN_WORKSHOP is only ever allowed
@@ -34,8 +48,9 @@ const RETURN_CONFIRM_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK'];
 export function WorkshopPage() {
   const [searchParams] = useSearchParams();
   const prefill = searchParams.get('jobCardId') ?? '';
-  const [jobCardIdInput, setJobCardIdInput] = useState(prefill);
   const [activeJobCardId, setActiveJobCardId] = useState(prefill);
+  // #218/#251: see QcPage's identical field for why this isn't derived via an effect.
+  const [pickedLabel, setPickedLabel] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const stateQuery = useQuery({
@@ -49,39 +64,35 @@ export function WorkshopPage() {
     queryClient.invalidateQueries({ queryKey: ['workshop-state', activeJobCardId] });
   }
 
+  const selectedLabel = activeJobCardId ? (pickedLabel ?? stateQuery.data?.jobCard.jobCardNumber ?? activeJobCardId) : null;
+
   return (
     <div className="max-w-3xl space-y-6">
       <p className="max-w-2xl text-sm text-slate-500">
-        Same "no list-all, paste the id" pattern as Job Cards and Estimates - there's no
-        workshop queue endpoint. Paste the Job Card's id (or use "Go to Workshop →" from
-        its Job Cards page entry) to assign a technician, track WIP, and request spares.
+        Same "no list-all queue" pattern as Job Cards and Estimates. Search by job card #,
+        appointment #, customer name or phone (or use "Go to Workshop →" from its Job Cards
+        page entry) to assign a technician, track WIP, and request spares.
       </p>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setActiveJobCardId(jobCardIdInput.trim());
-        }}
-        className="flex items-end gap-2"
-      >
-        <div className="flex-1">
-          <Field label="Job Card ID">
-            <input
-              className={inputClass}
-              value={jobCardIdInput}
-              onChange={(e) => setJobCardIdInput(e.target.value)}
-              placeholder="Paste the job card's id"
-            />
-          </Field>
-        </div>
-        <button
-          type="submit"
-          disabled={!jobCardIdInput.trim()}
-          className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Find
-        </button>
-      </form>
+      <div className="max-w-sm">
+        <Field label="Job Card">
+          <AsyncSearchPicker<JourneySearchResult>
+            search={searchJobCardJourney}
+            onSelect={(item) => {
+              setPickedLabel(item.jobCardNumber);
+              setActiveJobCardId(item.jobCardId);
+            }}
+            renderOption={renderJobCardOption}
+            getOptionLabel={(item) => `${item.jobCardNumber} — ${item.customerName}`}
+            placeholder="Search by job card #, appointment #, customer name or phone…"
+            selectedLabel={selectedLabel}
+            onClear={() => {
+              setPickedLabel(null);
+              setActiveJobCardId('');
+            }}
+          />
+        </Field>
+      </div>
 
       {activeJobCardId && (
         <div className="space-y-4">

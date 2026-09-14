@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -11,9 +11,13 @@ vi.mock('../../lib/jobCardsApi', () => ({
   qcApprove: vi.fn(),
   qcReject: vi.fn(),
 }));
+vi.mock('../../lib/jobCardJourneyApi', () => ({
+  searchJobCardJourney: vi.fn(),
+}));
 
 import { useAuth } from '../../lib/auth';
 import { getJobCard, qcApprove, qcReject } from '../../lib/jobCardsApi';
+import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
 import { QcPage } from './QcPage';
 
 function renderPage(jobCardId = 'jc-1') {
@@ -50,6 +54,44 @@ beforeEach(() => {
   vi.mocked(getJobCard).mockReset();
   vi.mocked(qcApprove).mockReset();
   vi.mocked(qcReject).mockReset();
+  vi.mocked(searchJobCardJourney).mockReset().mockResolvedValue([]);
+});
+
+// #218/#251: the "paste the job card's id" input is now an AsyncSearchPicker backed by
+// GET /job-card-journey/search - this covers the search-then-select path itself, distinct
+// from every other test in this file which deep-links straight in via ?jobCardId=.
+describe('QcPage - #218 name-based job card picker', () => {
+  it('searches and selects a job card, then loads it', async () => {
+    mockUser('QC_OFFICER');
+    vi.mocked(searchJobCardJourney).mockResolvedValue([
+      {
+        jobCardId: 'jc-77',
+        jobCardNumber: 'JC-0077',
+        jobCardStatus: 'READY_FOR_QC',
+        appointmentNumber: 'APT-0077',
+        customerName: 'Fatima Noor',
+        customerPhone: '050-1234567',
+        deliveryNumber: null,
+      },
+    ]);
+    vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ id: 'jc-77', status: 'READY_FOR_QC' }));
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/qc-permissions/qc']}>
+          <QcPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
+    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'JC-0077' } });
+    fireEvent.click(await screen.findByText('JC-0077'));
+
+    await waitFor(() => expect(getJobCard).toHaveBeenCalledWith('jc-77'));
+    expect(await screen.findByText('JC-0077')).toBeInTheDocument();
+  });
 });
 
 describe('QcPage - role-floor gating (the-fool pre-mortem finding #1)', () => {

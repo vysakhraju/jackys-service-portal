@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -15,9 +15,13 @@ vi.mock('../../lib/estimatesApi', () => ({
   reviseEstimate: vi.fn(),
   sendEstimate: vi.fn(),
 }));
+vi.mock('../../lib/jobCardJourneyApi', () => ({
+  searchJobCardJourney: vi.fn(),
+}));
 
 import { getJobCard } from '../../lib/jobCardsApi';
 import { getEstimatesByJobCard, recordResponse } from '../../lib/estimatesApi';
+import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
 import { EstimatesPage } from './EstimatesPage';
 
 function renderPage(jobCardId = 'jc-1') {
@@ -35,6 +39,42 @@ beforeEach(() => {
   vi.mocked(getJobCard).mockReset();
   vi.mocked(getEstimatesByJobCard).mockReset();
   vi.mocked(recordResponse).mockReset();
+  vi.mocked(searchJobCardJourney).mockReset().mockResolvedValue([]);
+});
+
+// #218/#251: the "paste the job card's id" input is now an AsyncSearchPicker backed by
+// GET /job-card-journey/search.
+describe('EstimatesPage - #218 name-based job card picker', () => {
+  it('searches and selects a job card, then loads its estimate history', async () => {
+    vi.mocked(searchJobCardJourney).mockResolvedValue([
+      {
+        jobCardId: 'jc-88',
+        jobCardNumber: 'JC-0088',
+        jobCardStatus: 'SN_VALIDATED',
+        appointmentNumber: 'APT-0088',
+        customerName: 'Ahmed Ali',
+        customerPhone: '050-7654321',
+        deliveryNumber: null,
+      },
+    ]);
+    vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ id: 'jc-88', status: 'SN_VALIDATED', warrantyStatus: 'OOW' }));
+    vi.mocked(getEstimatesByJobCard).mockResolvedValue([]);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/estimates']}>
+          <EstimatesPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
+    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'JC-0088' } });
+    fireEvent.click(await screen.findByText('JC-0088'));
+
+    await waitFor(() => expect(getEstimatesByJobCard).toHaveBeenCalledWith('jc-88'));
+  });
 });
 
 describe('EstimatesPage - Create gating (the-fool pre-mortem finding #1: no dead end after expiry)', () => {

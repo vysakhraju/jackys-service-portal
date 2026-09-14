@@ -6,9 +6,12 @@ import { useForm } from 'react-hook-form';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
+import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useAuth } from '../../lib/auth';
 import { getJobCard, qcApprove, qcReject } from '../../lib/jobCardsApi';
 import type { JobCard, QcApproveBlocker } from '../../lib/jobCardsTypes';
+import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
+import type { JourneySearchResult } from '../../lib/jobCardJourneyTypes';
 
 // The role FLOOR only - who can even attempt qc/approve or qc/reject, mirroring
 // job-cards.controller.ts's QC_GATE_ROLES exactly. It is deliberately NOT the real gate:
@@ -18,11 +21,26 @@ import type { JobCard, QcApproveBlocker } from '../../lib/jobCardsTypes';
 // A role-floor member without the grant sees the backend's own 403 message instead.
 const QC_GATE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE', 'QC_OFFICER'];
 
+function renderJobCardOption(item: JourneySearchResult) {
+  return (
+    <div>
+      <div className="font-medium text-slate-900">{item.jobCardNumber}</div>
+      <div className="text-xs text-slate-500">
+        {item.customerName} · {item.appointmentNumber} · {item.jobCardStatus.replace(/_/g, ' ')}
+      </div>
+    </div>
+  );
+}
+
 export function QcPage() {
   const [searchParams] = useSearchParams();
   const prefill = searchParams.get('jobCardId') ?? '';
-  const [jobCardIdInput, setJobCardIdInput] = useState(prefill);
   const [activeJobCardId, setActiveJobCardId] = useState(prefill);
+  // #218/#251: set the instant a search result is picked, so the label shows immediately
+  // without waiting on the Job Card fetch below. Left null for a ?jobCardId= deep link -
+  // jobCardQuery's own jobCardNumber fills the label in that case, falling back to the raw
+  // id for the brief moment before that fetch resolves.
+  const [pickedLabel, setPickedLabel] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const jobCardQuery = useQuery({
@@ -36,39 +54,35 @@ export function QcPage() {
     queryClient.invalidateQueries({ queryKey: ['job-card', activeJobCardId] });
   }
 
+  const selectedLabel = activeJobCardId ? (pickedLabel ?? jobCardQuery.data?.jobCardNumber ?? activeJobCardId) : null;
+
   return (
     <div className="max-w-3xl space-y-6">
       <p className="max-w-2xl text-sm text-slate-500">
-        Same "no list-all, paste the id" pattern as Workshop and Job Cards - there's no QC
-        queue endpoint. Paste the Job Card's id (or use "Go to QC →" from its Workshop
-        screen entry, once READY_FOR_QC) to approve or reject it.
+        Same "no list-all queue" pattern as Workshop and Job Cards. Search by job card #,
+        appointment #, customer name or phone (or use "Go to QC →" from its Workshop screen
+        entry, once READY_FOR_QC) to approve or reject it.
       </p>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setActiveJobCardId(jobCardIdInput.trim());
-        }}
-        className="flex items-end gap-2"
-      >
-        <div className="flex-1">
-          <Field label="Job Card ID">
-            <input
-              className={inputClass}
-              value={jobCardIdInput}
-              onChange={(e) => setJobCardIdInput(e.target.value)}
-              placeholder="Paste the job card's id"
-            />
-          </Field>
-        </div>
-        <button
-          type="submit"
-          disabled={!jobCardIdInput.trim()}
-          className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Find
-        </button>
-      </form>
+      <div className="max-w-sm">
+        <Field label="Job Card">
+          <AsyncSearchPicker<JourneySearchResult>
+            search={searchJobCardJourney}
+            onSelect={(item) => {
+              setPickedLabel(item.jobCardNumber);
+              setActiveJobCardId(item.jobCardId);
+            }}
+            renderOption={renderJobCardOption}
+            getOptionLabel={(item) => `${item.jobCardNumber} — ${item.customerName}`}
+            placeholder="Search by job card #, appointment #, customer name or phone…"
+            selectedLabel={selectedLabel}
+            onClear={() => {
+              setPickedLabel(null);
+              setActiveJobCardId('');
+            }}
+          />
+        </Field>
+      </div>
 
       {activeJobCardId && (
         <div className="space-y-4">

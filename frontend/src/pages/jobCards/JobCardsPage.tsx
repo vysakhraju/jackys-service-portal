@@ -6,8 +6,10 @@ import type { AxiosError } from 'axios';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
+import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useAuth } from '../../lib/auth';
-import { getAppointment } from '../../lib/appointmentsApi';
+import { getAppointment, getAppointmentByNumber } from '../../lib/appointmentsApi';
+import type { Appointment } from '../../lib/appointmentsTypes';
 import {
   approveCustomer,
   assignSection,
@@ -191,11 +193,38 @@ function JobCardProgressStepper({ jobCard }: { jobCard: Pick<JobCard, 'status' |
   );
 }
 
+// #218/#251: there is no free-text "search appointments" endpoint (only get-by-id and
+// get-by-number), so this adapts the existing by-number lookup into the single/empty-result
+// shape AsyncSearchPicker expects - it's an exact lookup once the full appointment number is
+// typed, not a fuzzy narrowing search, and a plain 404 miss is treated as "no matches" rather
+// than an error.
+async function searchAppointmentsByNumber(query: string): Promise<Appointment[]> {
+  try {
+    const appointment = await getAppointmentByNumber(query.trim());
+    return [appointment];
+  } catch (err) {
+    if ((err as AxiosError)?.response?.status === 404) return [];
+    throw err;
+  }
+}
+
+function renderAppointmentOption(item: Appointment) {
+  return (
+    <div>
+      <div className="font-medium text-slate-900">{item.appointmentNumber}</div>
+      <div className="text-xs text-slate-500">
+        {item.customerName} · {item.status.replace(/_/g, ' ')}
+      </div>
+    </div>
+  );
+}
+
 export function JobCardsPage() {
   const [searchParams] = useSearchParams();
   const prefill = searchParams.get('appointmentId') ?? '';
-  const [appointmentIdInput, setAppointmentIdInput] = useState(prefill);
   const [activeAppointmentId, setActiveAppointmentId] = useState(prefill);
+  // #218/#251: see QcPage's identical field for why this isn't derived via an effect.
+  const [pickedLabel, setPickedLabel] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const canWarrantyOverride = !!user && WARRANTY_OVERRIDE_ROLES.includes(user.role.name);
@@ -224,42 +253,40 @@ export function JobCardsPage() {
     onSuccess: invalidateJobCard,
   });
 
+  const selectedLabel = activeAppointmentId
+    ? (pickedLabel ?? appointmentQuery.data?.appointmentNumber ?? activeAppointmentId)
+    : null;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-8 py-8">
       <div>
         <h1 className="text-lg font-semibold text-slate-900">Job Cards</h1>
         <p className="mt-1 max-w-2xl text-sm text-slate-500">
           There's no list here - the backend has no "list all Job Cards" endpoint, only
-          look-up by appointment. Paste the appointment id (from the Schedule tab, or the
-          link on a completed appointment's detail view) to find or start its Job Card.
+          look-up by appointment. Enter the appointment's number (from the Schedule tab, or
+          the link on a completed appointment's detail view) to find or start its Job Card.
         </p>
       </div>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setActiveAppointmentId(appointmentIdInput.trim());
-        }}
-        className="flex items-end gap-2"
-      >
-        <div className="flex-1">
-          <Field label="Appointment ID">
-            <input
-              className={inputClass}
-              value={appointmentIdInput}
-              onChange={(e) => setAppointmentIdInput(e.target.value)}
-              placeholder="Paste the appointment's id"
-            />
-          </Field>
-        </div>
-        <button
-          type="submit"
-          disabled={!appointmentIdInput.trim()}
-          className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Find / Create
-        </button>
-      </form>
+      <div className="max-w-sm">
+        <Field label="Appointment">
+          <AsyncSearchPicker<Appointment>
+            search={searchAppointmentsByNumber}
+            onSelect={(item) => {
+              setPickedLabel(item.appointmentNumber);
+              setActiveAppointmentId(item.id);
+            }}
+            renderOption={renderAppointmentOption}
+            getOptionLabel={(item) => `${item.appointmentNumber} — ${item.customerName}`}
+            placeholder="Enter the exact appointment number…"
+            selectedLabel={selectedLabel}
+            onClear={() => {
+              setPickedLabel(null);
+              setActiveAppointmentId('');
+            }}
+          />
+        </Field>
+      </div>
 
       {activeAppointmentId && (
         <div className="space-y-4">

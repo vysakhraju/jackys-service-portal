@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { makeReservation, makeWorkshopState } from '../../test/fixtures';
+import { makeJobCard, makeReservation, makeWorkshopState } from '../../test/fixtures';
 
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/workshopApi', () => ({
@@ -24,11 +24,17 @@ vi.mock('../../lib/masterDataApi', () => ({
 vi.mock('../../lib/technicianScheduleApi', () => ({
   getGanttBoard: vi.fn(),
 }));
+// #218/#251: the top-of-page "paste the job card's id" input is now an AsyncSearchPicker
+// backed by this.
+vi.mock('../../lib/jobCardJourneyApi', () => ({
+  searchJobCardJourney: vi.fn(),
+}));
 
 import { useAuth } from '../../lib/auth';
 import { assignWorkshopTechnician, getWorkshopState, listReworkApprovers, requestSpare } from '../../lib/workshopApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
+import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
 import { WorkshopPage } from './WorkshopPage';
 
 function renderPage(jobCardId = 'jc-1') {
@@ -76,6 +82,44 @@ beforeEach(() => {
     unassignedAppointments: [],
     unassignedJobCards: [],
   } as any);
+  vi.mocked(searchJobCardJourney).mockReset().mockResolvedValue([]);
+});
+
+// #218/#251: covers the search-then-select path for the top-of-page job card lookup,
+// distinct from every other test in this file which deep-links straight in via ?jobCardId=.
+describe('WorkshopPage - #218 name-based job card picker', () => {
+  it('searches and selects a job card, then loads its workshop state', async () => {
+    mockUser({ roleName: 'TECHNICAL_TEAM_LEADER' });
+    vi.mocked(searchJobCardJourney).mockResolvedValue([
+      {
+        jobCardId: 'jc-99',
+        jobCardNumber: 'JC-0099',
+        jobCardStatus: 'WORKSHOP_ASSIGNED',
+        appointmentNumber: 'APT-0099',
+        customerName: 'Layla Hassan',
+        customerPhone: '050-9998888',
+        deliveryNumber: null,
+      },
+    ]);
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({ jobCard: makeJobCard({ id: 'jc-99', jobCardNumber: 'JC-0099' }) }),
+    );
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/workshop-inventory/workshop']}>
+          <WorkshopPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
+    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'JC-0099' } });
+    fireEvent.click(await screen.findByText('JC-0099'));
+
+    await waitFor(() => expect(getWorkshopState).toHaveBeenCalledWith('jc-99'));
+  });
 });
 
 describe('WorkshopPage - ownership gating (the-fool pre-mortem finding #4)', () => {

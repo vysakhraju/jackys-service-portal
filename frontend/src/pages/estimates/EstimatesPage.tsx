@@ -6,6 +6,7 @@ import type { AxiosError } from 'axios';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
+import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { getJobCard } from '../../lib/jobCardsApi';
 import type { JobCard } from '../../lib/jobCardsTypes';
 import {
@@ -17,6 +18,19 @@ import {
 } from '../../lib/estimatesApi';
 import { CONTACT_METHODS } from '../../lib/estimatesTypes';
 import type { ContactMethodValue, Estimate, EstimateLineItem } from '../../lib/estimatesTypes';
+import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
+import type { JourneySearchResult } from '../../lib/jobCardJourneyTypes';
+
+function renderJobCardOption(item: JourneySearchResult) {
+  return (
+    <div>
+      <div className="font-medium text-slate-900">{item.jobCardNumber}</div>
+      <div className="text-xs text-slate-500">
+        {item.customerName} · {item.appointmentNumber} · {item.jobCardStatus.replace(/_/g, ' ')}
+      </div>
+    </div>
+  );
+}
 
 // An Estimate only makes sense once the Job Card has cleared its own SN check - matches
 // EstimatesService.create()'s gate exactly. Shown here so "Create Estimate" only appears
@@ -30,8 +44,9 @@ const ACTIVE_STATUSES: Estimate['status'][] = ['DRAFT', 'SENT', 'APPROVED'];
 export function EstimatesPage() {
   const [searchParams] = useSearchParams();
   const prefill = searchParams.get('jobCardId') ?? '';
-  const [jobCardIdInput, setJobCardIdInput] = useState(prefill);
   const [activeJobCardId, setActiveJobCardId] = useState(prefill);
+  // #218/#251: see QcPage's identical field for why this isn't derived via an effect.
+  const [pickedLabel, setPickedLabel] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const jobCardQuery = useQuery({
@@ -74,42 +89,38 @@ export function EstimatesPage() {
     CAN_CREATE_STATUSES.includes(jobCard.status) &&
     !activeEstimate;
 
+  const selectedLabel = activeJobCardId ? (pickedLabel ?? jobCardQuery.data?.jobCardNumber ?? activeJobCardId) : null;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-8 py-8">
       <div>
         <h1 className="text-lg font-semibold text-slate-900">Estimates</h1>
         <p className="mt-1 max-w-2xl text-sm text-slate-500">
-          Same "no list-all, paste the id" pattern as Job Cards - there's no
-          list-all-estimates endpoint either. Paste the Job Card's id (from the Job Cards
-          tab, or its "Use the Estimate flow →" link) to see its estimate history.
+          Same "no list-all queue" pattern as Job Cards - there's no list-all-estimates
+          endpoint either. Search by job card #, appointment #, customer name or phone (or
+          use its "Use the Estimate flow →" link) to see its estimate history.
         </p>
       </div>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setActiveJobCardId(jobCardIdInput.trim());
-        }}
-        className="flex items-end gap-2"
-      >
-        <div className="flex-1">
-          <Field label="Job Card ID">
-            <input
-              className={inputClass}
-              value={jobCardIdInput}
-              onChange={(e) => setJobCardIdInput(e.target.value)}
-              placeholder="Paste the job card's id"
-            />
-          </Field>
-        </div>
-        <button
-          type="submit"
-          disabled={!jobCardIdInput.trim()}
-          className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Find
-        </button>
-      </form>
+      <div className="max-w-sm">
+        <Field label="Job Card">
+          <AsyncSearchPicker<JourneySearchResult>
+            search={searchJobCardJourney}
+            onSelect={(item) => {
+              setPickedLabel(item.jobCardNumber);
+              setActiveJobCardId(item.jobCardId);
+            }}
+            renderOption={renderJobCardOption}
+            getOptionLabel={(item) => `${item.jobCardNumber} — ${item.customerName}`}
+            placeholder="Search by job card #, appointment #, customer name or phone…"
+            selectedLabel={selectedLabel}
+            onClear={() => {
+              setPickedLabel(null);
+              setActiveJobCardId('');
+            }}
+          />
+        </Field>
+      </div>
 
       {activeJobCardId && (
         <div className="space-y-4">
