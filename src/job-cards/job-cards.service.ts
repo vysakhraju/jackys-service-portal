@@ -451,6 +451,17 @@ export class JobCardsService {
       throw new BadRequestException('This technician is already assigned to this Job Card.');
     }
 
+    // #218 QA follow-up (2026-09-14): this accepted any user id with zero role validation,
+    // the same gap already fixed in assignWorkshopTechnician() above and in
+    // DeliveryService.dispatch() - found by inspection while verifying those two fixes.
+    const newTechnician = await this.userRepository.findOne({ where: { id: newTechnicianId }, relations: { role: true } });
+    if (!newTechnician) {
+      throw new NotFoundException(`Technician ${newTechnicianId} not found.`);
+    }
+    if (newTechnician.role.name !== 'TECHNICIAN_WORKSHOP') {
+      throw new BadRequestException('A workshop technician reassignment must hold the TECHNICIAN_WORKSHOP role.');
+    }
+
     const activeHelperRow = await this.crewHelperRepository.findOne({
       where: { jobCardId: id, technicianId: newTechnicianId, removedAt: IsNull() },
     });

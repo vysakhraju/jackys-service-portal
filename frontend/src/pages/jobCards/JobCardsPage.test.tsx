@@ -93,4 +93,20 @@ describe('JobCardsPage - #218 name-based appointment picker', () => {
 
     expect(await screen.findByText('No matches.')).toBeInTheDocument();
   });
+
+  // QA follow-up (2026-09-14): searchAppointmentsByNumber() re-throws anything that isn't a
+  // 404 (a 500, a network failure, ...) rather than swallowing it alongside the "not found"
+  // case - confirm AsyncSearchPicker actually surfaces its error state for that path, not a
+  // silent "No matches." that would look identical to a real not-found to the user.
+  it('shows the search-failed error state (not "No matches.") for a non-404 failure, e.g. a 500', async () => {
+    vi.mocked(getAppointmentByNumber).mockRejectedValue({ response: { status: 500 } });
+
+    renderPage();
+
+    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
+    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-0055' } });
+
+    expect(await screen.findByText('Search failed - try again.')).toBeInTheDocument();
+    expect(screen.queryByText('No matches.')).not.toBeInTheDocument();
+  });
 });

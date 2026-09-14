@@ -549,6 +549,8 @@ describe('JobCardsService', () => {
   });
 
   describe('reassignWorkshopTechnician', () => {
+    const workshopTechnician2 = { id: 'tech-2', role: { name: 'TECHNICIAN_WORKSHOP' } };
+
     it('reassigns a WORKSHOP_ASSIGNED job to a different technician, preserving status and workshopAssignedAt', async () => {
       const originalAssignedAt = new Date('2026-09-09T08:00:00Z');
       jobCardRepository.findOne.mockResolvedValue(
@@ -559,6 +561,7 @@ describe('JobCardsService', () => {
           workshopAssignedAt: originalAssignedAt,
         }),
       );
+      userRepository.findOne.mockResolvedValue(workshopTechnician2);
 
       const result = await service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1');
 
@@ -574,6 +577,7 @@ describe('JobCardsService', () => {
         jobCardRepository.findOne.mockResolvedValue(
           jobCard({ section: JobCardSection.WORKSHOP, status, assignedWorkshopTechnicianId: 'tech-1' }),
         );
+        userRepository.findOne.mockResolvedValue(workshopTechnician2);
 
         const result = await service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1');
 
@@ -621,6 +625,7 @@ describe('JobCardsService', () => {
       jobCardRepository.findOne.mockResolvedValue(
         jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }),
       );
+      userRepository.findOne.mockResolvedValue(workshopTechnician2);
       crewHelperRepository.findOne.mockResolvedValue({ id: 'helper-1', jobCardId: 'jc-1', technicianId: 'tech-2', removedAt: null });
 
       await service.reassignWorkshopTechnician('jc-1', 'tech-2', 'lead-1');
@@ -631,6 +636,30 @@ describe('JobCardsService', () => {
       expect(crewHelperRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'helper-1', removedByUserId: 'lead-1', removedAt: expect.any(Date) }),
       );
+    });
+
+    // QA follow-up (2026-09-14): reassignWorkshopTechnician() accepted any newTechnicianId
+    // with zero role validation until now - the same class of bug already fixed in
+    // assignWorkshopTechnician() above and in DeliveryService.dispatch(), found by
+    // inspection while verifying those two fixes. These two guard the fix.
+    it('rejects a newTechnicianId that does not exist', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }),
+      );
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.reassignWorkshopTechnician('jc-1', 'ghost-1', 'lead-1')).rejects.toThrow(NotFoundException);
+      expect(jobCardRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a newTechnicianId that does not hold the TECHNICIAN_WORKSHOP role', async () => {
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'tech-1' }),
+      );
+      userRepository.findOne.mockResolvedValue({ id: 'field-1', role: { name: 'TECHNICIAN_FIELD' } });
+
+      await expect(service.reassignWorkshopTechnician('jc-1', 'field-1', 'lead-1')).rejects.toThrow(BadRequestException);
+      expect(jobCardRepository.save).not.toHaveBeenCalled();
     });
   });
 

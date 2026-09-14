@@ -282,6 +282,25 @@ describe('SchedulePage - Service Desk channel', () => {
   });
 });
 
+// #218 QA follow-up: serviceCentreId is now driven by NamePicker via setValue()/watch()
+// rather than a native <input {...register()}>, wired through a bare register() call for
+// its `required` validation (see the page's own comment above the NamePicker). Nothing
+// upstream of this test suite exercised the negative path - confirm it actually blocks.
+describe('SchedulePage - create form required-field guard (no service centre picked)', () => {
+  it('keeps the Create button disabled and never calls createAppointment when no service centre/slot has been picked', async () => {
+    const form = await openCreateModal();
+
+    fireEvent.change(form.getByLabelText('Customer name', { exact: false }), { target: { value: 'Jane Doe' } });
+    fireEvent.change(form.getByLabelText('Customer phone', { exact: false }), { target: { value: '+971500000000' } });
+
+    expect(form.getByRole('button', { name: 'Create' })).toBeDisabled();
+
+    fireEvent.click(form.getByRole('button', { name: 'Create' }));
+
+    expect(vi.mocked(createAppointment)).not.toHaveBeenCalled();
+  });
+});
+
 // The user's own idea from the REDTRA360 review call: paste a Google Maps short link
 // instead of typing lat/lng by hand.
 describe('SchedulePage - Google Maps link resolve', () => {
