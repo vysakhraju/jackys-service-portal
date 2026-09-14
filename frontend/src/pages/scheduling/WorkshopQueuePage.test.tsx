@@ -5,13 +5,18 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '../../lib/toast';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+// 2026-09-14 live-tested finding: the capacity-edit gate moved from a hardcoded
+// CAPACITY_EDIT_ROLES role list to the designation permission matrix's WORKSHOP_ASSIGN
+// capability (useMyCapabilities()) - a Designation-access grant to a new role had no
+// effect against the static list. See ServiceCentresPage.test.tsx / ReportsPage.test.tsx
+// for the same class of fix elsewhere.
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/technicianScheduleApi', () => ({
   getWorkshopQueue: vi.fn(),
   setWorkshopCapacity: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getWorkshopQueue, setWorkshopCapacity } from '../../lib/technicianScheduleApi';
 import { WorkshopQueuePage } from './WorkshopQueuePage';
 import type { WorkshopQueueBoard } from '../../lib/technicianScheduleTypes';
@@ -29,23 +34,15 @@ function renderPage() {
   );
 }
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: {
-      id: 'u1',
-      firstName: 'Test',
-      lastName: 'User',
-      email: 'test@jackys.com',
-      employeeId: 'E1',
-      status: 'ACTIVE',
-      lastLoginAt: null,
-      role: { id: 'r1', name: roleName, displayName: roleName },
-    },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function board(overrides: Partial<WorkshopQueueBoard> = {}): WorkshopQueueBoard {
@@ -87,7 +84,7 @@ function board(overrides: Partial<WorkshopQueueBoard> = {}): WorkshopQueueBoard 
 beforeEach(() => {
   vi.mocked(getWorkshopQueue).mockReset();
   vi.mocked(setWorkshopCapacity).mockReset();
-  mockUser('TECHNICAL_TEAM_LEADER');
+  mockCapabilities(['WORKSHOP_ASSIGN']);
 });
 
 describe('WorkshopQueuePage', () => {
@@ -160,13 +157,22 @@ describe('WorkshopQueuePage', () => {
     await waitFor(() => expect(setWorkshopCapacity).toHaveBeenCalledWith('wtech-1', 10));
   });
 
-  it('hides the capacity edit control for a role outside CAPACITY_EDIT_ROLES', async () => {
-    mockUser('QC_OFFICER');
+  it('hides the capacity edit control for a role lacking WORKSHOP_ASSIGN', async () => {
+    mockCapabilities([]);
     vi.mocked(getWorkshopQueue).mockResolvedValue(board());
     renderPage();
 
     await screen.findByText('Ali Hassan');
     expect(screen.queryByRole('button', { name: 'Edit capacity' })).not.toBeInTheDocument();
+  });
+
+  it('shows the capacity edit control once WORKSHOP_ASSIGN is granted to any role via Designation access', async () => {
+    mockCapabilities(['WORKSHOP_ASSIGN']);
+    vi.mocked(getWorkshopQueue).mockResolvedValue(board());
+    renderPage();
+
+    await screen.findByText('Ali Hassan');
+    expect(screen.getByRole('button', { name: 'Edit capacity' })).toBeInTheDocument();
   });
 
   it('renders the unassigned job card pool with a journey link', async () => {

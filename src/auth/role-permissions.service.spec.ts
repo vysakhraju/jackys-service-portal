@@ -38,6 +38,42 @@ describe('RolePermissionsService', () => {
     });
   });
 
+  // Live-tested finding (2026-09-14): the frontend's own client-side capability gate
+  // (Master Data section access, etc.) reads this endpoint, so it must mirror
+  // RolesGuard.checkCapability's own MATRIX_LOCKED_ROLES bypass exactly - a mismatch here
+  // would either wrongly lock out SUPER_ADMIN/SERVICE_HEAD client-side or wrongly show
+  // "coming soon"/not-yet-migrated keys as if they were real, checkable capabilities.
+  describe('getMyCapabilities', () => {
+    it('returns fullAccess: true with every migrated capability key for a MATRIX_LOCKED_ROLES role, without querying the grants table', async () => {
+      const result = await service.getMyCapabilities({ role: role({ name: RoleName.SUPER_ADMIN }) });
+
+      expect(result.fullAccess).toBe(true);
+      expect(result.capabilities).toContain('SCHEDULE_CCE_MANAGE');
+      expect(result.capabilities).toContain('MASTER_DATA_VIEW');
+      expect(rolePermRepo.find).not.toHaveBeenCalled();
+    });
+
+    it("returns fullAccess: false with exactly the caller's role's granted capability keys for an ordinary role", async () => {
+      rolePermRepo.find.mockResolvedValue([
+        { roleId: 'role-cce', capabilityKey: 'SCHEDULE_CCE_MANAGE' },
+        { roleId: 'role-cce', capabilityKey: 'MASTER_DATA_VIEW' },
+      ]);
+
+      const result = await service.getMyCapabilities({ role: role() });
+
+      expect(rolePermRepo.find).toHaveBeenCalledWith({ where: { roleId: 'role-cce' } });
+      expect(result).toEqual({ fullAccess: false, capabilities: ['SCHEDULE_CCE_MANAGE', 'MASTER_DATA_VIEW'] });
+    });
+
+    it('returns fullAccess: false with an empty capabilities array when the role holds no grants at all', async () => {
+      rolePermRepo.find.mockResolvedValue([]);
+
+      const result = await service.getMyCapabilities({ role: role() });
+
+      expect(result).toEqual({ fullAccess: false, capabilities: [] });
+    });
+  });
+
   describe('getGrantedRoleNames', () => {
     it('returns the names of every distinct role currently holding the capability', async () => {
       rolePermRepo.find.mockResolvedValue([

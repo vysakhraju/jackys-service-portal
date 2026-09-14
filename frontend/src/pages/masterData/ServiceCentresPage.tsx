@@ -4,6 +4,8 @@ import { useForm } from 'react-hook-form';
 import { ActiveBadge, DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Checkbox, Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
+import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   createServiceCentre,
   deleteServiceCentre,
@@ -34,6 +36,19 @@ type FormValues = {
 
 export function ServiceCentresPage() {
   const queryClient = useQueryClient();
+  // Live-tested finding (2026-09-14): MasterDataLayout only gates whether this page can be
+  // OPENED at all (any one Master Data capability). Within the page, each action needs its
+  // own specific gate - a CCE holding only, say, MASTER_DATA_VIEW got in but could still see
+  // (and click) Create/Edit/Delete here, only to have the backend reject the mutation. Delete
+  // is a special case: deleteServiceCentre has always been hardcoded @Roles('SUPER_ADMIN') on
+  // the backend (never migrated into the capability matrix, no SERVICE_HEAD exception either),
+  // so it's gated on the actual role via useAuth(), not a capability key - same pattern as
+  // WorkshopQueuePage's CAPACITY_EDIT_ROLES.
+  const { has } = useMyCapabilities();
+  const { user } = useAuth();
+  const canCreate = has('MASTER_DATA_SERVICE_CENTRE_CREATE');
+  const canUpdate = has('MASTER_DATA_SERVICE_CENTRE_UPDATE');
+  const canDelete = user?.role.name === 'SUPER_ADMIN';
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ServiceCentre | null>(null);
   const [schedule, setSchedule] = useState<Record<string, DaySchedule>>(defaultWeekSchedule());
@@ -179,12 +194,14 @@ export function ServiceCentresPage() {
           Service centre locations, opening hours and per-country VAT. The only Master Data
           entity with full edit/delete support in the backend today.
         </p>
-        <button
-          onClick={openCreate}
-          className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
-        >
-          + New Service Centre
-        </button>
+        {canCreate && (
+          <button
+            onClick={openCreate}
+            className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            + New Service Centre
+          </button>
+        )}
       </div>
 
       <DataTable
@@ -193,23 +210,31 @@ export function ServiceCentresPage() {
         isLoading={isLoading}
         error={error}
         emptyMessage="No service centres yet — create the first one."
-        rowActions={(row) => (
-          <div className="flex justify-end gap-3">
-            <button onClick={() => openEdit(row)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
-              Edit
-            </button>
-            <button
-              onClick={() => {
-                if (confirm(`Delete service centre "${row.name}"? This is a soft delete.`)) {
-                  deleteMutation.mutate(row.id);
-                }
-              }}
-              className="text-xs font-medium text-red-500 hover:text-red-700"
-            >
-              Delete
-            </button>
-          </div>
-        )}
+        rowActions={
+          canUpdate || canDelete
+            ? (row) => (
+                <div className="flex justify-end gap-3">
+                  {canUpdate && (
+                    <button onClick={() => openEdit(row)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
+                      Edit
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      onClick={() => {
+                        if (confirm(`Delete service centre "${row.name}"? This is a soft delete.`)) {
+                          deleteMutation.mutate(row.id);
+                        }
+                      }}
+                      className="text-xs font-medium text-red-500 hover:text-red-700"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              )
+            : undefined
+        }
       />
 
       <Modal open={modalOpen} onClose={closeModal} title={editing ? `Edit ${editing.code}` : 'New Service Centre'}>

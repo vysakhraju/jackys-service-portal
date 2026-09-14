@@ -5,7 +5,13 @@ vi.mock('./api', () => ({
 }));
 
 import { api } from './api';
-import { getRolePermissionsMatrix, listRolePermissionRoles, listUsersForRolePermission, setRoleCapabilities } from './rolePermissionsApi';
+import {
+  getMyCapabilities,
+  getRolePermissionsMatrix,
+  listRolePermissionRoles,
+  listUsersForRolePermission,
+  setRoleCapabilities,
+} from './rolePermissionsApi';
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
@@ -13,6 +19,13 @@ beforeEach(() => {
 });
 
 describe('rolePermissionsApi', () => {
+  it('getMyCapabilities fetches GET /permissions/my-capabilities (not under the role-permissions BASE)', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { fullAccess: false, capabilities: ['MASTER_DATA_VIEW'] } });
+    const result = await getMyCapabilities();
+    expect(api.get).toHaveBeenCalledWith('/permissions/my-capabilities');
+    expect(result).toEqual({ fullAccess: false, capabilities: ['MASTER_DATA_VIEW'] });
+  });
+
   it('listRolePermissionRoles fetches GET /permissions/role-permissions/roles', async () => {
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
     await listRolePermissionRoles();

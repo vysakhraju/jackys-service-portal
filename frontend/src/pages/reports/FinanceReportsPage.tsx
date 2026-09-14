@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   getFinanceSummary,
   getGpByServiceCentre,
@@ -12,7 +13,6 @@ import {
   type PeriodFilter,
 } from '../../lib/reportsApi';
 import {
-  canViewFinanceReports,
   formatAedOrDash,
   formatAsOf,
   formatPctOrDash,
@@ -32,9 +32,12 @@ import {
 // "Settled"; Unpaid Invoices splits B2B/B2C rather than blending them. formatAedOrDash()/
 // formatPctOrDash() are the one place that "—" rule is enforced, so no widget below ever
 // hand-rolls its own `?? 0` fallback.
+// Gated on REPORTS_FINANCE_VIEW, the designation permission matrix's capability (not a
+// hardcoded role list - 2026-09-14 live-tested finding, same class of fix as the other
+// three Reports & Dashboards pages).
 export function FinanceReportsPage() {
-  const { user } = useAuth();
-  const canView = canViewFinanceReports(user?.role.name);
+  const { has } = useMyCapabilities();
+  const canView = has('REPORTS_FINANCE_VIEW');
 
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
@@ -74,10 +77,7 @@ export function FinanceReportsPage() {
   if (!canView) {
     return (
       <div className="px-8 py-6">
-        <p className="max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-          The Finance dashboard is restricted to Accountant / Finance Manager / Service
-          Head / Super Admin - every endpoint behind it is role-gated server-side too.
-        </p>
+        <AccessDeniedNotice what="the Finance dashboard" />
       </div>
     );
   }

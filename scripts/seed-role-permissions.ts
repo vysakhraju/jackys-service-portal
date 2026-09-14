@@ -72,14 +72,18 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'WORKSHOP_QUEUE_VIEW', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
   { key: 'GL_LEDGER_VIEW', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
   { key: 'DEBIT_NOTES_MANAGE', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
-  { key: 'MASTER_DATA_SERVICE_CENTRE_CREATE', defaultRoles: ['CCE'] },
+  // Policy change (2026-09-14) - see capability-catalog.ts's Master Data section comment:
+  // every one of these is now an empty default. Does not retroactively revoke a grant
+  // already in the database (this script is insert-if-missing only) - an admin unchecks
+  // those manually in Designation access.
+  { key: 'MASTER_DATA_SERVICE_CENTRE_CREATE', defaultRoles: [] },
   { key: 'MASTER_DATA_SERVICE_CENTRE_UPDATE', defaultRoles: [] },
-  { key: 'MASTER_DATA_FAULT_SYMPTOM_MANAGE', defaultRoles: ['CCE', 'TECHNICAL_TEAM_LEADER'] },
-  { key: 'MASTER_DATA_SPARE_PARTS_MANAGE', defaultRoles: ['WAREHOUSE_CLERK'] },
-  { key: 'MASTER_DATA_PRICE_LIST_MANAGE', defaultRoles: ['FINANCE_MANAGER'] },
+  { key: 'MASTER_DATA_FAULT_SYMPTOM_MANAGE', defaultRoles: [] },
+  { key: 'MASTER_DATA_SPARE_PARTS_MANAGE', defaultRoles: [] },
+  { key: 'MASTER_DATA_PRICE_LIST_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_KPI_RULE_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_NOTIFICATION_TEMPLATE_MANAGE', defaultRoles: [] },
-  { key: 'MASTER_DATA_WARRANTY_MASTER_MANAGE', defaultRoles: ['WARRANTY_CLERK'] },
+  { key: 'MASTER_DATA_WARRANTY_MASTER_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_COMPONENT_YIELD_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_BULK_IMPORT', defaultRoles: [] },
   { key: 'MASTER_DATA_VIEW', defaultRoles: [] },

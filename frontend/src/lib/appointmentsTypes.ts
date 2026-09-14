@@ -152,9 +152,11 @@ export interface AppointmentDashboardStats {
 }
 
 // Same @Roles(...) list as AppointmentsController.getDashboardStats() - a technician or CCE
-// booking desk role other than these four never even fires the query (mirrors
-// reportsTypes.ts's canViewReports pattern: gated client-side too, not just refused
-// server-side).
+// booking desk role other than these four never even fires the query (this endpoint is
+// still a plain @Roles() list, not a migrated designation-matrix capability, so a
+// hardcoded client-side mirror is still correct here - contrast with the Reports &
+// Dashboards pages in reportsTypes.ts, which moved to useMyCapabilities() once their own
+// backend endpoints migrated to @RequiresCapability).
 export const DASHBOARD_STATS_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
 
 export function canViewDashboardStats(roleName: string | undefined): boolean {

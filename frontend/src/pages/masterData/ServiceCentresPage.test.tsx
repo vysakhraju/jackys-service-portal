@@ -10,9 +10,49 @@ vi.mock('../../lib/masterDataApi', () => ({
   deleteServiceCentre: vi.fn(),
   listFieldTechnicians: vi.fn(),
 }));
+// #218/#253 follow-up (2026-09-14): the page now hides Create/Edit/Delete based on the
+// caller's actual capabilities/role rather than always rendering them - see
+// 'ServiceCentresPage - action visibility by capability/role' below for the gating itself.
+// Every other describe block in this file exercises the page's actual field-technician
+// behaviour and isn't about access control, so it defaults both mocks to "full access"
+// (a SUPER_ADMIN) to keep those tests' focus unchanged.
+vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 
 import { listServiceCentres, createServiceCentre, updateServiceCentre, listFieldTechnicians } from '../../lib/masterDataApi';
+import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { ServiceCentresPage } from './ServiceCentresPage';
+
+function mockUser(roleName: string) {
+  vi.mocked(useAuth).mockReturnValue({
+    user: {
+      id: 'u1',
+      firstName: 'Test',
+      lastName: 'User',
+      email: 'test@jackys.com',
+      employeeId: 'E1',
+      status: 'ACTIVE',
+      lastLoginAt: null,
+      role: { id: 'r1', name: roleName, displayName: roleName },
+    },
+    isLoading: false,
+    isAuthenticated: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+  } as any);
+}
+
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
+}
 
 function centre(overrides: Partial<ServiceCentre> = {}): ServiceCentre {
   return {
@@ -45,6 +85,8 @@ beforeEach(() => {
   vi.mocked(listServiceCentres).mockReset().mockResolvedValue([centre()]);
   vi.mocked(createServiceCentre).mockReset();
   vi.mocked(updateServiceCentre).mockReset();
+  mockUser('SUPER_ADMIN');
+  mockCapabilities([], true);
   // #218/#253: GET /users (admin-only) replaced with the new, CCE-reachable
   // GET /master-data/service-centres/field-technicians - already active-Field-Technician-
   // only server-side (see master-data.service.spec.ts's listActiveFieldTechnicians tests),
@@ -134,5 +176,54 @@ describe('ServiceCentresPage - field technician assignment', () => {
     await waitFor(() =>
       expect(updateServiceCentre).toHaveBeenCalledWith('sc-1', expect.objectContaining({ assignedTechnicianIds: ['tech-1'] })),
     );
+  });
+});
+
+describe('ServiceCentresPage - action visibility by capability/role', () => {
+  // Live-tested bug (2026-09-14): a CCE could open Master Data > Service Centres and see
+  // the full list plus Create/Edit/Delete, only finding out those were blocked after
+  // clicking (Delete is SUPER_ADMIN-only and was never in the capability matrix at all -
+  // the backend always rejected it, the button just didn't know that). These tests pin
+  // down that a role/capability lacking the relevant grant never even sees the control.
+  it('hides all three actions for a role with none of the Service Centre capabilities and isn\'t SUPER_ADMIN', async () => {
+    mockUser('CCE');
+    mockCapabilities([]);
+    renderPage();
+
+    await screen.findByText('Dubai Service Centre');
+    expect(screen.queryByText('+ New Service Centre')).not.toBeInTheDocument();
+    expect(screen.queryByText('Edit')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument();
+  });
+
+  it('shows Create once MASTER_DATA_SERVICE_CENTRE_CREATE is granted, but not Edit or Delete', async () => {
+    mockUser('CCE');
+    mockCapabilities(['MASTER_DATA_SERVICE_CENTRE_CREATE']);
+    renderPage();
+
+    expect(await screen.findByText('+ New Service Centre')).toBeInTheDocument();
+    expect(screen.queryByText('Edit')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument();
+  });
+
+  it('shows Edit once MASTER_DATA_SERVICE_CENTRE_UPDATE is granted, but never shows Delete for a non-SUPER_ADMIN role even with every capability granted', async () => {
+    mockUser('CCE');
+    mockCapabilities(['MASTER_DATA_SERVICE_CENTRE_UPDATE'], true);
+    renderPage();
+
+    expect(await screen.findByText('Edit')).toBeInTheDocument();
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument();
+  });
+
+  it('shows Delete for SUPER_ADMIN even with zero explicit capability grants (SUPER_ADMIN bypasses the matrix entirely)', async () => {
+    mockUser('SUPER_ADMIN');
+    mockCapabilities([], false);
+    renderPage();
+
+    await screen.findByText('Dubai Service Centre');
+    // A real SUPER_ADMIN always has fullAccess:true from the backend - this case (role
+    // SUPER_ADMIN but fullAccess:false) can't happen for real, but proves Delete is gated
+    // on the ROLE name directly, independent of the capability matrix either way.
+    expect(screen.getByText('Delete')).toBeInTheDocument();
   });
 });

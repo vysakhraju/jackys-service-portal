@@ -385,16 +385,31 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     migrated: true,
   },
 
-  // --- Master Data --- replaces 12 of the 13 inline @Roles() literals on
-  // master-data.controller.ts (2026-09-10), one capability per distinct role membership /
-  // entity-type admin action, matching the controller's own entity-type sectioning.
-  // deleteServiceCentre's @Roles('SUPER_ADMIN') is deliberately absent - asymmetric (no
-  // SERVICE_HEAD), see the controller's own comment.
+  // --- Master Data --- originally replaced 12 of the 13 inline @Roles() literals on
+  // master-data.controller.ts (2026-09-10) as a zero-behavior-change migration, one
+  // capability per distinct role membership / entity-type admin action, matching the
+  // controller's own entity-type sectioning. deleteServiceCentre's @Roles('SUPER_ADMIN')
+  // is deliberately absent - asymmetric (no SERVICE_HEAD), see the controller's own
+  // comment.
+  //
+  // Policy change (2026-09-14, live-tested, explicit and repeated instruction): every
+  // Master Data manage capability's defaultRoles is now EMPTY, including the four that
+  // originally carried a zero-behavior-change default (CCE for service centre create,
+  // CCE+TL for fault/symptom, Warehouse Clerk for spare parts, Finance Manager for price
+  // lists, Warranty Clerk for warranty master). "Master data should not be accessible for
+  // any normal user unless Super Admin grants it via Designation access" - stated plainly,
+  // not just implied by a gap. IMPORTANT for whoever re-seeds an existing database: this
+  // only changes what a *fresh* environment seeds going forward - seedDefaults()/the seed
+  // script are insert-if-missing only, so a role that already holds one of these grants in
+  // the database (seeded under the old defaults, including CCE's SERVICE_CENTRE_CREATE/
+  // FAULT_SYMPTOM_MANAGE grants created by the seed run right before this change shipped)
+  // keeps it until an admin explicitly unchecks it in Designation access - this file alone
+  // does not revoke anything already granted.
   {
     key: 'MASTER_DATA_SERVICE_CENTRE_CREATE',
     label: 'Create a service centre',
     module: 'Master Data',
-    defaultRoles: [RoleName.CCE],
+    defaultRoles: [],
     migrated: true,
   },
   {
@@ -408,21 +423,21 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     key: 'MASTER_DATA_FAULT_SYMPTOM_MANAGE',
     label: 'Create a fault/symptom code',
     module: 'Master Data',
-    defaultRoles: [RoleName.CCE, RoleName.TECHNICAL_TEAM_LEADER],
+    defaultRoles: [],
     migrated: true,
   },
   {
     key: 'MASTER_DATA_SPARE_PARTS_MANAGE',
     label: 'Create a spare part, link it to a model, or create a spare part model',
     module: 'Master Data',
-    defaultRoles: [RoleName.WAREHOUSE_CLERK],
+    defaultRoles: [],
     migrated: true,
   },
   {
     key: 'MASTER_DATA_PRICE_LIST_MANAGE',
     label: 'Create a service price list entry',
     module: 'Master Data',
-    defaultRoles: [RoleName.FINANCE_MANAGER],
+    defaultRoles: [],
     migrated: true,
   },
   {
@@ -443,7 +458,7 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     key: 'MASTER_DATA_WARRANTY_MASTER_MANAGE',
     label: 'Create a warranty master entry',
     module: 'Master Data',
-    defaultRoles: [RoleName.WARRANTY_CLERK],
+    defaultRoles: [],
     migrated: true,
   },
   {

@@ -12,6 +12,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserStatus } from '../auth/entities/user.entity';
 import { JwtPayload } from '../auth/strategies/jwt.strategy';
+import { RolePermissionsService } from '../auth/role-permissions.service';
+import { RoleAccessService } from '../auth/role-access.service';
+import { MATRIX_LOCKED_ROLES } from '../auth/entities/role-permission.entity';
 import { ReportsService } from './reports.service';
 
 /**
@@ -36,7 +39,17 @@ import { ReportsService } from './reports.service';
 const POLL_INTERVAL_MS = 5_000;
 const APPROVAL_AGING_INTERVAL_MS = 15 * 60 * 1000; // BRD 18.1: Pending Approval Aging refreshes every 15 min.
 const DASHBOARD_ROOM = 'dashboard';
-const VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER'];
+// Live-tested finding (2026-09-14): this used to be a second, independent hardcoded role
+// list living entirely outside the designation permission matrix - REPORTS_DASHBOARD_VIEW
+// on ReportsController (the REST side of this same dashboard) had already been migrated to
+// @RequiresCapability, so a Super Admin ticking that box for, say, CCE in Designation
+// access would let CCE's GET /reports/overview succeed while this WebSocket handshake
+// (JwtAuthGuard/RolesGuard can't run here at all - see handleConnection's own comment)
+// kept rejecting them with the old hardcoded list, silently. The Kanban board would sit on
+// "Offline" forever for exactly the role the admin just granted access to. This channel now
+// asks the same source of truth (RolePermissionsService, via userCanViewDashboard() below),
+// mirroring RolesGuard.checkCapability's own bypass -> direct-grant -> delegated-access
+// order exactly, so a grant here takes effect immediately, same as the REST endpoint.
 
 @WebSocketGateway({
   namespace: '/reports',
@@ -74,6 +87,8 @@ export class ReportsGateway implements OnGatewayConnection, OnGatewayDisconnect,
     private jwtService: JwtService,
     private configService: ConfigService,
     @InjectRepository(User) private userRepo: Repository<User>,
+    private rolePermissionsService: RolePermissionsService,
+    private roleAccessService: RoleAccessService,
   ) {}
 
   onModuleInit() {
@@ -101,7 +116,9 @@ export class ReportsGateway implements OnGatewayConnection, OnGatewayDisconnect,
 
       const user = await this.userRepo.findOne({ where: { id: payload.sub }, relations: { role: true } });
       if (!user || user.status !== UserStatus.ACTIVE) throw new Error('User not found or inactive');
-      if (!VIEW_ROLES.includes(user.role.name)) throw new Error('Role not permitted on the dashboard channel');
+      if (!(await this.userCanViewDashboard(user))) {
+        throw new Error('Role not permitted on the dashboard channel');
+      }
 
       client.data.userId = user.id;
       client.join(DASHBOARD_ROOM);
@@ -122,6 +139,34 @@ export class ReportsGateway implements OnGatewayConnection, OnGatewayDisconnect,
 
   handleDisconnect(_client: Socket) {
     // No per-connection state to clean up beyond what Socket.io already handles on disconnect.
+  }
+
+  // Mirrors RolesGuard.checkCapability's exact order (hardcoded MATRIX_LOCKED_ROLES bypass,
+  // then a direct grant on the caller's own role, then delegated "extra role access" to any
+  // role that DOES hold it) so a Designation-access grant for REPORTS_DASHBOARD_VIEW works
+  // identically here and on the REST side - see the VIEW_ROLES removal comment above for why
+  // this exists. Fails CLOSED like the guard does: any lookup error here means "no access",
+  // never a silent allow.
+  private async userCanViewDashboard(user: User): Promise<boolean> {
+    if (MATRIX_LOCKED_ROLES.includes(user.role.name)) {
+      return true;
+    }
+
+    try {
+      if (await this.rolePermissionsService.roleHasCapability(user.role.id, 'REPORTS_DASHBOARD_VIEW')) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+
+    try {
+      const rolesWithCapability = await this.rolePermissionsService.getGrantedRoleNames('REPORTS_DASHBOARD_VIEW');
+      if (rolesWithCapability.length === 0) return false;
+      return await this.roleAccessService.hasActiveAccessToAnyRole(user.id, rolesWithCapability);
+    } catch {
+      return false;
+    }
   }
 
   private extractToken(client: Socket): string | null {

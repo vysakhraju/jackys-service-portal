@@ -3,25 +3,29 @@ import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeProductFailureRatioRow, makeRepeatComplaintItem, makeRwrAnalysisRow } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+// 2026-09-14 live-tested finding: moved from a hardcoded role list to the designation
+// permission matrix's REPORTS_QUALITY_VIEW capability - see ReportsPage.test.tsx's own
+// comment for why (a Designation-access grant had no effect against a static list).
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/reportsApi', () => ({
   getProductFailureRatio: vi.fn(),
   getRepeatComplaints: vi.fn(),
   getRwrAnalysis: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getProductFailureRatio, getRepeatComplaints, getRwrAnalysis } from '../../lib/reportsApi';
 import { QualityReportsPage } from './QualityReportsPage';
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: { id: 'u1', firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function renderPage() {
@@ -39,28 +43,35 @@ beforeEach(() => {
   vi.mocked(getRwrAnalysis).mockReset().mockResolvedValue([makeRwrAnalysisRow()]);
 });
 
-describe('QualityReportsPage - role gate', () => {
-  it('shows a restricted message and fires no queries for a disallowed role', async () => {
-    mockUser('ACCOUNTANT');
+describe('QualityReportsPage - access gate', () => {
+  it('shows the access-denied notice and fires no queries for a role lacking REPORTS_QUALITY_VIEW', async () => {
+    mockCapabilities([]);
     renderPage();
 
-    expect(await screen.findByText(/restricted to Service Head/)).toBeInTheDocument();
+    expect(await screen.findByText("You don't have access to the Quality/Product dashboard yet.")).toBeInTheDocument();
     expect(getProductFailureRatio).not.toHaveBeenCalled();
     expect(getRepeatComplaints).not.toHaveBeenCalled();
     expect(getRwrAnalysis).not.toHaveBeenCalled();
   });
 
-  it.each(['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER'])('permits %s', async (role) => {
-    mockUser(role);
+  it('permits a role holding REPORTS_QUALITY_VIEW directly, and fullAccess separately', async () => {
+    mockCapabilities(['REPORTS_QUALITY_VIEW']);
     renderPage();
     await screen.findByText('BRD 18.3 Quality / Product Dashboard');
-    expect(screen.queryByText(/restricted to Service Head/)).not.toBeInTheDocument();
+    expect(screen.queryByText("You don't have access to the Quality/Product dashboard yet.")).not.toBeInTheDocument();
+  });
+
+  it('permits fullAccess (SUPER_ADMIN/SERVICE_HEAD bypass) with an empty capability list', async () => {
+    mockCapabilities([], true);
+    renderPage();
+    await screen.findByText('BRD 18.3 Quality / Product Dashboard');
+    expect(screen.queryByText("You don't have access to the Quality/Product dashboard yet.")).not.toBeInTheDocument();
   });
 });
 
 describe('QualityReportsPage - widgets', () => {
   it('renders the Product Failure Ratio table', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_QUALITY_VIEW']);
     renderPage();
     // "WM-500" is also the RWR Analysis fixture's model, so this page legitimately shows
     // it twice once both widgets have loaded - assert at least one, not exactly one.
@@ -69,20 +80,20 @@ describe('QualityReportsPage - widgets', () => {
   });
 
   it('flags a repeat complaint within 30 days', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_QUALITY_VIEW']);
     renderPage();
     expect(await screen.findByText('SN-000123')).toBeInTheDocument();
     expect(screen.getByText('Yes')).toBeInTheDocument();
   });
 
   it('renders the RWR Analysis table with free-text reason', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_QUALITY_VIEW']);
     renderPage();
     expect(await screen.findByText('Customer declined repair cost')).toBeInTheDocument();
   });
 
   it('shows an empty state, not an error, when no repeat complaints exist', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_QUALITY_VIEW']);
     vi.mocked(getRepeatComplaints).mockResolvedValue([]);
     renderPage();
     expect(await screen.findByText('No repeat complaints on record.')).toBeInTheDocument();

@@ -1,24 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { canViewReports, formatAsOf } from './reportsTypes';
+import { formatAsOf } from './reportsTypes';
 
-describe('canViewReports', () => {
-  it.each([
-    ['SERVICE_HEAD', true],
-    ['SUPER_ADMIN', true],
-    ['TECHNICAL_TEAM_LEADER', true],
-    ['TECHNICIAN_FIELD', false],
-    ['TECHNICIAN_WORKSHOP', false],
-    ['ACCOUNTANT', false],
-    ['FINANCE_MANAGER', false],
-    ['CCE', false],
-  ])('%s -> %s', (role, expected) => {
-    expect(canViewReports(role)).toBe(expected);
-  });
-
-  it('returns false for an undefined role', () => {
-    expect(canViewReports(undefined)).toBe(false);
-  });
-});
+// canViewReports()/canViewFinanceReports() were removed 2026-09-14 - each Reports &
+// Dashboards page now checks its own designation-matrix capability directly via
+// useMyCapabilities(); see ReportsPage.test.tsx/QualityReportsPage.test.tsx/
+// OperationalReportsPage.test.tsx/FinanceReportsPage.test.tsx for that coverage.
 
 describe('formatAsOf', () => {
   it('returns an em-dash for an undefined timestamp', () => {

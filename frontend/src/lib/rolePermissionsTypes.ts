@@ -33,4 +33,15 @@ export interface SetRoleCapabilitiesResult {
   revoked: string[];
 }
 
+// Mirrors RolePermissionsService.getMyCapabilities() - the CURRENT user's own capability
+// set, read fresh from the same table this whole file describes. `fullAccess: true` for
+// SUPER_ADMIN/SERVICE_HEAD (the matrix's hardcoded bypass); otherwise the exact keys this
+// role currently holds. This is what lets a page show "you don't have access to this
+// yet" up front (see useMyCapabilities.ts) instead of only ever finding out via a 403
+// after already rendering an admin UI the backend was going to reject anyway.
+export interface MyCapabilities {
+  fullAccess: boolean;
+  capabilities: string[];
+}
+
 export type { Role };

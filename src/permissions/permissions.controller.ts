@@ -186,6 +186,18 @@ export class PermissionsController {
   // as everything else on this controller, on purpose (the-fool finding, 2026-09-10): this
   // is the screen that fixes a broken matrix, so it can never depend on the matrix itself.
 
+  // Deliberately NOT admin-gated (no @Roles()) - every logged-in user needs to know their
+  // OWN capabilities to build a client-side "can I see this" check; RolesGuard requires
+  // at least JwtAuthGuard to have run (see this controller's class-level @UseGuards), and
+  // this only ever returns the caller's own role's grants, never anyone else's - see
+  // RolePermissionsService.getMyCapabilities()'s own comment for the full reasoning.
+  @Get('my-capabilities')
+  @ApiOperation({ summary: "The current user's own capabilities from the designation permission matrix - {fullAccess: true} for SUPER_ADMIN/SERVICE_HEAD (matrix bypass), else {fullAccess: false, capabilities: string[]}" })
+  @ApiResponse({ status: 200, description: 'Current user capabilities' })
+  async getMyCapabilities(@CurrentUser() user: User) {
+    return this.rolePermissionsService.getMyCapabilities(user);
+  }
+
   @Get('role-permissions/roles')
   @Roles(...PERMISSION_ADMIN_ROLES)
   @ApiOperation({ summary: 'List every role that can appear as an editable column in the designation permission matrix (excludes SUPER_ADMIN, SERVICE_HEAD, CUSTOMER - always full access, hardcoded)' })

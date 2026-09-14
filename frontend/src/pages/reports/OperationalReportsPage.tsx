@@ -1,22 +1,29 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getSlaBreach, getSpareConsumption, getTechnicianProductivity } from '../../lib/reportsApi';
-import { canViewReports, formatAedOrDash, formatAsOf, formatPctOrDash } from '../../lib/reportsTypes';
+import { formatAedOrDash, formatAsOf, formatPctOrDash } from '../../lib/reportsTypes';
 
 const DEFAULT_SLA_HOURS = 48;
 
-// BRD 18.4 Operational Reports. Same VIEW_ROLES as the Live Board (Service Head / Super
-// Admin / Technical Team Leader) - see operational-reports.service.ts's own doc comment
-// for the two documented gaps: "Customer rating" is omitted entirely from Technician
-// Productivity (nothing captures it, and the BRD's own "(if captured)" already hedges it),
-// and SLA Breach shows the actual hoursOverThreshold rather than a fabricated reason code
-// (nothing records why a job ran long).
+// BRD 18.4 Operational Reports. Gated on REPORTS_OPERATIONAL_VIEW - the designation
+// permission matrix's capability, not a hardcoded role list (2026-09-14 live-tested
+// finding: the backend's OperationalReportsController had already migrated to
+// @RequiresCapability('REPORTS_OPERATIONAL_VIEW'), so a Super Admin granting it to, say,
+// CCE via Designation access would let the REST calls succeed while this page kept
+// showing a hardcoded "restricted to Service Head / Super Admin / Technical Team Leader"
+// notice regardless - the grant would have no visible effect). See
+// operational-reports.service.ts's own doc comment for the two documented data gaps:
+// "Customer rating" is omitted entirely from Technician Productivity (nothing captures
+// it, and the BRD's own "(if captured)" already hedges it), and SLA Breach shows the
+// actual hoursOverThreshold rather than a fabricated reason code (nothing records why a
+// job ran long).
 export function OperationalReportsPage() {
-  const { user } = useAuth();
-  const canView = canViewReports(user?.role.name);
+  const { has } = useMyCapabilities();
+  const canView = has('REPORTS_OPERATIONAL_VIEW');
 
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
@@ -47,10 +54,7 @@ export function OperationalReportsPage() {
   if (!canView) {
     return (
       <div className="px-8 py-6">
-        <p className="max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-          Operational Reports are restricted to Service Head / Super Admin / Technical Team
-          Leader - every endpoint behind it is role-gated server-side too.
-        </p>
+        <AccessDeniedNotice what="Operational Reports" />
       </div>
     );
   }

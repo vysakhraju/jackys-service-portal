@@ -1,20 +1,21 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getProductFailureRatio, getRepeatComplaints, getRwrAnalysis } from '../../lib/reportsApi';
-import { canViewReports } from '../../lib/reportsTypes';
 
-// BRD 18.3 Quality / Product Team Dashboard (AC-22/23/24). Same VIEW_ROLES as the Live
-// Board (Service Head / Super Admin / Technical Team Leader) - see
+// BRD 18.3 Quality / Product Team Dashboard (AC-22/23/24). Gated on REPORTS_QUALITY_VIEW,
+// the designation permission matrix's capability (not a hardcoded role list - 2026-09-14
+// live-tested finding, same class of fix as ReportsPage/OperationalReportsPage) - see
 // quality-reports.service.ts's own doc comment for the two documented gaps this page must
 // not silently paper over: "Region" uses ServiceCentre.city (falling back to country, never
 // a fabricated region taxonomy), and "Reason" on RWR Analysis is the Estimate's raw free
 // text ("Not specified" when absent), never mapped onto invented reason codes.
 export function QualityReportsPage() {
-  const { user } = useAuth();
-  const canView = canViewReports(user?.role.name);
+  const { has } = useMyCapabilities();
+  const canView = has('REPORTS_QUALITY_VIEW');
 
   const [brand, setBrand] = useState('');
   const [modelNumber, setModelNumber] = useState('');
@@ -51,10 +52,7 @@ export function QualityReportsPage() {
   if (!canView) {
     return (
       <div className="px-8 py-6">
-        <p className="max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-          The Quality/Product dashboard is restricted to Service Head / Super Admin /
-          Technical Team Leader - every endpoint behind it is role-gated server-side too.
-        </p>
+        <AccessDeniedNotice what="the Quality/Product dashboard" />
       </div>
     );
   }

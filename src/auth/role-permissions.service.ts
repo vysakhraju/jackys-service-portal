@@ -31,6 +31,27 @@ export class RolePermissionsService {
     return !!row;
   }
 
+  // Live-tested finding (2026-09-14): every @RequiresCapability() check RolesGuard makes
+  // is server-side only - the frontend had no way to know ahead of a 403 whether the
+  // current user could reach a given page/action, so pages like Master Data rendered
+  // their full admin UI (including action buttons the backend would then reject) to
+  // anyone logged in. This is the one call site the frontend uses to build its own
+  // client-side gate: "does MY role actually hold this capability, right now" - same
+  // fresh DB read RolesGuard itself uses (via roleHasCapability), no JWT caching, so a
+  // grant an admin just ticked takes effect immediately without the user re-logging in.
+  // fullAccess mirrors RolesGuard's MATRIX_LOCKED_ROLES bypass exactly: true means every
+  // migrated capability passes regardless of what's in the table.
+  async getMyCapabilities(user: { role: { id: string; name: RoleName } }): Promise<{
+    fullAccess: boolean;
+    capabilities: string[];
+  }> {
+    if (MATRIX_LOCKED_ROLES.includes(user.role.name)) {
+      return { fullAccess: true, capabilities: CAPABILITY_CATALOG.filter((c) => c.migrated).map((c) => c.key) };
+    }
+    const grants = await this.rolePermRepo.find({ where: { roleId: user.role.id } });
+    return { fullAccess: false, capabilities: grants.map((g) => g.capabilityKey) };
+  }
+
   // Every capability in the catalog, with each grantable role's role id and whether that
   // role currently holds it - the shape the admin matrix UI reads directly. Capabilities
   // not yet migrated are still listed (so the UI can show "coming soon"), just with no

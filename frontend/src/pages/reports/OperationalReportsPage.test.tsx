@@ -4,25 +4,29 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeSlaBreachReport, makeSpareConsumptionReport, makeTechnicianProductivityReport } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+// 2026-09-14 live-tested finding: moved from a hardcoded role list to the designation
+// permission matrix's REPORTS_OPERATIONAL_VIEW capability - see ReportsPage.test.tsx's
+// own comment for why (a Designation-access grant had no effect against a static list).
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/reportsApi', () => ({
   getTechnicianProductivity: vi.fn(),
   getSlaBreach: vi.fn(),
   getSpareConsumption: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getSlaBreach, getSpareConsumption, getTechnicianProductivity } from '../../lib/reportsApi';
 import { OperationalReportsPage } from './OperationalReportsPage';
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: { id: 'u1', firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function renderPage() {
@@ -40,28 +44,35 @@ beforeEach(() => {
   vi.mocked(getSpareConsumption).mockReset().mockResolvedValue(makeSpareConsumptionReport());
 });
 
-describe('OperationalReportsPage - role gate', () => {
-  it('shows a restricted message and fires no queries for a disallowed role', async () => {
-    mockUser('ACCOUNTANT');
+describe('OperationalReportsPage - access gate', () => {
+  it('shows the access-denied notice and fires no queries for a role lacking REPORTS_OPERATIONAL_VIEW', async () => {
+    mockCapabilities([]);
     renderPage();
 
-    expect(await screen.findByText(/restricted to Service Head/)).toBeInTheDocument();
+    expect(await screen.findByText("You don't have access to Operational Reports yet.")).toBeInTheDocument();
     expect(getTechnicianProductivity).not.toHaveBeenCalled();
     expect(getSlaBreach).not.toHaveBeenCalled();
     expect(getSpareConsumption).not.toHaveBeenCalled();
   });
 
-  it.each(['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER'])('permits %s', async (role) => {
-    mockUser(role);
+  it('permits a role holding REPORTS_OPERATIONAL_VIEW directly, and fullAccess separately', async () => {
+    mockCapabilities(['REPORTS_OPERATIONAL_VIEW']);
     renderPage();
     await screen.findByText('BRD 18.4 Operational Reports');
-    expect(screen.queryByText(/restricted to Service Head/)).not.toBeInTheDocument();
+    expect(screen.queryByText("You don't have access to Operational Reports yet.")).not.toBeInTheDocument();
+  });
+
+  it('permits fullAccess (SUPER_ADMIN/SERVICE_HEAD bypass) with an empty capability list', async () => {
+    mockCapabilities([], true);
+    renderPage();
+    await screen.findByText('BRD 18.4 Operational Reports');
+    expect(screen.queryByText("You don't have access to Operational Reports yet.")).not.toBeInTheDocument();
   });
 });
 
 describe('OperationalReportsPage - widgets', () => {
   it('renders Technician Productivity without a customer-rating column', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_OPERATIONAL_VIEW']);
     renderPage();
     expect(await screen.findByText('Test Technician')).toBeInTheDocument();
     // The report's own note explains the omission in prose ("Customer rating is not
@@ -71,7 +82,7 @@ describe('OperationalReportsPage - widgets', () => {
   });
 
   it('defaults the SLA Breach threshold to 48h and re-fetches on change', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_OPERATIONAL_VIEW']);
     const user = userEvent.setup();
     renderPage();
 
@@ -86,7 +97,7 @@ describe('OperationalReportsPage - widgets', () => {
   });
 
   it('renders Spare Parts Consumption top-by-quantity and top-by-value lists', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_OPERATIONAL_VIEW']);
     renderPage();
     expect(await screen.findByText('SP-001')).toBeInTheDocument();
     expect(screen.getByText('SP-002')).toBeInTheDocument();

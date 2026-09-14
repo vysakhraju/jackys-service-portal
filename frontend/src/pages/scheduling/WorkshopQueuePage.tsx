@@ -18,19 +18,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ErrorNotice } from '../../components/DataTable';
 import { inputClass } from '../../components/Field';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useToast } from '../../lib/toast';
 import { getWorkshopQueue, setWorkshopCapacity } from '../../lib/technicianScheduleApi';
 import type { WorkshopQueueJob, WorkshopQueueTechnicianRow } from '../../lib/technicianScheduleTypes';
 
-// Mirrors WORKSHOP_ASSIGN's own defaultRoles in capability-catalog.ts (Team Leader) plus
-// the two roles that always bypass the matrix (MATRIX_LOCKED_ROLES) - a client-side hint
-// only, the backend guard is what actually enforces this on the PATCH below.
-const CAPACITY_EDIT_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
-
 export function WorkshopQueuePage() {
-  const { user } = useAuth();
-  const canEditCapacity = !!user && CAPACITY_EDIT_ROLES.includes(user.role.name);
+  // Live-tested finding (2026-09-14): this used to be a hardcoded CAPACITY_EDIT_ROLES role
+  // list mirroring WORKSHOP_ASSIGN's *default* grants (Team Leader) - so a Super Admin
+  // granting WORKSHOP_ASSIGN to some other role via Designation access (exactly what the
+  // matrix exists to let them do) would pass the backend PATCH but the "Edit capacity"
+  // button would still never appear for that role. Checking the capability directly via
+  // useMyCapabilities() keeps this in sync with whatever's actually granted, same as the
+  // Master Data and Reports & Dashboards pages.
+  const { has } = useMyCapabilities();
+  const canEditCapacity = has('WORKSHOP_ASSIGN');
   const queryClient = useQueryClient();
   const { push } = useToast();
 

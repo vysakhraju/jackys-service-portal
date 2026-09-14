@@ -10,7 +10,12 @@ import {
   makeServiceEfficiencyReport,
 } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+// 2026-09-14 live-tested finding: this page's access gate moved from a hardcoded
+// REPORTS_VIEW_ROLES role list to the designation permission matrix's
+// REPORTS_DASHBOARD_VIEW capability (useMyCapabilities()) - a Super Admin granting it via
+// Designation access had no effect while the page still checked a static role list. Tests
+// below mock the capability directly rather than a role name.
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/reportsApi', () => ({
   getDashboardOverview: vi.fn(),
   getServiceEfficiency: vi.fn(),
@@ -18,19 +23,20 @@ vi.mock('../../lib/reportsApi', () => ({
 }));
 vi.mock('../../lib/useReportsSocket', () => ({ useReportsSocket: vi.fn() }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getDashboardOverview, getFirstTimeFixRate, getServiceEfficiency } from '../../lib/reportsApi';
 import { useReportsSocket } from '../../lib/useReportsSocket';
 import { ReportsPage } from './ReportsPage';
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: { id: 'u1', firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function mockSocket(overrides: Partial<ReturnType<typeof useReportsSocket>> = {}) {
@@ -59,12 +65,12 @@ beforeEach(() => {
   mockSocket();
 });
 
-describe('ReportsPage - role gate', () => {
-  it('shows a restricted message and fires no queries or socket connection for a disallowed role', async () => {
-    mockUser('ACCOUNTANT');
+describe('ReportsPage - access gate', () => {
+  it('shows the access-denied notice and fires no queries or socket connection for a role lacking REPORTS_DASHBOARD_VIEW', async () => {
+    mockCapabilities([]);
     renderPage();
 
-    expect(await screen.findByText(/restricted to Service Head/)).toBeInTheDocument();
+    expect(await screen.findByText("You don't have access to the Live Job Status Board yet.")).toBeInTheDocument();
     expect(getDashboardOverview).not.toHaveBeenCalled();
     expect(getServiceEfficiency).not.toHaveBeenCalled();
     expect(getFirstTimeFixRate).not.toHaveBeenCalled();
@@ -74,26 +80,26 @@ describe('ReportsPage - role gate', () => {
     expect(useReportsSocket).toHaveBeenCalledWith(false);
   });
 
-  it('does not show the restricted message for a permitted role, and enables the socket', async () => {
-    mockUser('SERVICE_HEAD');
+  it('does not show the access-denied notice once REPORTS_DASHBOARD_VIEW is held, and enables the socket', async () => {
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     renderPage();
 
     await screen.findByText('Live Job Status Board');
-    expect(screen.queryByText(/restricted to Service Head/)).not.toBeInTheDocument();
+    expect(screen.queryByText("You don't have access to the Live Job Status Board yet.")).not.toBeInTheDocument();
     expect(useReportsSocket).toHaveBeenCalledWith(true);
   });
 
-  it('permits TECHNICAL_TEAM_LEADER as well as SERVICE_HEAD/SUPER_ADMIN', async () => {
-    mockUser('TECHNICAL_TEAM_LEADER');
+  it('also permits fullAccess (SUPER_ADMIN/SERVICE_HEAD bypass) with an empty capability list', async () => {
+    mockCapabilities([], true);
     renderPage();
     await screen.findByText('Live Job Status Board');
-    expect(screen.queryByText(/restricted to Service Head/)).not.toBeInTheDocument();
+    expect(screen.queryByText("You don't have access to the Live Job Status Board yet.")).not.toBeInTheDocument();
   });
 });
 
 describe('ReportsPage - connection pill', () => {
   it('shows "Live" when the socket status is live', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     mockSocket({ status: 'live', kanban: makeKanbanBoard() });
     renderPage();
     // 'Live' also appears as the Approval Aging card's "data source" tag, so this must be
@@ -103,14 +109,14 @@ describe('ReportsPage - connection pill', () => {
   });
 
   it('shows the offline message when the socket status is offline', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     mockSocket({ status: 'offline' });
     renderPage();
     expect(await screen.findByText(/Offline - live updates paused/)).toBeInTheDocument();
   });
 
   it('shows "Reconnecting…" when the socket status is reconnecting', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     mockSocket({ status: 'reconnecting' });
     renderPage();
     expect(await screen.findByText('Reconnecting…')).toBeInTheDocument();
@@ -119,7 +125,7 @@ describe('ReportsPage - connection pill', () => {
 
 describe('ReportsPage - Kanban board', () => {
   it("renders counts-only columns from the overview summary before the socket's board arrives", async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     mockSocket({ status: 'live', kanban: null });
     renderPage();
 
@@ -130,7 +136,7 @@ describe('ReportsPage - Kanban board', () => {
   });
 
   it('switches to the full board (with job cards) once the socket delivers one', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     mockSocket({ status: 'live', kanban: makeKanbanBoard() });
     renderPage();
 
@@ -140,14 +146,14 @@ describe('ReportsPage - Kanban board', () => {
 
 describe('ReportsPage - Approval Aging', () => {
   it('shows a waiting message before any approval-aging:update has arrived', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     mockSocket({ status: 'live', approvalAging: null });
     renderPage();
     expect(await screen.findByText('Waiting for the live feed…')).toBeInTheDocument();
   });
 
   it('renders items and a breached-count summary once data arrives', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     mockSocket({ status: 'live', approvalAging: makeApprovalAgingReport() });
     renderPage();
 
@@ -158,7 +164,7 @@ describe('ReportsPage - Approval Aging', () => {
 
 describe('ReportsPage - Service Efficiency', () => {
   it('shows a zero-state when sampleSize is 0', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     vi.mocked(getServiceEfficiency).mockResolvedValue(
       makeServiceEfficiencyReport({ sampleSize: 0, overallAvgHours: null, byTechnician: [], byCategory: [] }),
     );
@@ -167,7 +173,7 @@ describe('ReportsPage - Service Efficiency', () => {
   });
 
   it('renders the overall average and technician breakdown when data is present', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     renderPage();
     expect(await screen.findByText('Test Technician')).toBeInTheDocument();
     // The fixture's overall average and its (only) technician's average happen to be the
@@ -177,7 +183,7 @@ describe('ReportsPage - Service Efficiency', () => {
   });
 
   it('clicking Refresh re-fetches Service Efficiency', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('Service Efficiency');
@@ -193,7 +199,7 @@ describe('ReportsPage - Service Efficiency', () => {
 
 describe('ReportsPage - First-Time Fix Rate', () => {
   it('shows a zero-state when totalCompletedJobs is 0', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     vi.mocked(getFirstTimeFixRate).mockResolvedValue(
       makeFirstTimeFixRateReport({ totalCompletedJobs: 0, onSiteOnlyCompletedJobs: 0, rate: null }),
     );
@@ -202,14 +208,14 @@ describe('ReportsPage - First-Time Fix Rate', () => {
   });
 
   it('renders the rate as a percentage when data is present', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     renderPage();
     expect(await screen.findByText('60.0%')).toBeInTheDocument();
     expect(screen.getByText('6 of 10 completed jobs')).toBeInTheDocument();
   });
 
   it('clicking Refresh re-fetches First-Time Fix Rate', async () => {
-    mockUser('SERVICE_HEAD');
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('First-Time Fix Rate');

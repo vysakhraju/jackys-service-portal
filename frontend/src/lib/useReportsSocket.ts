@@ -20,7 +20,8 @@ interface ReportsSocketState {
 /**
  * Owns the single WebSocket connection behind the live Kanban board + approval-aging
  * feed (reports.gateway.ts's /reports namespace). `enabled` should be false for any user
- * outside REPORTS_VIEW_ROLES so a restricted account never even attempts the handshake
+ * lacking REPORTS_DASHBOARD_VIEW (the designation permission matrix's capability - see
+ * ReportsPage's own comment) so a restricted account never even attempts the handshake
  * (the-fool finding #5) - the hook itself always runs (hooks can't be conditional), it
  * just no-ops until enabled flips true.
  *

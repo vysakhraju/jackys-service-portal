@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
 import { StatusBadge } from '../../components/StatusBadge';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getDashboardOverview, getFirstTimeFixRate, getServiceEfficiency } from '../../lib/reportsApi';
 import {
   KANBAN_COLUMNS,
-  canViewReports,
   formatAsOf,
   type ApprovalAgingReport,
   type FirstTimeFixRateReport,
@@ -33,11 +33,16 @@ import { useReportsSocket } from '../../lib/useReportsSocket';
 //     never pushes updates for - are fetched on their own, captured-at-fetch `asOf`, with
 //     their own manual Refresh buttons, and are visually a distinct "report" style rather
 //     than blending into the live feed above them.
-//  5. The role gate runs before ANY network activity - no overview fetch, no socket
-//     connect - for anyone outside REPORTS_VIEW_ROLES, via the `canView` checks below.
+//  5. The access gate runs before ANY network activity - no overview fetch, no socket
+//     connect - for anyone lacking REPORTS_DASHBOARD_VIEW, via the `canView` check below.
+//     2026-09-14 live-tested finding: this used to be a hardcoded REPORTS_VIEW_ROLES role
+//     list, which meant a Super Admin granting REPORTS_DASHBOARD_VIEW to a role via
+//     Designation access (the backend capability has existed since 2026-09-10) had no
+//     effect here at all - the page kept showing "restricted" regardless. Now driven by
+//     the same capability the backend actually checks.
 export function ReportsPage() {
-  const { user } = useAuth();
-  const canView = canViewReports(user?.role.name);
+  const { has } = useMyCapabilities();
+  const canView = has('REPORTS_DASHBOARD_VIEW');
 
   const overviewQuery = useQuery({
     queryKey: ['reports', 'overview'],
@@ -68,11 +73,7 @@ export function ReportsPage() {
   if (!canView) {
     return (
       <div className="px-8 py-6">
-        <p className="max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-          The live operations dashboard is restricted to Service Head / Super Admin /
-          Technical Team Leader - every endpoint and the WebSocket channel behind it are
-          role-gated server-side too.
-        </p>
+        <AccessDeniedNotice what="the Live Job Status Board" />
       </div>
     );
   }

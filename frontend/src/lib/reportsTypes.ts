@@ -5,14 +5,16 @@
 // dismantlingPermissions() did for earlier phases. There's exactly one gate: can this
 // user see the page at all.
 //
-// VIEW_ROLES is copied verbatim from reports.controller.ts/reports.gateway.ts - notably
-// narrower than every other module's view list in this app (no ACCOUNTANT/FINANCE_MANAGER
-// at all; this is an ops board, not a finance one).
-export const REPORTS_VIEW_ROLES = ['SERVICE_HEAD', 'SUPER_ADMIN', 'TECHNICAL_TEAM_LEADER'];
-
-export function canViewReports(roleName: string | undefined): boolean {
-  return !!roleName && REPORTS_VIEW_ROLES.includes(roleName);
-}
+// The page-level access check used to live here as a hardcoded REPORTS_VIEW_ROLES role
+// list (canViewReports()) - removed 2026-09-14 (live-tested finding): the backend had
+// already migrated to the designation permission matrix's REPORTS_DASHBOARD_VIEW/
+// REPORTS_QUALITY_VIEW/REPORTS_OPERATIONAL_VIEW/REPORTS_FINANCE_VIEW capabilities
+// (@RequiresCapability on each reports/*.controller.ts, plus ReportsGateway's own
+// userCanViewDashboard()), so a Super Admin granting one of those to a role via
+// Designation access had zero visible effect - this file's hardcoded list still said no.
+// Each Reports & Dashboards page (ReportsPage/QualityReportsPage/OperationalReportsPage/
+// FinanceReportsPage) now calls useMyCapabilities().has(<its own capability key>) directly
+// instead - see each page's own top-of-file comment.
 
 // ---------------------------------------------------------------------------------------
 // Kanban board (BRD 18.1 Job Status Board)
@@ -149,23 +151,16 @@ export function formatAsOf(asOf: string | undefined): string {
 // =========================================================================================
 // BRD 18.2/18.3/18.4 - Finance/Quality/Operational reports (Frontend Phase 14). Shapes
 // mirror src/reports/{finance,quality,operational}-reports.service.ts exactly. Same
-// "purely read-only, one gate per page" shape as 18.1 above - three separate role lists,
-// though, not one: Finance is finance-department-flavoured (ACCOUNTANT/FINANCE_MANAGER
-// join SERVICE_HEAD/SUPER_ADMIN), Quality and Operational both reuse REPORTS_VIEW_ROLES
-// verbatim (same operational-leadership audience as the Live Board, copied from
-// quality-reports.controller.ts/operational-reports.controller.ts).
+// "purely read-only, one gate per page" shape as 18.1 above - each page's own access check
+// is now a designation-matrix capability (REPORTS_FINANCE_VIEW / REPORTS_QUALITY_VIEW /
+// REPORTS_OPERATIONAL_VIEW) via useMyCapabilities(), not a hardcoded role list here - see
+// the removed canViewReports()/canViewFinanceReports() comment above for why.
 //
 // A number typed `number | null` below means the backend genuinely has no data to compute
 // it from (see each service's own doc comment for why) - always render "—", never a
 // fabricated 0. Dates arrive over HTTP as ISO strings, not `Date` instances - typed as
 // `string` here to match the wire shape, same as KanbanCard.updatedAt above.
 // =========================================================================================
-
-export const FINANCE_REPORTS_VIEW_ROLES = ['ACCOUNTANT', 'FINANCE_MANAGER', 'SERVICE_HEAD', 'SUPER_ADMIN'];
-
-export function canViewFinanceReports(roleName: string | undefined): boolean {
-  return !!roleName && FINANCE_REPORTS_VIEW_ROLES.includes(roleName);
-}
 
 // ---------------------------------------------------------------------------------------
 // Finance summary (BRD 18.2)
