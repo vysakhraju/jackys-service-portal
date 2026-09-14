@@ -7,6 +7,8 @@ import { Delivery, DeliveryStatus } from './entities/delivery.entity';
 // pattern InventoryService.consumeReservationsOnQcApproval() already uses for JobCard.
 import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
+import { User, UserStatus } from '../auth/entities/user.entity';
+import { RoleName } from '../auth/entities/role.entity';
 import { JobCardsService } from '../job-cards/job-cards.service';
 import { InvoicingService } from '../invoicing/invoicing.service';
 import { CreateDeliveryDto } from './dto/create-delivery.dto';
@@ -25,11 +27,29 @@ export class DeliveryService {
   constructor(
     @InjectRepository(Delivery)
     private deliveryRepository: Repository<Delivery>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     @InjectDataSource()
     private dataSource: DataSource,
     private jobCardsService: JobCardsService,
     private invoicingService: InvoicingService,
   ) {}
+
+  /**
+   * #218 (2026-09-10): backs the Dispatch delivery picker with real names instead of a
+   * pasted UUID. GET /users is SUPER_ADMIN/SERVICE_HEAD-only, unusable by whoever actually
+   * dispatches (DELIVERY_MANAGE = LOGISTICS_DISPATCHER/DRIVER) - this is a narrow,
+   * purpose-built list gated the same as the dispatch action itself, not a general user
+   * directory.
+   */
+  async listActiveDrivers(): Promise<{ id: string; name: string }[]> {
+    const drivers = await this.userRepository.find({
+      where: { role: { name: RoleName.DRIVER }, status: UserStatus.ACTIVE },
+      relations: { role: true },
+      order: { firstName: 'ASC', lastName: 'ASC' },
+    });
+    return drivers.map((d) => ({ id: d.id, name: d.fullName }));
+  }
 
   private async generateDeliveryNumber(manager: EntityManager): Promise<string> {
     const prefix = 'DLV-';
@@ -203,6 +223,16 @@ export class DeliveryService {
 
     if (delivery.status !== DeliveryStatus.PENDING) {
       throw new BadRequestException(`Cannot dispatch: delivery is ${delivery.status}, not PENDING.`);
+    }
+
+    if (driverUserId) {
+      // #218 (2026-09-10): this endpoint accepted any user id with zero role validation
+      // until now - found while building the driver-name picker above. Mirrors
+      // AppointmentsService.assignTechnician()'s own role-check pattern.
+      const driver = await this.userRepository.findOne({ where: { id: driverUserId }, relations: { role: true } });
+      if (!driver || driver.role.name !== RoleName.DRIVER) {
+        throw new BadRequestException('driverUserId must belong to a user with the Driver role.');
+      }
     }
 
     delivery.status = DeliveryStatus.DISPATCHED;

@@ -3,13 +3,15 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { DeliveryService } from './delivery.service';
 import { DeliveryController } from './delivery.controller';
 import { Delivery } from './entities/delivery.entity';
+import { User } from '../auth/entities/user.entity';
 import { JobCardsModule } from '../job-cards/job-cards.module';
 import { InvoicingModule } from '../invoicing/invoicing.module';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Delivery]),
+    // User added #218 (2026-09-10) for listActiveDrivers()/dispatch()'s role check.
+    TypeOrmModule.forFeature([Delivery, User]),
     // Needed for the ready-pool/lookup reads (JobCardsService.findReadyForDelivery,
     // findByDeliveryId, findById) - the actual atomic claim/release mutations in
     // create()/capturePod()/cancel() reach past this into the JobCard entity directly via

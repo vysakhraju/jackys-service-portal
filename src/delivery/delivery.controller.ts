@@ -39,6 +39,14 @@ export class DeliveryController {
     return this.deliveryService.findReady(warrantyStatus);
   }
 
+  @Get('drivers')
+  @RequiresCapability('DELIVERY_MANAGE')
+  @ApiOperation({ summary: '#218: list active Driver users, for the Dispatch delivery name-based picker (GET /users is admin-only, unusable here)' })
+  @ApiResponse({ status: 200, description: 'Active drivers as {id, name}' })
+  async listDrivers() {
+    return this.deliveryService.listActiveDrivers();
+  }
+
   @Get('job-card/:jobCardId')
   @RequiresCapability('DELIVERY_MANAGE')
   @ApiOperation({ summary: 'Get the delivery a Job Card is attached to, if any' })

@@ -8,11 +8,15 @@ import { InvoiceStatus } from '../invoicing/entities/invoice.entity';
 describe('DeliveryService', () => {
   let service: DeliveryService;
   let deliveryRepository: any;
+  let userRepository: any;
   let dataSource: any;
   let manager: any;
   let jobCardsService: any;
   let invoicingService: any;
   let queryBuilder: any;
+
+  const driverUser = (overrides: any = {}) =>
+    ({ id: 'driver-1', firstName: 'Sanjay', lastName: 'Rao', fullName: 'Sanjay Rao', status: 'ACTIVE', role: { name: 'DRIVER' }, ...overrides } as any);
 
   const delivery = (overrides: any = {}) =>
     ({
@@ -64,6 +68,10 @@ describe('DeliveryService', () => {
       find: jest.fn(),
       save: jest.fn((entity: any) => Promise.resolve(entity)),
     };
+    userRepository = {
+      findOne: jest.fn().mockResolvedValue(driverUser()),
+      find: jest.fn().mockResolvedValue([]),
+    };
     jobCardsService = {
       findById: jest.fn(),
       findReadyForDelivery: jest.fn(),
@@ -74,7 +82,7 @@ describe('DeliveryService', () => {
       isPayableForDelivery: jest.fn(),
     };
 
-    service = new DeliveryService(deliveryRepository, dataSource, jobCardsService, invoicingService);
+    service = new DeliveryService(deliveryRepository, userRepository, dataSource, jobCardsService, invoicingService);
   });
 
   describe('findById', () => {
@@ -238,6 +246,52 @@ describe('DeliveryService', () => {
       deliveryRepository.findOne.mockResolvedValue(delivery({ status: DeliveryStatus.DISPATCHED }));
 
       await expect(service.dispatch('dlv-1')).rejects.toThrow(BadRequestException);
+    });
+
+    // #218 (2026-09-10): dispatch() used to accept any driverUserId with zero role check.
+    it('dispatches fine with no driverUserId at all - never queries the user repository', async () => {
+      deliveryRepository.findOne.mockResolvedValue(delivery({ status: DeliveryStatus.PENDING }));
+
+      const result = await service.dispatch('dlv-1');
+
+      expect(result.status).toBe(DeliveryStatus.DISPATCHED);
+      expect(result.driverUserId).toBeNull();
+      expect(userRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects a driverUserId that does not exist', async () => {
+      deliveryRepository.findOne.mockResolvedValue(delivery({ status: DeliveryStatus.PENDING }));
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.dispatch('dlv-1', 'nonexistent')).rejects.toThrow(BadRequestException);
+    });
+
+    it("rejects a driverUserId that doesn't hold the Driver role", async () => {
+      deliveryRepository.findOne.mockResolvedValue(delivery({ status: DeliveryStatus.PENDING }));
+      userRepository.findOne.mockResolvedValue(driverUser({ role: { name: 'ACCOUNTANT' } }));
+
+      await expect(service.dispatch('dlv-1', 'acct-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('listActiveDrivers', () => {
+    it('queries only active DRIVER users, ordered by name, mapped to {id, name}', async () => {
+      userRepository.find.mockResolvedValue([driverUser(), driverUser({ id: 'driver-2', fullName: 'Amit Shah' })]);
+
+      const result = await service.listActiveDrivers();
+
+      expect(userRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ status: 'ACTIVE' }) }),
+      );
+      expect(result).toEqual([
+        { id: 'driver-1', name: 'Sanjay Rao' },
+        { id: 'driver-2', name: 'Amit Shah' },
+      ]);
+    });
+
+    it('returns an empty array when no drivers are active', async () => {
+      userRepository.find.mockResolvedValue([]);
+      expect(await service.listActiveDrivers()).toEqual([]);
     });
   });
 
