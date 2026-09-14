@@ -145,6 +145,44 @@ describe('TechnicianService', () => {
       expect(appointmentsService.markOnSite).toHaveBeenCalledWith('apt-1', 'lead-1', {});
       expect(result).toEqual(expect.objectContaining({ appointmentId: 'apt-1' }));
     });
+
+    // Live-tested bug fix (2026-09-14): a Job Card already handed to a workshop technician
+    // used to still be reopenable via "Start Visit" by the field technician who did the
+    // original diagnosis - assertOwnership alone doesn't catch this, since
+    // appointment.technicianId never changes when a Job Card moves to the workshop.
+    it('blocks a TECHNICIAN_FIELD user from restarting a visit once the Job Card has been assigned to a workshop technician', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ status: AppointmentStatus.ON_SITE }));
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, assignedWorkshopTechnicianId: 'workshop-tech-1' }),
+      );
+
+      await expect(service.startVisit('apt-1', dto, fieldTech(), {})).rejects.toThrow(ForbiddenException);
+      expect(appointmentsService.markOnSite).not.toHaveBeenCalled();
+      expect(visitRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('still allows a TECHNICIAN_FIELD user to resume their own on-site-repair visit when the Job Card exists but has NOT been assigned to a workshop technician', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ status: AppointmentStatus.ON_SITE }));
+      visitRepository.findOne.mockResolvedValue(visit());
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ section: JobCardSection.ON_SITE_REPAIR, assignedWorkshopTechnicianId: null }));
+
+      const result = await service.startVisit('apt-1', dto, fieldTech(), {});
+
+      expect(result).toEqual(expect.objectContaining({ appointmentId: 'apt-1' }));
+    });
+
+    it('allows a supervisory role to restart a visit even when the Job Card is already assigned to a workshop technician', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ technicianId: 'someone-else', status: AppointmentStatus.ON_SITE }));
+      visitRepository.findOne.mockResolvedValue(visit());
+      jobCardRepository.findOne.mockResolvedValue(
+        jobCard({ section: JobCardSection.WORKSHOP, assignedWorkshopTechnicianId: 'workshop-tech-1' }),
+      );
+
+      const result = await service.startVisit('apt-1', dto, supervisor('lead-1'), {});
+
+      expect(result).toEqual(expect.objectContaining({ appointmentId: 'apt-1' }));
+      expect(jobCardRepository.findOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('captureSerialNumber', () => {

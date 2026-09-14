@@ -82,6 +82,27 @@ export class TechnicianService {
     const appointment = await this.appointmentsService.findById(appointmentId);
     this.assertOwnership(appointment.technicianId, caller);
 
+    // Live-tested bug fix (2026-09-14): assertOwnership above only checks that the CALLER
+    // is still the appointment's own field technician - it says nothing about whether the
+    // repair has since moved on. Once a Job Card exists and has been handed to a Workshop
+    // Technician (assignedWorkshopTechnicianId set), the item has physically left the field
+    // technician's hands; without this check they could still reopen "Start Visit" on their
+    // mobile app (appointment.technicianId never changes) and re-capture GPS/S/N/fault data
+    // on a job a workshop technician now owns - exactly what was reported live: a Job Card
+    // already assigned to a Workshop Technician was still startable from the original field
+    // technician's app. Scoped to TECHNICIAN_FIELD only (mirrors assertOwnership's own
+    // scoping) so a supervisor can still intervene if ever genuinely needed, and scoped to
+    // "assigned to a workshop technician" specifically (not "any Job Card exists") so the
+    // legitimate on-site-repair resume-after-crash case below is untouched.
+    if (caller.role?.name === SELF_SERVICE_ONLY_ROLE) {
+      const existingJobCard = await this.jobCardRepository.findOne({ where: { appointmentId } });
+      if (existingJobCard?.assignedWorkshopTechnicianId) {
+        throw new ForbiddenException(
+          `Cannot start/reopen this visit: Job Card ${existingJobCard.jobCardNumber} has already been assigned to a workshop technician - the item is no longer with you.`,
+        );
+      }
+    }
+
     if (appointment.status !== AppointmentStatus.ON_SITE) {
       // First arrival - reuses AppointmentsService's own status-transition guard (throws
       // BadRequestException unless CONFIRMED/TECHNICIAN_ASSIGNED) instead of duplicating it.

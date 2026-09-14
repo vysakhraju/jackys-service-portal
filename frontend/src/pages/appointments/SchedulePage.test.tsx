@@ -18,6 +18,7 @@ vi.mock('../../lib/appointmentsApi', () => ({
   listAppointments: vi.fn(),
   markAppointmentOnSite: vi.fn(),
   resolveMapLink: vi.fn(),
+  updateAppointment: vi.fn(),
 }));
 // #218: Service centre/Technician filter+form fields are now NamePickers backed by these.
 vi.mock('../../lib/masterDataApi', () => ({
@@ -28,7 +29,7 @@ vi.mock('../../lib/technicianScheduleApi', () => ({
 }));
 
 import { useAuth } from '../../lib/auth';
-import { assignTechnician, createAppointment, getAppointmentDashboardStats, getSchedulingGrid, listAppointments, resolveMapLink } from '../../lib/appointmentsApi';
+import { assignTechnician, createAppointment, getAppointmentDashboardStats, getSchedulingGrid, getVisit, listAppointments, resolveMapLink, updateAppointment } from '../../lib/appointmentsApi';
 import { listServiceCentres } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { SchedulePage } from './SchedulePage';
@@ -93,6 +94,8 @@ beforeEach(() => {
   vi.mocked(getAppointmentDashboardStats).mockReset().mockResolvedValue(makeAppointmentDashboardStats());
   vi.mocked(createAppointment).mockReset();
   vi.mocked(resolveMapLink).mockReset();
+  vi.mocked(getVisit).mockReset().mockRejectedValue({ response: { status: 404 } });
+  vi.mocked(updateAppointment).mockReset();
   vi.mocked(getSchedulingGrid).mockReset().mockResolvedValue(schedulingGridFixture());
   vi.mocked(listServiceCentres).mockReset().mockResolvedValue([{ id: 'sc-1', name: 'Dubai Service Centre' }] as any);
   vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
@@ -233,6 +236,46 @@ describe('SchedulePage - appointment cancellation guard (Job Card already exists
     await screen.findByText('APT-0201');
     const row = screen.getByText('APT-0201').closest('tr')!;
     expect(within(row).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+});
+
+// Live-tested bug fix (2026-09-14): invoiceNumber used to be settable only on the CREATE
+// form - once an appointment existed without one, there was no way to add it later, which
+// permanently blocked Job Card creation (FR-05). This is the fix: an inline Add/Edit control
+// on the View detail modal.
+describe('SchedulePage - invoice number can be added after the appointment already exists', () => {
+  it('lets the invoice number be added from the View modal when it is missing, and shows the saved value afterward', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-no-invoice',
+          appointmentNumber: 'APT-0300',
+          status: 'COMPLETED',
+          invoiceNumber: null,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(updateAppointment).mockResolvedValue(
+      makeAppointment({ id: 'appt-no-invoice', appointmentNumber: 'APT-0300', invoiceNumber: 'INV-2026-00123' }),
+    );
+    renderPage();
+
+    await screen.findByText('APT-0300');
+    fireEvent.click(within(screen.getByText('APT-0300').closest('tr')!).getByRole('button', { name: 'View' }));
+
+    await screen.findByRole('heading', { name: /APT-0300/ });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.change(screen.getByPlaceholderText('e.g. INV-2026-00123'), { target: { value: 'INV-2026-00123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(updateAppointment).toHaveBeenCalledWith('appt-no-invoice', { invoiceNumber: 'INV-2026-00123' }),
+    );
+    await screen.findByText('INV-2026-00123');
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
   });
 });
 

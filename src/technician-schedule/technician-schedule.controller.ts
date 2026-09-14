@@ -16,19 +16,21 @@ import { AuditAction } from '../auth/entities/audit-log.entity';
 // Migrated onto the designation permission matrix (2026-09-10) as TECHNICIAN_SCHEDULE_GANTT -
 // see capability-catalog.ts's "Technician" section, same membership.
 //
-// Field/workshop scheduling split (2026-09-10): getGanttBoard() below is UNCHANGED and
-// stays live (nothing was removed). getWorkshopQueue() reuses the same
-// TECHNICIAN_SCHEDULE_GANTT capability as the Gantt board (same "who plans workshop work"
-// audience - Team Leader). getFieldSchedule() deliberately does NOT reuse
-// TECHNICIAN_SCHEDULE_GANTT (TL-only) - it's gated by FIELD_SCHEDULE_REORDER instead
-// (CCE + TL), so a CCE who's allowed to drag-reorder the board can also actually see it.
-// Gating the view by the same capability as the write it's paired with, rather than by a
-// capability scoped to a different, TL-only board, avoids a self-contradiction where a
-// role could reorder a screen it isn't allowed to load. Note: the business's own framing
-// says "CCE assigns workshop jobs" too, but the EXISTING WorkshopController assign/
-// reassign actions (reused unchanged by the Workshop Queue's assign action) are gated
-// WORKSHOP_ASSIGN = Team Leader only, not CCE - flagged rather than silently widened,
-// same as before.
+// Field/workshop scheduling split (2026-09-10, revised 2026-09-14): getGanttBoard() below is
+// UNCHANGED and stays live (nothing was removed), still gated TECHNICIAN_SCHEDULE_GANTT.
+// getWorkshopQueue() originally reused that same capability, on the theory that Workshop
+// Queue and the Assignment Board were "the same planning audience" - live-tested finding
+// (2026-09-14): that bundling meant there was no way to grant a CCE or Workshop Technician
+// visibility into the workshop backlog (which they'd have every reason to want) without ALSO
+// handing them the Assignment Board's drag-and-drop control over every technician's whole
+// day. getWorkshopQueue() now has its own capability, WORKSHOP_QUEUE_VIEW, so an admin can
+// grant it independently via Designation access. getFieldSchedule() deliberately does NOT
+// reuse TECHNICIAN_SCHEDULE_GANTT (TL-only) either - it's gated by FIELD_SCHEDULE_REORDER
+// instead (CCE + TL), so a CCE who's allowed to drag-reorder the board can also actually see
+// it. Note: the business's own framing says "CCE assigns workshop jobs" too, but the
+// EXISTING WorkshopController assign/reassign actions (reused unchanged by the Workshop
+// Queue's assign action) are gated WORKSHOP_ASSIGN = Team Leader only, not CCE - flagged
+// rather than silently widened, same as before.
 
 @ApiTags('technician-schedule')
 @ApiBearerAuth()
@@ -46,7 +48,7 @@ export class TechnicianScheduleController {
   }
 
   @Get('workshop-queue')
-  @RequiresCapability('TECHNICIAN_SCHEDULE_GANTT')
+  @RequiresCapability('WORKSHOP_QUEUE_VIEW')
   @ApiOperation({ summary: 'Workshop Queue board (2026-09-10): per-technician FIFO backlog of actively-assigned WORKSHOP Job Cards, no time axis, plus each technician\'s (display-only) capacity gauge and the unassigned-workshop-job pool' })
   async getWorkshopQueue() {
     return this.scheduleService.getWorkshopQueue();

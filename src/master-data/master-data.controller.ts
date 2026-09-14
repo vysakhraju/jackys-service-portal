@@ -136,7 +136,15 @@ export class MasterDataController {
     return this.masterDataService.createFaultSymptom(data);
   }
 
+  // findAllFaultSymptoms/findFaultByCode/findSymptomByCode gated MASTER_DATA_VIEW
+  // (2026-09-14, live-tested finding): a real gap, not a migration - these had NO
+  // @Roles()/@RequiresCapability() at all before, so RolesGuard (fails open with no
+  // decorator) let any authenticated user browse them. Confirmed unused anywhere outside
+  // the Master Data admin UI (FaultSymptomsPage) before adding this gate, so nothing else
+  // in the app breaks - see capability-catalog.ts's MASTER_DATA_VIEW entry for the full
+  // reasoning and which endpoints were deliberately left open instead.
   @Get('fault-symptoms')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Get all fault/symptoms' })
   @ApiQuery({ name: 'category', required: false, enum: ApplianceCategory })
   @ApiResponse({ status: 200, type: [FaultSymptom] })
@@ -145,6 +153,7 @@ export class MasterDataController {
   }
 
   @Get('fault-symptoms/code/:faultCode')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Find fault by code' })
   @ApiResponse({ status: 200, type: FaultSymptom })
   findFaultByCode(@Param('faultCode') faultCode: string) {
@@ -152,6 +161,7 @@ export class MasterDataController {
   }
 
   @Get('fault-symptoms/symptom/:symptomCode')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Find symptom by code' })
   @ApiResponse({ status: 200, type: FaultSymptom })
   findSymptomByCode(@Param('symptomCode') symptomCode: string) {
@@ -231,7 +241,12 @@ export class MasterDataController {
     return this.masterDataService.createSparePartModel(data);
   }
 
+  // Gated MASTER_DATA_VIEW (2026-09-14) - confirmed only used by the Master Data admin UI
+  // (SparePartModelsPage, and via useSparePartModelOptions by PriceListsPage/
+  // ComponentYieldPage's own model pickers - both themselves Master Data admin pages), not
+  // by any operational flow elsewhere. See MASTER_DATA_VIEW's own catalog comment.
   @Get('spare-part-models')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Get all spare part models' })
   @ApiResponse({ status: 200, type: [SparePartModel] })
   findAllSparePartModels() {
@@ -248,7 +263,11 @@ export class MasterDataController {
     return this.masterDataService.createServicePriceList(data);
   }
 
+  // Gated MASTER_DATA_VIEW (2026-09-14) - confirmed only called from PriceListsPage (Master
+  // Data admin). Estimates/Invoicing compute prices via MasterDataService directly in-
+  // process, never through this HTTP route, so they're unaffected.
   @Get('price-lists')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Get price list by activity type' })
   @ApiQuery({ name: 'activityType', required: true, enum: ServiceActivityType })
   @ApiQuery({ name: 'modelId', required: false })
@@ -270,7 +289,9 @@ export class MasterDataController {
     return this.masterDataService.createKpiRule(data);
   }
 
+  // Gated MASTER_DATA_VIEW (2026-09-14) - only used by KpiRulesPage (Master Data admin).
   @Get('kpi-rules')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Get all KPI rules' })
   @ApiResponse({ status: 200, type: [TechnicianKpiRule] })
   findAllKpiRules() {
@@ -287,7 +308,11 @@ export class MasterDataController {
     return this.masterDataService.createNotificationTemplate(data);
   }
 
+  // Gated MASTER_DATA_VIEW (2026-09-14) - only used by NotificationTemplatesPage (Master
+  // Data admin). The actual notification-sending flow reads templates via
+  // MasterDataService directly in-process, never through this HTTP route.
   @Get('notification-templates')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Get all notification templates' })
   @ApiResponse({ status: 200, type: [NotificationTemplate] })
   findAllTemplates() {
@@ -295,6 +320,7 @@ export class MasterDataController {
   }
 
   @Get('notification-templates/:trigger/:channel')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Get notification template by trigger & channel' })
   @ApiResponse({ status: 200, type: NotificationTemplate })
   findTemplate(
@@ -318,7 +344,12 @@ export class MasterDataController {
     });
   }
 
+  // Gated MASTER_DATA_VIEW (2026-09-14) - only used by WarrantyMasterPage (Master Data
+  // admin) as a manual lookup tool. The real S/N warranty check during a technician's
+  // field visit (TechnicianService.captureSerialNumber, FR-03) calls
+  // MasterDataService.checkWarranty() directly in-process, never through this HTTP route.
   @Get('warranty-master/check/:serialNumber')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiQuery({ name: 'brand', required: false })
   @ApiOperation({ summary: 'Check warranty status by serial number' })
   @ApiResponse({ status: 200 })
@@ -346,7 +377,11 @@ export class MasterDataController {
     return this.masterDataService.findYieldByModel(modelId);
   }
 
+  // Gated MASTER_DATA_VIEW (2026-09-14) - only used by ComponentYieldPage (Master Data
+  // admin). findYieldByModel just above is deliberately left open - HarvestModal
+  // (Dismantling, used by technicians logging harvested components) calls it directly.
   @Get('component-yield/category/:category')
+  @RequiresCapability('MASTER_DATA_VIEW')
   @ApiOperation({ summary: 'Get component yield by recovery category' })
   @ApiResponse({ status: 200, type: [ComponentYieldMatrix] })
   findYieldByCategory(@Param('category') category: RecoveryCategory) {

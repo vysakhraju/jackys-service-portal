@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, createEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -154,7 +154,15 @@ function dragOverOnly(source: Element, target: Element, clientX = 500) {
   return dataTransfer;
 }
 
+// Pinned bug fix (2026-09-14): the page defaults its board date to todayIsoDate() (real
+// `new Date()`), and every fixture/assertion below is written against a literal
+// '2026-09-09' - this suite only ever passed by coincidence of which real calendar day it
+// happened to run on, and broke the moment "today" moved on. shouldAdvanceTime keeps
+// findBy/waitFor's real async polling working under fake timers, same pattern already used
+// in AsyncSearchPicker.test.tsx.
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date('2026-09-09T12:00:00.000Z'));
   vi.mocked(getGanttBoard).mockReset();
   vi.mocked(addCrewHelper).mockReset();
   vi.mocked(assignWorkshopTechnician).mockReset();
@@ -176,6 +184,10 @@ beforeEach(() => {
     y: 0,
     toJSON: () => {},
   } as DOMRect);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('TechnicianGanttPage', () => {

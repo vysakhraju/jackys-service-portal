@@ -334,8 +334,23 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
   },
   {
     key: 'TECHNICIAN_SCHEDULE_GANTT',
-    label: 'View the original combined Gantt board, or its Workshop Queue split successor (Field Technician Schedule moved to FIELD_SCHEDULE_REORDER - see that entry)',
+    label: 'View the Technician Assignment Board (the full drag-and-drop Gantt over every technician\'s day - Field Technician Schedule moved to FIELD_SCHEDULE_REORDER, Workshop Queue moved to WORKSHOP_QUEUE_VIEW - see those entries)',
     module: 'Technician',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'WORKSHOP_QUEUE_VIEW',
+    label: 'View the Workshop Queue (per-technician FIFO backlog of assigned Job Cards, no drag-and-drop)',
+    module: 'Technician',
+    // Split out from TECHNICIAN_SCHEDULE_GANTT (2026-09-14, live-tested finding): the two
+    // used to share one capability, so granting Workshop Queue to a CCE or Workshop
+    // Technician - who legitimately just wants to see the workshop backlog - would have
+    // also handed them the full Assignment Board's drag-and-drop control over every
+    // technician's entire day. defaultRoles preserves exactly who could already reach
+    // getWorkshopQueue() before the split (TECHNICAL_TEAM_LEADER, via the shared key) -
+    // zero behavior change on its own; an admin can now separately grant just this one to
+    // CCE/Workshop Technician via Designation access, which was the whole point of the ask.
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
     migrated: true,
   },
@@ -442,6 +457,24 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     key: 'MASTER_DATA_BULK_IMPORT',
     label: 'Bulk import master data from CSV/Excel',
     module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_VIEW',
+    label: 'Browse Master Data (fault/symptom codes, spare part models, price lists, KPI rules, notification templates, warranty master, component yield by category)',
+    module: 'Master Data',
+    // New gate, not a migration (2026-09-14, live-tested finding): these list/lookup
+    // endpoints had NO @Roles()/@RequiresCapability() at all before this - RolesGuard
+    // fails open with no decorator, so any authenticated user (CCE, Workshop Technician,
+    // etc.) could already browse every Master Data admin tab. defaultRoles is deliberately
+    // empty - this is a genuine tightening the business asked for, not a zero-behavior-
+    // change migration, so nobody but SUPER_ADMIN/SERVICE_HEAD gets it until an admin
+    // explicitly grants it via Designation access. Deliberately does NOT cover
+    // service-centres or spare-parts (list) or component-yield/model/:modelId - those are
+    // genuinely reused outside the Master Data section itself (SchedulePage/ContractsPage's
+    // service centre picker, WorkshopPage/InventoryPage's spare part lookups, dismantling's
+    // HarvestModal) and gating them here would break those unrelated, already-working flows.
     defaultRoles: [],
     migrated: true,
   },

@@ -84,15 +84,39 @@ export function ActiveBadge({ active }: { active: boolean }) {
   );
 }
 
+// Live-tested finding (2026-09-14): a 403 from RolesGuard's designation-matrix check reads
+// as raw backend text - "Access denied. Missing capability: TECHNICIAN_SCHEDULE_GANTT." -
+// which a CCE/Workshop Technician hitting it read as "this feature doesn't exist for me",
+// not "an admin can grant this". Every one of these IS grantable today via
+// Users -> Designation access (the capability catalog backs every @RequiresCapability()
+// check in the app) - this was a UX gap, not a missing feature. Rather than touch every
+// page individually, this shared component (already used by ~40 pages for every error
+// state) now recognizes both 403 shapes RolesGuard throws and appends one plain-language
+// line pointing at the actual fix, while still showing the real message beneath it for
+// anyone diagnosing the exact key/role.
+const MISSING_CAPABILITY_RE = /Missing capability: (\S+?)\.?$/;
+const MISSING_ROLE_RE = /^Access denied\. Required roles: /;
+
+function accessDeniedHint(message: string): string | null {
+  if (MISSING_CAPABILITY_RE.test(message) || MISSING_ROLE_RE.test(message)) {
+    return "You don't have access to this yet. A Super Admin can grant it under Users → Designation access (tick the capability for your designation - it takes effect immediately, no re-login needed).";
+  }
+  return null;
+}
+
 export function ErrorNotice({ error }: { error: unknown }) {
   if (!error) return null;
+  const status = (error as AxiosError).response?.status;
   const message =
     (error as AxiosError<{ message?: string | string[] }>).response?.data?.message ??
     (error as Error).message ??
     'Something went wrong.';
+  const text = Array.isArray(message) ? message.join(', ') : message;
+  const hint = status === 403 ? accessDeniedHint(text) : null;
   return (
     <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-      {Array.isArray(message) ? message.join(', ') : message}
+      <p>{text}</p>
+      {hint && <p className="mt-1 text-red-600">{hint}</p>}
     </div>
   );
 }

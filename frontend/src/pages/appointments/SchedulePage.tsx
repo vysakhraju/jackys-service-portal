@@ -21,6 +21,7 @@ import {
   listAppointments,
   markAppointmentOnSite,
   resolveMapLink,
+  updateAppointment,
 } from '../../lib/appointmentsApi';
 import {
   APPOINTMENT_CHANNELS,
@@ -766,7 +767,7 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
           <DetailRow label="Scheduled">{new Date(appointment.scheduledAt).toLocaleString()}</DetailRow>
           <DetailRow label="Brand / model">{[appointment.brand, appointment.modelNumber].filter(Boolean).join(' / ') || '—'}</DetailRow>
           <DetailRow label="Serial number">{appointment.serialNumber ?? '—'}</DetailRow>
-          <DetailRow label="Invoice number">{appointment.invoiceNumber ?? '—'}</DetailRow>
+          <DetailRow label="Invoice number"><InvoiceNumberField appointment={appointment} /></DetailRow>
           <DetailRow label="Service address coordinates">
             {appointment.customerLat != null && appointment.customerLng != null ? (
               <a
@@ -828,6 +829,75 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
         )}
       </div>
     </Modal>
+  );
+}
+
+// Live-tested bug fix (2026-09-14): invoiceNumber was only ever collectable on the CREATE
+// form - once an appointment existed without one (easy to do; it was never required there),
+// there was no way to add it later, and JobCardsService.create()'s Gate 1 (FR-05) blocks
+// Job Card creation forever without it. UpdateAppointmentDto already accepts invoiceNumber
+// (PartialType(CreateAppointmentDto)) and AppointmentsService.update() already persists any
+// field via Object.assign - the backend was never the blocker, only this screen was missing
+// an edit control for it. Kept inline here (not a full "edit appointment" form, which this
+// app has never had) since this is the one field CCE actually gets stuck needing to add
+// after the fact.
+function InvoiceNumberField({ appointment }: { appointment: Appointment }) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(appointment.invoiceNumber ?? '');
+  const [savedNumber, setSavedNumber] = useState(appointment.invoiceNumber ?? null);
+
+  const saveMutation = useMutation({
+    mutationFn: () => updateAppointment(appointment.id, { invoiceNumber: value.trim() }),
+    onSuccess: (updated) => {
+      setSavedNumber(updated.invoiceNumber ?? value.trim());
+      setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ['appointments'] });
+    },
+  });
+
+  if (!editing) {
+    return (
+      <div className="flex items-center gap-2">
+        <span>{savedNumber ?? '—'}</span>
+        <button
+          type="button"
+          className="text-xs text-slate-500 hover:text-slate-700 hover:underline"
+          onClick={() => {
+            setValue(savedNumber ?? '');
+            setEditing(true);
+          }}
+        >
+          {savedNumber ? 'Edit' : 'Add'}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <input
+          className={inputClass}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="e.g. INV-2026-00123"
+          autoFocus
+        />
+        <button
+          type="button"
+          disabled={!value.trim() || saveMutation.isPending}
+          onClick={() => saveMutation.mutate()}
+          className="rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          Save
+        </button>
+        <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </div>
+      {saveMutation.isError && <ErrorNotice error={saveMutation.error} />}
+    </div>
   );
 }
 
