@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeJobCard } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/jobCardsApi', () => ({
   getJobCard: vi.fn(),
   qcApprove: vi.fn(),
@@ -15,7 +15,7 @@ vi.mock('../../lib/jobCardJourneyApi', () => ({
   searchJobCardJourney: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getJobCard, qcApprove, qcReject } from '../../lib/jobCardsApi';
 import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
 import { QcPage } from './QcPage';
@@ -31,23 +31,18 @@ function renderPage(jobCardId = 'jc-1') {
   );
 }
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: {
-      id: 'user-1',
-      firstName: 'Test',
-      lastName: 'User',
-      email: 't@example.com',
-      employeeId: 'E1',
-      status: 'ACTIVE',
-      lastLoginAt: null,
-      role: { id: 'r1', name: roleName, displayName: roleName },
-    },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14: QcPage now gates on the real capability (useMyCapabilities) rather than a
+// hardcoded QC_GATE_ROLES role array - see QcPage.tsx's own comment. mockCapabilities
+// replaces the old mockUser(roleName) role-array helper.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 beforeEach(() => {
@@ -62,7 +57,7 @@ beforeEach(() => {
 // from every other test in this file which deep-links straight in via ?jobCardId=.
 describe('QcPage - #218 name-based job card picker', () => {
   it('searches and selects a job card, then loads it', async () => {
-    mockUser('QC_OFFICER');
+    mockCapabilities(['QC_GATE_ACCESS']);
     vi.mocked(searchJobCardJourney).mockResolvedValue([
       {
         jobCardId: 'jc-77',
@@ -94,27 +89,38 @@ describe('QcPage - #218 name-based job card picker', () => {
   });
 });
 
-describe('QcPage - role-floor gating (the-fool pre-mortem finding #1)', () => {
-  it('hides Approve/Reject and explains why for a role outside QC_GATE_ROLES', async () => {
-    mockUser('TECHNICIAN_WORKSHOP');
+describe('QcPage - capability-floor gating (2026-09-14: converted from a hardcoded QC_GATE_ROLES role array; the-fool pre-mortem finding #1)', () => {
+  it('hides Approve/Reject and explains why for a caller with no QC_GATE_ACCESS capability', async () => {
+    mockCapabilities([]);
     vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ status: 'READY_FOR_QC' }));
     renderPage();
-    expect(await screen.findByText(/isn't one the backend allows to attempt QC approval\/rejection/i)).toBeInTheDocument();
+    expect(await screen.findByText(/won't allow you to attempt QC approval\/rejection/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Approve → QC Passed/i })).not.toBeInTheDocument();
   });
 
-  it('shows Approve/Reject for a QC_GATE_ROLES member (grant itself is checked server-side, not here)', async () => {
-    mockUser('QC_OFFICER');
+  it('shows Approve/Reject for a caller holding QC_GATE_ACCESS (grant itself is checked server-side, not here)', async () => {
+    mockCapabilities(['QC_GATE_ACCESS']);
     vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ status: 'READY_FOR_QC' }));
     renderPage();
     expect(await screen.findByRole('button', { name: /Approve → QC Passed/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Reject$/i })).toBeInTheDocument();
   });
+
+  it('shows Approve/Reject for a role granted QC_GATE_ACCESS via Designation access, not just a default QC_GATE_ROLES role', async () => {
+    // The whole point of this round's fix: a role with no default membership in
+    // QC_GATE_ACCESS (e.g. WAREHOUSE_CLERK) sees the buttons once Super Admin ticks the
+    // capability for them - proven here by mocking the capability directly, independent
+    // of role name.
+    mockCapabilities(['QC_GATE_ACCESS']);
+    vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ status: 'READY_FOR_QC' }));
+    renderPage();
+    expect(await screen.findByRole('button', { name: /Approve → QC Passed/i })).toBeInTheDocument();
+  });
 });
 
 describe('QcPage - phase boundaries', () => {
   it('links back to Workshop for a job not yet READY_FOR_QC', async () => {
-    mockUser('QC_OFFICER');
+    mockCapabilities(['QC_GATE_ACCESS']);
     vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ status: 'IN_PROGRESS' }));
     renderPage();
     expect(await screen.findByText(/not yet READY_FOR_QC/i)).toBeInTheDocument();
@@ -122,7 +128,7 @@ describe('QcPage - phase boundaries', () => {
   });
 
   it('shows a past-this-screen note for a QC_PASSED job', async () => {
-    mockUser('QC_OFFICER');
+    mockCapabilities(['QC_GATE_ACCESS']);
     vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ status: 'QC_PASSED' }));
     renderPage();
     expect(await screen.findByText(/past what this screen covers/i)).toBeInTheDocument();
@@ -131,7 +137,7 @@ describe('QcPage - phase boundaries', () => {
 
 describe('QcPage - Approve (the-fool pre-mortem finding #2: structured 409 blockers)', () => {
   it('renders each blocker from a 409 stock-shortfall response, not just the raw message', async () => {
-    mockUser('QC_OFFICER');
+    mockCapabilities(['QC_GATE_ACCESS']);
     vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ status: 'READY_FOR_QC' }));
     vi.mocked(qcApprove).mockRejectedValue({
       response: {
@@ -152,7 +158,7 @@ describe('QcPage - Approve (the-fool pre-mortem finding #2: structured 409 block
   });
 
   it('calls qcApprove with the job card id on click', async () => {
-    mockUser('QC_OFFICER');
+    mockCapabilities(['QC_GATE_ACCESS']);
     vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ id: 'jc-42', status: 'READY_FOR_QC' }));
     vi.mocked(qcApprove).mockResolvedValue(makeJobCard({ id: 'jc-42', status: 'QC_PASSED' }));
     const user = userEvent.setup();
@@ -165,7 +171,7 @@ describe('QcPage - Approve (the-fool pre-mortem finding #2: structured 409 block
 
 describe('QcPage - Reject (the-fool pre-mortem finding #3: no dead end)', () => {
   it('shows a link back to Workshop after a successful reject, not a dead end', async () => {
-    mockUser('QC_OFFICER');
+    mockCapabilities(['QC_GATE_ACCESS']);
     vi.mocked(getJobCard).mockResolvedValue(makeJobCard({ id: 'jc-9', status: 'READY_FOR_QC' }));
     vi.mocked(qcReject).mockResolvedValue(makeJobCard({ id: 'jc-9', status: 'IN_PROGRESS', qcRejectionCount: 1 }));
     const user = userEvent.setup();

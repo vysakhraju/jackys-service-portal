@@ -5,7 +5,7 @@ import { useForm } from 'react-hook-form';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   confirmAllReturnsForJobCard,
   confirmReturn,
@@ -23,17 +23,16 @@ import type {
   StockLookupResult,
 } from '../../lib/inventoryTypes';
 
-// Same role sets as InventoryController's own @Roles() - shown here so buttons only
-// appear for someone who could actually use them, not as a substitute for the server's
-// own check.
-const INVENTORY_STAFF_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK'];
-const REVIEW_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
-
+// 2026-09-14: was a plain role-array mirror of InventoryController's own @RequiresCapability()
+// gates - meant Super Admin ticking INVENTORY_STAFF/INVENTORY_REVIEW for some other role via
+// Designation access had no visible effect here (the buttons just never appeared). Now reads
+// the same capability the backend actually checks, so a grant takes effect immediately - same
+// fix already applied to ServiceCentresPage/the Reports pages.
 export function InventoryPage() {
-  const { user } = useAuth();
-  const canGrn = !!user && INVENTORY_STAFF_ROLES.includes(user.role.name);
-  const canConfirmReturn = !!user && INVENTORY_STAFF_ROLES.includes(user.role.name);
-  const canReview = !!user && REVIEW_ROLES.includes(user.role.name);
+  const { has } = useMyCapabilities();
+  const canGrn = has('INVENTORY_STAFF');
+  const canConfirmReturn = has('INVENTORY_STAFF');
+  const canReview = has('INVENTORY_REVIEW');
 
   const queryClient = useQueryClient();
   const staleQuery = useQuery({ queryKey: ['reservations', 'stale'], queryFn: getStaleReservations });

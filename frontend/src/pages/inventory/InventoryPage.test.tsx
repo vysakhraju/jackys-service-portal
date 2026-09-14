@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeReservation } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/inventoryApi', () => ({
   confirmAllReturnsForJobCard: vi.fn(),
   confirmReturn: vi.fn(),
@@ -19,7 +19,7 @@ vi.mock('../../lib/masterDataApi', () => ({
   listSpareParts: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   confirmAllReturnsForJobCard,
   getReturnPendingByJobCard,
@@ -41,23 +41,18 @@ function renderPage() {
   );
 }
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: {
-      id: 'user-1',
-      firstName: 'Test',
-      lastName: 'User',
-      email: 't@example.com',
-      employeeId: 'E1',
-      status: 'ACTIVE',
-      lastLoginAt: null,
-      role: { id: 'r1', name: roleName, displayName: roleName },
-    },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14: InventoryPage now gates on the real capability (useMyCapabilities) rather
+// than a hardcoded role array - see InventoryPage.tsx's own comment. mockCapabilities
+// replaces the old mockUser(roleName) role-array helper.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 beforeEach(() => {
@@ -72,31 +67,42 @@ beforeEach(() => {
   vi.mocked(confirmAllReturnsForJobCard).mockReset();
 });
 
-describe('InventoryPage - role gating', () => {
-  it('shows GRN and Confirm Return to a Warehouse Clerk', async () => {
-    mockUser('WAREHOUSE_CLERK');
+describe('InventoryPage - capability gating (2026-09-14: converted from a hardcoded role array)', () => {
+  it('shows GRN and Confirm Return to anyone holding INVENTORY_STAFF, whatever their role', async () => {
+    mockCapabilities(['INVENTORY_STAFF']);
     renderPage();
     expect(await screen.findByText('Goods Received Note (GRN)')).toBeInTheDocument();
     expect(screen.getByText('Confirm a physical return')).toBeInTheDocument();
   });
 
-  it('hides GRN and Confirm Return from a role with no inventory-staff grant', async () => {
-    mockUser('TECHNICIAN_FIELD');
+  it('shows GRN/Confirm Return/the returns dashboard to a role granted INVENTORY_STAFF via Designation access, not just Warehouse Clerk by default', async () => {
+    // The whole point of this round's fix: a role with no default membership in
+    // INVENTORY_STAFF (e.g. CCE) sees these once Super Admin ticks the capability for
+    // them - proven here by mocking the capability directly, independent of role name.
+    mockCapabilities(['INVENTORY_STAFF']);
+    renderPage();
+    expect(await screen.findByText('Goods Received Note (GRN)')).toBeInTheDocument();
+    expect(screen.getByText(/Job cards with parts pending return/)).toBeInTheDocument();
+  });
+
+  it('hides GRN and Confirm Return from a caller with no INVENTORY_STAFF capability', async () => {
+    mockCapabilities([]);
     renderPage();
     await screen.findByText('Stock lookup');
     expect(screen.queryByText('Goods Received Note (GRN)')).not.toBeInTheDocument();
     expect(screen.queryByText('Confirm a physical return')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Job cards with parts pending return/)).not.toBeInTheDocument();
   });
 
-  it('shows the review buttons on a stale reservation only to a Team Leader+', async () => {
-    mockUser('TECHNICAL_TEAM_LEADER');
+  it('shows the review buttons on a stale reservation only with INVENTORY_REVIEW', async () => {
+    mockCapabilities(['INVENTORY_REVIEW']);
     vi.mocked(getStaleReservations).mockResolvedValue([makeReservation()]);
     renderPage();
     expect(await screen.findByRole('button', { name: 'Approve reallocation' })).toBeInTheDocument();
   });
 
-  it('hides the review buttons on a stale reservation from a plain technician', async () => {
-    mockUser('TECHNICIAN_WORKSHOP');
+  it('hides the review buttons on a stale reservation without INVENTORY_REVIEW', async () => {
+    mockCapabilities([]);
     vi.mocked(getStaleReservations).mockResolvedValue([makeReservation()]);
     renderPage();
     await screen.findByText(/held 30h/i);
@@ -106,9 +112,9 @@ describe('InventoryPage - role gating', () => {
 
 describe('InventoryPage - stock lookup "never received" is distinct from a real zero', () => {
   it('flags a synthesized zero-stock result (no id) as never received via GRN', async () => {
-    // CCE can view stock (READ_ROLES) but can't GRN (INVENTORY_STAFF_ROLES only) - picked
-    // deliberately so only one "Spare part" select renders (Stock lookup's), not two.
-    mockUser('CCE');
+    // A caller who can view stock (INVENTORY_VIEW) but can't GRN (no INVENTORY_STAFF) -
+    // picked deliberately so only one "Spare part" select renders (Stock lookup's), not two.
+    mockCapabilities(['INVENTORY_VIEW']);
     vi.mocked(listSpareParts).mockResolvedValue([
       { id: 'sp-1', code: 'SP-1', name: 'Drum Motor', category: 'MOTOR', brand: null, description: null, unitCost: 0, unitPriceB2B: 0, unitPriceB2C: 0, minStockLevel: 0, vanStockLevel: 0, isActive: true, attributes: null, createdAt: '', updatedAt: '' },
     ]);
@@ -127,7 +133,7 @@ describe('InventoryPage - stock lookup "never received" is distinct from a real 
 
 describe('InventoryPage - review then confirm-return handoff (the-fool: RETURN_PENDING is otherwise a dead end)', () => {
   it('after Approve reallocation, tells the viewer the reservation is now RETURN_PENDING', async () => {
-    mockUser('TECHNICAL_TEAM_LEADER');
+    mockCapabilities(['INVENTORY_REVIEW']);
     vi.mocked(getStaleReservations).mockResolvedValue([makeReservation()]);
     vi.mocked(reviewReservation).mockResolvedValue(makeReservation({ status: 'RETURN_PENDING' }) as any);
     const user = userEvent.setup();
@@ -165,7 +171,7 @@ describe('InventoryPage - returns dashboard (2026-09-14: no reservation id requi
   } as any;
 
   it('shows the dashboard to a Warehouse Clerk, with the job card and its total pending qty', async () => {
-    mockUser('WAREHOUSE_CLERK');
+    mockCapabilities(['INVENTORY_STAFF']);
     vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
     renderPage();
 
@@ -174,8 +180,8 @@ describe('InventoryPage - returns dashboard (2026-09-14: no reservation id requi
     expect(screen.getByText('5')).toBeInTheDocument();
   });
 
-  it('hides the dashboard from a role with no inventory-staff grant', async () => {
-    mockUser('TECHNICIAN_FIELD');
+  it('hides the dashboard from a caller with no INVENTORY_STAFF capability', async () => {
+    mockCapabilities([]);
     vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
     renderPage();
 
@@ -184,7 +190,7 @@ describe('InventoryPage - returns dashboard (2026-09-14: no reservation id requi
   });
 
   it('shows an empty state when nothing is pending return', async () => {
-    mockUser('WAREHOUSE_CLERK');
+    mockCapabilities(['INVENTORY_STAFF']);
     vi.mocked(getReturnPendingByJobCard).mockResolvedValue([]);
     renderPage();
 
@@ -192,7 +198,7 @@ describe('InventoryPage - returns dashboard (2026-09-14: no reservation id requi
   });
 
   it('expands a job card row on click to show each part and its custodian', async () => {
-    mockUser('WAREHOUSE_CLERK');
+    mockCapabilities(['INVENTORY_STAFF']);
     vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
     const user = userEvent.setup();
     renderPage();
@@ -205,7 +211,7 @@ describe('InventoryPage - returns dashboard (2026-09-14: no reservation id requi
   });
 
   it('confirms all returns for the job card in one click and reports success', async () => {
-    mockUser('WAREHOUSE_CLERK');
+    mockCapabilities(['INVENTORY_STAFF']);
     vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
     vi.mocked(confirmAllReturnsForJobCard).mockResolvedValue(
       group.reservations.map((r: any) => ({ ...r, status: 'RETURNED', quantityReturned: r.quantityReserved })),
@@ -222,7 +228,7 @@ describe('InventoryPage - returns dashboard (2026-09-14: no reservation id requi
   });
 
   it("confirming all doesn't require knowing any reservation id - only the job card's own id is sent", async () => {
-    mockUser('WAREHOUSE_CLERK');
+    mockCapabilities(['INVENTORY_STAFF']);
     vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
     vi.mocked(confirmAllReturnsForJobCard).mockResolvedValue([]);
     const user = userEvent.setup();

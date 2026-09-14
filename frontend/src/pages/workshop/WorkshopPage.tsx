@@ -9,6 +9,7 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { NamePicker } from '../../components/pickers/NamePicker';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 import { useWorkshopJobCardSelection } from './WorkshopInventoryContext';
 import {
@@ -37,15 +38,17 @@ function renderJobCardOption(item: JourneySearchResult) {
   );
 }
 
-// TL+ roles that can act on ANY workshop job, mirroring WorkshopController's
-// ASSIGN_ROLES/PRIVILEGED_ROLES exactly. A plain TECHNICIAN_WORKSHOP is only ever allowed
-// to act on the job they're assigned to (WorkshopService.assertOwnership) - the-fool
-// pre-mortem finding #4.
+// TL+ roles that can act on ANY workshop job, mirroring WorkshopController's own
+// PRIVILEGED_ROLES exactly (start-wip/request-spare/complete/request-return's ownership
+// bypass). This one deliberately STAYS a hardcoded role array, not a capability check -
+// per that controller's own comment, it's a plain business-logic ownership bypass, never
+// migrated onto the designation permission matrix (same reasoning as Job Cards'
+// TASK_PAUSE_PRIVILEGED_ROLES). Granting WORKSHOP_ACTION to some other role via
+// Designation access lets them use these actions on their OWN assigned job, same as a
+// plain TECHNICIAN_WORKSHOP always could - it does NOT let them act on every job the way
+// this bypass does, and there's currently no capability that grants that; flagging as a
+// backend limitation, not a frontend gating gap, if that's ever wanted.
 const PRIVILEGED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
-const ASSIGN_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
-// Reservation review is TL+ only - same set as PRIVILEGED_ROLES above, so WorkshopDetail
-// passes isPrivileged straight through as canReview rather than duplicating the list.
-const RETURN_CONFIRM_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK'];
 
 export function WorkshopPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -155,8 +158,12 @@ export function WorkshopPage() {
 function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged: () => void }) {
   const { jobCard, staleReservations, activeReservations } = state;
   const { user } = useAuth();
+  const { has } = useMyCapabilities();
   const isPrivileged = !!user && PRIVILEGED_ROLES.includes(user.role.name);
-  const canAssign = !!user && ASSIGN_ROLES.includes(user.role.name);
+  // 2026-09-14: was ASSIGN_ROLES, a hardcoded mirror of WorkshopController's own
+  // WORKSHOP_ASSIGN gate - now checks the real capability, so a Designation-access grant
+  // actually shows this form instead of only ever working for the 3 hardcoded roles.
+  const canAssign = has('WORKSHOP_ASSIGN');
   const isAssignedTechnician = !!user && user.id === jobCard.assignedWorkshopTechnicianId;
   // Ownership gate mirroring WorkshopService.assertOwnership() exactly (the-fool
   // pre-mortem finding #4) - a non-privileged caller who isn't the assigned technician
@@ -314,7 +321,7 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
         ) : (
           <div className="space-y-2">
             {staleReservations.map((r) => (
-              <StaleReservationRow key={r.id} reservation={r} canReview={isPrivileged} onChanged={onChanged} />
+              <StaleReservationRow key={r.id} reservation={r} canReview={has('INVENTORY_REVIEW')} onChanged={onChanged} />
             ))}
           </div>
         )}
@@ -702,8 +709,11 @@ function StaleReservationRow({
       onChanged();
     },
   });
-  const { user } = useAuth();
-  const canConfirmReturn = !!user && RETURN_CONFIRM_ROLES.includes(user.role.name);
+  const { has } = useMyCapabilities();
+  // 2026-09-14: was RETURN_CONFIRM_ROLES, a hardcoded mirror of INVENTORY_STAFF - purely
+  // informational here (which message to show), but should reflect the same real
+  // capability as the Inventory page's own gate.
+  const canConfirmReturn = has('INVENTORY_STAFF');
 
   return (
     <div className="rounded-md border border-slate-200 bg-white p-2.5 text-xs">

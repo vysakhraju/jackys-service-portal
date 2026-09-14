@@ -7,19 +7,21 @@ import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getJobCard, qcApprove, qcReject } from '../../lib/jobCardsApi';
 import type { JobCard, QcApproveBlocker } from '../../lib/jobCardsTypes';
 import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
 import type { JourneySearchResult } from '../../lib/jobCardJourneyTypes';
 
-// The role FLOOR only - who can even attempt qc/approve or qc/reject, mirroring
-// job-cards.controller.ts's QC_GATE_ROLES exactly. It is deliberately NOT the real gate:
-// the backend separately requires an admin-assigned QC_APPROVAL grant
+// The capability FLOOR only - who can even attempt qc/approve or qc/reject, mirroring
+// job-cards.controller.ts's QC_GATE_ACCESS gate. 2026-09-14: was a hardcoded QC_GATE_ROLES
+// role array - now reads the real capability, so a Designation-access grant to some other
+// role actually shows this screen's approve/reject buttons instead of only ever working
+// for the 5 hardcoded roles. It is still deliberately NOT the real gate: the backend
+// separately requires an admin-assigned QC_APPROVAL grant
 // (PermissionsService.requireActiveGrant), which this screen has no way to check ahead of
 // time (GET /permissions/users/:userId is admin-only - the-fool pre-mortem finding #1).
-// A role-floor member without the grant sees the backend's own 403 message instead.
-const QC_GATE_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE', 'QC_OFFICER'];
+// A QC_GATE_ACCESS holder without the grant sees the backend's own 403 message instead.
 
 function renderJobCardOption(item: JourneySearchResult) {
   return (
@@ -96,8 +98,8 @@ export function QcPage() {
 }
 
 function QcDetail({ jobCard, onChanged }: { jobCard: JobCard; onChanged: () => void }) {
-  const { user } = useAuth();
-  const isQcGateRole = !!user && QC_GATE_ROLES.includes(user.role.name);
+  const { has } = useMyCapabilities();
+  const isQcGateRole = has('QC_GATE_ACCESS');
 
   const isReadyForQc = jobCard.status === 'READY_FOR_QC';
   // Mirrors WorkshopPage's own phase-boundary framing: everything before READY_FOR_QC
@@ -154,8 +156,8 @@ function QcDetail({ jobCard, onChanged }: { jobCard: JobCard; onChanged: () => v
 
       {isReadyForQc && !isQcGateRole && (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          Your role ({user?.role.displayName}) isn't one the backend allows to attempt QC approval/rejection at all
-          - ask an admin.
+          You don't hold the QC_GATE_ACCESS capability, so the backend won't allow you to attempt QC
+          approval/rejection at all - ask an admin to grant it via Designation access.
         </p>
       )}
 

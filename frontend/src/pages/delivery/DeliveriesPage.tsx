@@ -8,7 +8,7 @@ import { Field, inputClass } from '../../components/Field';
 import { SignaturePad } from '../../components/SignaturePad';
 import { StatusBadge } from '../../components/StatusBadge';
 import { NamePicker } from '../../components/pickers/NamePicker';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   cancelDelivery,
   capturePod,
@@ -22,7 +22,6 @@ import type { Delivery, DeliveryBlocker, DeliveryStatusValue } from '../../lib/d
 import { DeliveryBlockersNotice } from './DeliveryBlockersNotice';
 import { RecordPaymentModal } from './RecordPaymentModal';
 
-const DELIVERY_ROLES = ['LOGISTICS_DISPATCHER', 'DRIVER', 'SUPER_ADMIN', 'SERVICE_HEAD'];
 const STATUS_FILTERS: { label: string; value: DeliveryStatusValue | '' }[] = [
   { label: 'All', value: '' },
   { label: 'Pending', value: 'PENDING' },
@@ -102,8 +101,11 @@ export function DeliveriesPage() {
 }
 
 function DeliveryDetail({ id }: { id: string }) {
-  const { user } = useAuth();
-  const canAct = !!user && DELIVERY_ROLES.includes(user.role.name);
+  // 2026-09-14: was a hardcoded DELIVERY_ROLES role array - now reads the real capability
+  // the backend's own dispatch/capture-pod/cancel actions require, so a Designation-access
+  // grant to some other role actually shows this screen's action forms.
+  const { has } = useMyCapabilities();
+  const canAct = has('DELIVERY_MANAGE');
   const queryClient = useQueryClient();
 
   const deliveryQuery = useQuery({ queryKey: ['delivery', id], queryFn: () => getDelivery(id) });

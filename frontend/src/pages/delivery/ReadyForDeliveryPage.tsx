@@ -5,28 +5,26 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Checkbox } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { createDelivery, getReadyForDelivery } from '../../lib/deliveryApi';
 import type { CreateDeliveryResult, DeliveryBlocker, ReadyForDeliveryRow } from '../../lib/deliveryTypes';
 import type { WarrantyStatusValue } from '../../lib/appointmentsTypes';
 import { RecordPaymentModal } from './RecordPaymentModal';
 import { DeliveryBlockersNotice } from './DeliveryBlockersNotice';
 
-// Plain @Roles() gating on the backend (DELIVERY_ROLES in delivery.controller.ts) -
-// deliberately NOT the admin-assignable PermissionsService grant mechanism Phase 6/7
-// introduced for QC/rework, which stays scoped there. Unlike QC's role list (a floor
-// only, with a separate hidden grant on top), this one IS the real gate, so it's safe to
-// hide the whole page behind it rather than just show a warning.
-const DELIVERY_ROLES = ['LOGISTICS_DISPATCHER', 'DRIVER', 'SUPER_ADMIN', 'SERVICE_HEAD'];
-
 type Row = ReadyForDeliveryRow & { id: string };
 
 export function ReadyForDeliveryPage() {
-  const { user } = useAuth();
+  // 2026-09-14: was a hardcoded DELIVERY_ROLES role array - delivery.controller.ts's own
+  // create-delivery action is @RequiresCapability('DELIVERY_MANAGE'), the real gate (this
+  // is the same capability as DeliveriesPage's own gate, not a QC-style floor-only check),
+  // so a Designation-access grant to some other role now actually unlocks the create-batch
+  // controls here instead of only ever working for the 4 hardcoded roles.
+  const { has } = useMyCapabilities();
   const [searchParams, setSearchParams] = useSearchParams();
   const warrantyStatus: WarrantyStatusValue = searchParams.get('warranty') === 'OOW' ? 'OOW' : 'IW';
 
-  const canAct = !!user && DELIVERY_ROLES.includes(user.role.name);
+  const canAct = has('DELIVERY_MANAGE');
 
   const queryClient = useQueryClient();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -139,7 +137,8 @@ export function ReadyForDeliveryPage() {
 
       {!canAct && (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          Your role ({user?.role.displayName}) can't create or manage deliveries - this list is read-only for you.
+          You don't hold the DELIVERY_MANAGE capability, so you can't create or manage
+          deliveries - this list is read-only for you.
         </p>
       )}
 

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeDelivery, makeJobCard } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/deliveryApi', () => ({
   listDeliveries: vi.fn(),
   getDelivery: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock('../../lib/invoicingApi', () => ({
   recordPayment: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   cancelDelivery,
   capturePod,
@@ -44,23 +44,18 @@ function renderPage(initialPath = '/delivery/deliveries') {
   );
 }
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: {
-      id: 'user-1',
-      firstName: 'Test',
-      lastName: 'User',
-      email: 't@example.com',
-      employeeId: 'E1',
-      status: 'ACTIVE',
-      lastLoginAt: null,
-      role: { id: 'r1', name: roleName, displayName: roleName },
-    },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14: DeliveriesPage now gates on the real capability (useMyCapabilities) rather
+// than a hardcoded DELIVERY_ROLES role array - see DeliveriesPage.tsx's own comment.
+// mockCapabilities replaces the old mockUser(roleName) role-array helper.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 beforeEach(() => {
@@ -75,7 +70,7 @@ beforeEach(() => {
 
 describe('DeliveriesPage - list and status filter', () => {
   it('lists deliveries and re-queries with the selected status filter', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([makeDelivery()]);
     const user = userEvent.setup();
     renderPage();
@@ -87,7 +82,7 @@ describe('DeliveriesPage - list and status filter', () => {
   });
 
   it('selecting a delivery sets ?deliveryId= and renders its detail', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([makeDelivery({ id: 'del-9', deliveryNumber: 'DLV-0009' })]);
     vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-9', deliveryNumber: 'DLV-0009' }));
     vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
@@ -103,7 +98,7 @@ describe('DeliveriesPage - list and status filter', () => {
 
 describe('DeliveriesPage - PENDING delivery: dispatch', () => {
   it('dispatches with the entered driver id', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([]);
     vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-1', status: 'PENDING' }));
     vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
@@ -120,7 +115,7 @@ describe('DeliveriesPage - PENDING delivery: dispatch', () => {
   });
 
   it('dispatches with no driver at all - it is optional', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([]);
     vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-1', status: 'PENDING' }));
     vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
@@ -135,7 +130,7 @@ describe('DeliveriesPage - PENDING delivery: dispatch', () => {
   });
 
   it('cancels with the entered reason', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([]);
     vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-1', status: 'PENDING' }));
     vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
@@ -153,7 +148,7 @@ describe('DeliveriesPage - PENDING delivery: dispatch', () => {
 
 describe('DeliveriesPage - DISPATCHED delivery: capture POD (AC-12)', () => {
   it('keeps Mark Delivered disabled until a recipient name AND a signature or photo are both present', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([]);
     vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-2', status: 'DISPATCHED' }));
     vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
@@ -171,11 +166,16 @@ describe('DeliveriesPage - DISPATCHED delivery: capture POD (AC-12)', () => {
     const file = new File(['fake-image-bytes'], 'proof.png', { type: 'image/png' });
     await user.upload(photoInput, file);
 
-    expect(submitButton).not.toBeDisabled();
+    // Pre-existing flake fix (unrelated to this round's capability-wiring work): the
+    // photo input's onChange reads the file via FileReader, whose onload fires
+    // asynchronously - user.upload only waits for the DOM change event itself, not that
+    // callback, so a bare synchronous assertion here occasionally raced ahead of
+    // setPhotoBase64 actually running.
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
   });
 
   it('renders the defensive re-check blockers if payment lapsed since delivery creation', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([]);
     vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-2', status: 'DISPATCHED' }));
     vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
@@ -204,7 +204,7 @@ describe('DeliveriesPage - DISPATCHED delivery: capture POD (AC-12)', () => {
 
 describe('DeliveriesPage - DELIVERED / CANCELLED', () => {
   it('shows the POD summary for a DELIVERED delivery', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([]);
     vi.mocked(getDelivery).mockResolvedValue(
       makeDelivery({ id: 'del-3', status: 'DELIVERED', podRecipientName: 'Jane Doe', deliveredAt: '2026-08-05T10:00:00Z' }),
@@ -216,7 +216,7 @@ describe('DeliveriesPage - DELIVERED / CANCELLED', () => {
   });
 
   it('shows the cancellation reason for a CANCELLED delivery', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(listDeliveries).mockResolvedValue([]);
     vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-4', status: 'CANCELLED', cancellationReason: 'Wrong address' }));
     vi.mocked(getDeliveryJobCards).mockResolvedValue([]);

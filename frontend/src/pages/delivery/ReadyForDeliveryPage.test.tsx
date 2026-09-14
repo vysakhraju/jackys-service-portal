@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeReadyRow } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/deliveryApi', () => ({
   getReadyForDelivery: vi.fn(),
   createDelivery: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock('../../lib/invoicingApi', () => ({
   recordPayment: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { createDelivery, getReadyForDelivery } from '../../lib/deliveryApi';
 import { ReadyForDeliveryPage } from './ReadyForDeliveryPage';
 
@@ -31,23 +31,18 @@ function renderPage(warranty: 'IW' | 'OOW' = 'IW') {
   );
 }
 
-function mockUser(roleName: string) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: {
-      id: 'user-1',
-      firstName: 'Test',
-      lastName: 'User',
-      email: 't@example.com',
-      employeeId: 'E1',
-      status: 'ACTIVE',
-      lastLoginAt: null,
-      role: { id: 'r1', name: roleName, displayName: roleName },
-    },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14: ReadyForDeliveryPage now gates on the real capability (useMyCapabilities)
+// rather than a hardcoded DELIVERY_ROLES role array - see ReadyForDeliveryPage.tsx's own
+// comment. mockCapabilities replaces the old mockUser(roleName) role-array helper.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 beforeEach(() => {
@@ -55,17 +50,27 @@ beforeEach(() => {
   vi.mocked(createDelivery).mockReset();
 });
 
-describe('ReadyForDeliveryPage - role gate', () => {
-  it('shows a read-only notice and no Create Delivery button for a role outside DELIVERY_ROLES', async () => {
-    mockUser('ACCOUNTANT');
+describe('ReadyForDeliveryPage - capability gate (2026-09-14: converted from a hardcoded role array)', () => {
+  it('shows a read-only notice and no Create Delivery button for a caller with no DELIVERY_MANAGE capability', async () => {
+    mockCapabilities([]);
     vi.mocked(getReadyForDelivery).mockResolvedValue([makeReadyRow()]);
     renderPage();
     expect(await screen.findByText(/can't create or manage deliveries/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Create Delivery/i })).not.toBeInTheDocument();
   });
 
-  it('shows the Create Delivery button for a DELIVERY_ROLES member', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+  it('shows the Create Delivery button for a caller holding DELIVERY_MANAGE', async () => {
+    mockCapabilities(['DELIVERY_MANAGE']);
+    vi.mocked(getReadyForDelivery).mockResolvedValue([]);
+    renderPage();
+    expect(await screen.findByRole('button', { name: /Create Delivery/i })).toBeInTheDocument();
+  });
+
+  it('shows the Create Delivery button for a role granted DELIVERY_MANAGE via Designation access, not just a default DELIVERY_ROLES role', async () => {
+    // The whole point of this round's fix: a role with no default membership in
+    // DELIVERY_MANAGE (e.g. CCE) sees the button once Super Admin ticks the capability for
+    // them - proven here by mocking the capability directly, independent of role name.
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(getReadyForDelivery).mockResolvedValue([]);
     renderPage();
     expect(await screen.findByRole('button', { name: /Create Delivery/i })).toBeInTheDocument();
@@ -74,7 +79,7 @@ describe('ReadyForDeliveryPage - role gate', () => {
 
 describe('ReadyForDeliveryPage - IW/OOW tabs', () => {
   it('requests IN_WARRANTY jobs as "IW" and does not show an Invoice column', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(getReadyForDelivery).mockResolvedValue([
       makeReadyRow({ jobCard: makeReadyRow().jobCard, invoiceStatus: null, payable: true }),
     ]);
@@ -85,7 +90,7 @@ describe('ReadyForDeliveryPage - IW/OOW tabs', () => {
   });
 
   it('requests OUT_OF_WARRANTY jobs as "OOW" and shows invoice status per row', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(getReadyForDelivery).mockResolvedValue([makeReadyRow({ invoiceStatus: 'PAID', payable: true })]);
     renderPage('OOW');
     await screen.findByText(/JC-0001/);
@@ -95,7 +100,7 @@ describe('ReadyForDeliveryPage - IW/OOW tabs', () => {
   });
 
   it('switching tabs re-queries with the new warranty status', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(getReadyForDelivery).mockResolvedValue([]);
     const user = userEvent.setup();
     renderPage('IW');
@@ -106,7 +111,7 @@ describe('ReadyForDeliveryPage - IW/OOW tabs', () => {
 
 describe('ReadyForDeliveryPage - batch select and create', () => {
   it('disables Create Delivery until at least one row is selected, then posts the selected ids', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(getReadyForDelivery).mockResolvedValue([
       makeReadyRow({ jobCard: makeReadyRow().jobCard }),
       makeReadyRow({ jobCard: { ...makeReadyRow().jobCard, id: 'jc-2', jobCardNumber: 'JC-0002' } }),
@@ -133,7 +138,7 @@ describe('ReadyForDeliveryPage - batch select and create', () => {
   });
 
   it('renders each blocker from a 409 unpaid-OOW response with an amount and a Record payment action', async () => {
-    mockUser('LOGISTICS_DISPATCHER');
+    mockCapabilities(['DELIVERY_MANAGE']);
     vi.mocked(getReadyForDelivery).mockResolvedValue([makeReadyRow({ invoiceStatus: 'DRAFT', payable: false })]);
     vi.mocked(createDelivery).mockRejectedValue({
       response: {

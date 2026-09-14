@@ -6,6 +6,7 @@ import { makeJobCard, makeReservation, makeWorkshopState } from '../../test/fixt
 import { WorkshopInventoryLayout } from './WorkshopInventoryLayout';
 
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/workshopApi', () => ({
   assignWorkshopTechnician: vi.fn(),
   startWip: vi.fn(),
@@ -32,8 +33,9 @@ vi.mock('../../lib/jobCardJourneyApi', () => ({
 }));
 
 import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { assignWorkshopTechnician, getWorkshopState, listReworkApprovers, requestSpare } from '../../lib/workshopApi';
-import { requestReturn } from '../../lib/inventoryApi';
+import { requestReturn, reviewReservation } from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
@@ -69,7 +71,25 @@ function mockUser(overrides: { id?: string; roleName?: string } = {}) {
   } as any);
 }
 
+// 2026-09-14: canAssign/canReview/canConfirmReturn now check the real capability
+// (useMyCapabilities) instead of a hardcoded role array - see WorkshopPage.tsx's own
+// comments. Defaults to full access so every test not specifically about capability
+// gating (ownership gating, tab-switch persistence, the assign-technician picker's own
+// behavior, etc.) keeps working unchanged; the dedicated capability-gating tests below
+// override this with mockCapabilities([...], false).
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
+}
+
 beforeEach(() => {
+  mockCapabilities([], true);
   vi.mocked(getWorkshopState).mockReset();
   vi.mocked(listSpareParts).mockReset();
   vi.mocked(listSpareParts).mockResolvedValue([]);
@@ -614,5 +634,83 @@ describe('WorkshopPage - #218 name-based assign-technician picker', () => {
     await screen.findByText(/name list needs Team Leader access/);
     expect(screen.queryByTestId('name-picker-input')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Technician')).toBeInTheDocument();
+  });
+});
+
+// 2026-09-14: canAssign/canReview/canConfirmReturn converted from hardcoded role arrays
+// (ASSIGN_ROLES/RETURN_CONFIRM_ROLES, and canReview used to just be isPrivileged) to real
+// capability checks via useMyCapabilities - same round as InventoryPage's equivalent fix.
+// isPrivileged/canAct (the ownership bypass on start-wip/request-spare/complete/request-
+// return) stays a hardcoded role array on purpose - see WorkshopPage.tsx's own comment -
+// so those are NOT covered here, only the 3 capability-backed gates.
+describe('WorkshopPage - capability gating (2026-09-14: converted from hardcoded role arrays)', () => {
+  it('shows "Assign a workshop technician" to a non-privileged role holding WORKSHOP_ASSIGN via Designation access', async () => {
+    mockUser({ roleName: 'CCE' });
+    mockCapabilities(['WORKSHOP_ASSIGN']);
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        jobCard: { ...makeWorkshopState().jobCard, status: 'SECTION_ASSIGNED', section: 'WORKSHOP', assignedWorkshopTechnicianId: null },
+      }),
+    );
+    renderPage();
+
+    expect(await screen.findByText('Assign a workshop technician')).toBeInTheDocument();
+  });
+
+  it('hides "Assign a workshop technician" from a caller with no WORKSHOP_ASSIGN capability', async () => {
+    mockUser({ roleName: 'CCE' });
+    mockCapabilities([]);
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        jobCard: { ...makeWorkshopState().jobCard, status: 'SECTION_ASSIGNED', section: 'WORKSHOP', assignedWorkshopTechnicianId: null },
+      }),
+    );
+    renderPage();
+
+    await screen.findByText('Stale reservations on this job (0)');
+    expect(screen.queryByText('Assign a workshop technician')).not.toBeInTheDocument();
+  });
+
+  it('shows Approve reallocation/Reject on a stale reservation to a non-privileged role holding INVENTORY_REVIEW', async () => {
+    mockUser({ roleName: 'CCE' });
+    mockCapabilities(['INVENTORY_REVIEW']);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState({ staleReservations: [makeReservation({ ageHours: 30 })] }));
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Approve reallocation' })).toBeInTheDocument();
+  });
+
+  it('hides Approve reallocation/Reject on a stale reservation from a caller with no INVENTORY_REVIEW capability', async () => {
+    mockUser({ roleName: 'CCE' });
+    mockCapabilities([]);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState({ staleReservations: [makeReservation({ ageHours: 30 })] }));
+    renderPage();
+
+    await screen.findByText(/held 30h/i);
+    expect(screen.queryByRole('button', { name: 'Approve reallocation' })).not.toBeInTheDocument();
+  });
+
+  it('tells a reviewer who also holds INVENTORY_STAFF to confirm the return themselves on the Inventory tab', async () => {
+    mockUser({ roleName: 'CCE' });
+    mockCapabilities(['INVENTORY_REVIEW', 'INVENTORY_STAFF']);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState({ staleReservations: [makeReservation({ ageHours: 30 })] }));
+    vi.mocked(reviewReservation).mockResolvedValue(makeReservation({ status: 'RETURN_PENDING' }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve reallocation' }));
+
+    expect(await screen.findByText(/Confirm the physical return on the Inventory tab/i)).toBeInTheDocument();
+  });
+
+  it('tells a reviewer without INVENTORY_STAFF that an Inventory Clerk still needs to confirm it', async () => {
+    mockUser({ roleName: 'CCE' });
+    mockCapabilities(['INVENTORY_REVIEW']);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState({ staleReservations: [makeReservation({ ageHours: 30 })] }));
+    vi.mocked(reviewReservation).mockResolvedValue(makeReservation({ status: 'RETURN_PENDING' }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve reallocation' }));
+
+    expect(await screen.findByText(/An Inventory Clerk still needs to confirm it physically arrived back/i)).toBeInTheDocument();
   });
 });
