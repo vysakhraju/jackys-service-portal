@@ -5,7 +5,7 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
+import { Server, Socket, Namespace } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -199,7 +199,20 @@ export class ReportsGateway implements OnGatewayConnection, OnGatewayDisconnect,
    */
   private async pollAndBroadcastKanban() {
     if (!this.server) return;
-    const sockets = [...this.server.sockets.sockets.values()];
+    // `this.server` is DECLARED as `Server` (the field's static type, per Nest's usual
+    // @WebSocketServer() convention) but at RUNTIME, because this gateway is configured
+    // with `namespace: '/reports'`, Nest actually binds it to the `/reports` Namespace
+    // instance instead - and `Namespace.sockets` is directly a `Map<SocketId, Socket>`,
+    // unlike `Server.sockets` (the default Namespace object, whose OWN `.sockets` field is
+    // the Map - one level deeper). The first shipped version of this fix assumed the
+    // declared `Server` type reflected reality and wrote `this.server.sockets.sockets`,
+    // which crashed onModuleInit's poll timer live in production with "Cannot read
+    // properties of undefined (reading 'values')" the moment it first fired - `.sockets`
+    // (real, the Map) has no `.sockets` field of its own. Cast to `Namespace` here, at the
+    // one place this distinction matters, rather than changing the field's declared type
+    // everywhere else in this file that doesn't care about the difference (`.to(room)`
+    // exists identically on both).
+    const sockets = [...(this.server as unknown as Namespace).sockets.values()];
     if (sockets.length === 0) return;
 
     await Promise.all(

@@ -179,7 +179,7 @@ describe('ReportsGateway.handleConnection', () => {
       const workshopTechUser = buildUser({ roleName: RoleName.TECHNICIAN_WORKSHOP, roleId: 'role-wtech' });
       workshopTechUser.id = 'wtech-1';
       const socket = buildConnectedSocket('sock-1', workshopTechUser);
-      (gateway as any).server = { sockets: { sockets: new Map([['sock-1', socket]]) } };
+      (gateway as any).server = { sockets: new Map([['sock-1', socket]]) };
 
       getKanbanBoard.mockResolvedValue({ columns: [{ key: 'WIP', label: 'WIP', count: 1, jobCards: [] }], totalActiveJobs: 1, asOf: new Date() });
       const getKanbanSummary = jest.fn().mockResolvedValue({ columns: [{ key: 'WIP', label: 'WIP', count: 1 }], totalActiveJobs: 1, asOf: new Date() });
@@ -199,7 +199,7 @@ describe('ReportsGateway.handleConnection', () => {
       userB.id = 'wtech-b';
       const socketA = buildConnectedSocket('sock-a', userA);
       const socketB = buildConnectedSocket('sock-b', userB);
-      (gateway as any).server = { sockets: { sockets: new Map([['sock-a', socketA], ['sock-b', socketB]]) } };
+      (gateway as any).server = { sockets: new Map([['sock-a', socketA], ['sock-b', socketB]]) };
 
       const getKanbanSummary = jest.fn().mockImplementation((u: User) =>
         Promise.resolve({
@@ -223,7 +223,7 @@ describe('ReportsGateway.handleConnection', () => {
       const user = buildUser({ roleName: RoleName.TECHNICAL_TEAM_LEADER });
       user.id = 'tl-1';
       const socket = buildConnectedSocket('sock-1', user);
-      (gateway as any).server = { sockets: { sockets: new Map([['sock-1', socket]]) } };
+      (gateway as any).server = { sockets: new Map([['sock-1', socket]]) };
       (gateway as any).lastSummarySignatureBySocket.set('sock-1', 'WIP:1');
 
       const getKanbanSummary = jest.fn().mockResolvedValue({ columns: [{ key: 'WIP', label: 'WIP', count: 1 }], totalActiveJobs: 1, asOf: new Date() });
