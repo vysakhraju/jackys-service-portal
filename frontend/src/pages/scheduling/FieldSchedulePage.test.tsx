@@ -4,14 +4,31 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '../../lib/toast';
 
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/technicianScheduleApi', () => ({
   getFieldSchedule: vi.fn(),
   reorderFieldSchedule: vi.fn(),
 }));
 
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getFieldSchedule, reorderFieldSchedule } from '../../lib/technicianScheduleApi';
 import { FieldSchedulePage } from './FieldSchedulePage';
 import type { FieldScheduleBoard } from '../../lib/technicianScheduleTypes';
+
+// 2026-09-14 (Group B): this page had zero frontend capability check at all - see
+// FieldSchedulePage.tsx's own comment. mockCapabilities gates it on the real
+// FIELD_SCHEDULE_REORDER capability; every existing test below defaults to full access so
+// the board renders exactly as it did before this round's fix.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
+}
 
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -87,6 +104,7 @@ function dragAndDrop(source: Element, target: Element) {
 }
 
 beforeEach(() => {
+  mockCapabilities([], true);
   vi.mocked(getFieldSchedule).mockReset();
   vi.mocked(reorderFieldSchedule).mockReset();
 });
@@ -182,5 +200,26 @@ describe('FieldSchedulePage', () => {
     renderPage();
 
     expect(await screen.findByText(/no active field technicians found/i)).toBeInTheDocument();
+  });
+});
+
+// 2026-09-14 (Group B): the whole board used to render for every logged-in user - now
+// gated on FIELD_SCHEDULE_REORDER, mirroring GET /field-schedule's own
+// @RequiresCapability('FIELD_SCHEDULE_REORDER').
+describe('FieldSchedulePage - capability gate', () => {
+  it('shows a restricted notice and never fetches the board for a caller with no FIELD_SCHEDULE_REORDER capability', async () => {
+    mockCapabilities([]);
+    renderPage();
+
+    expect(await screen.findByText(/Field Technician Schedule is restricted to CCE/i)).toBeInTheDocument();
+    expect(getFieldSchedule).not.toHaveBeenCalled();
+  });
+
+  it('fetches and renders the board for a role granted FIELD_SCHEDULE_REORDER via Designation access, not just a default role', async () => {
+    mockCapabilities(['FIELD_SCHEDULE_REORDER']);
+    vi.mocked(getFieldSchedule).mockResolvedValue(board());
+    renderPage();
+
+    expect(await screen.findByText('Ravi Kumar')).toBeInTheDocument();
   });
 });

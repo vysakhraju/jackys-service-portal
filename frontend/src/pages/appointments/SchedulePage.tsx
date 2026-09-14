@@ -33,6 +33,7 @@ import {
   type CreateAppointmentInput,
 } from '../../lib/appointmentsTypes';
 import { listServiceCentres } from '../../lib/masterDataApi';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 
 type FormValues = {
@@ -118,23 +119,30 @@ function todayIsoDate(): string {
 // appointments.service.ts's own guard), and this button is replaced with a link into the
 // AMC module's own completion flow for AMC rows, so a technician never hits that 400 in
 // the first place.
-function availableActions(status: AppointmentStatusValue, type: string, hasJobCard: boolean) {
+// 2026-09-14 (Group B): each flag now ALSO requires the exact backend capability that
+// guards its action (AppointmentsController: assign-technician -> SCHEDULE_ASSIGN_TECHNICIAN,
+// confirm/cancel -> SCHEDULE_CCE_MANAGE, on-site/complete -> SCHEDULE_FIELD_VISIT) - these
+// buttons used to render for every logged-in user regardless of capability, only 403ing on
+// click.
+function availableActions(status: AppointmentStatusValue, type: string, hasJobCard: boolean, has: (key: string) => boolean) {
   const isAmc = type === 'AMC';
   return {
-    canAssign: status === 'SCHEDULED' || status === 'CONFIRMED',
-    canConfirm: status === 'SCHEDULED',
-    canMarkOnSite: status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED',
-    canComplete: status === 'ON_SITE' && !isAmc,
+    canAssign: has('SCHEDULE_ASSIGN_TECHNICIAN') && (status === 'SCHEDULED' || status === 'CONFIRMED'),
+    canConfirm: has('SCHEDULE_CCE_MANAGE') && status === 'SCHEDULED',
+    canMarkOnSite: has('SCHEDULE_FIELD_VISIT') && (status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED'),
+    canComplete: has('SCHEDULE_FIELD_VISIT') && status === 'ON_SITE' && !isAmc,
     canCompleteAmcVisit: status === 'ON_SITE' && isAmc,
     // Once a Job Card exists the appointment is fulfilled - see
     // AppointmentsService.cancel()'s guard, which this mirrors so we don't render a
     // button the backend will just 409 on.
-    canCancel: status !== 'COMPLETED' && status !== 'CANCELLED' && !hasJobCard,
+    canCancel: has('SCHEDULE_CCE_MANAGE') && status !== 'COMPLETED' && status !== 'CANCELLED' && !hasJobCard,
   };
 }
 
 export function SchedulePage() {
   const queryClient = useQueryClient();
+  const { has } = useMyCapabilities();
+  const canManage = has('SCHEDULE_CCE_MANAGE');
 
   const [filters, setFilters] = useState({
     serviceCentreId: '',
@@ -332,12 +340,14 @@ export function SchedulePage() {
           Every filter below maps directly to a real <code>GET /appointments</code> query
           param - there's no client-side search, only what the backend actually accepts.
         </p>
-        <button
-          onClick={openCreate}
-          className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
-        >
-          + New Appointment
-        </button>
+        {canManage && (
+          <button
+            onClick={openCreate}
+            className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            + New Appointment
+          </button>
+        )}
       </div>
 
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4">
@@ -432,7 +442,7 @@ export function SchedulePage() {
         error={error}
         emptyMessage="No appointments match these filters yet."
         rowActions={(row) => {
-          const a = availableActions(row.status, row.type, !!row.jobCard);
+          const a = availableActions(row.status, row.type, !!row.jobCard, has);
           return (
             <div className="flex flex-wrap justify-end gap-2">
               <button onClick={() => setViewTarget(row)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
@@ -843,6 +853,11 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
 // after the fact.
 function InvoiceNumberField({ appointment }: { appointment: Appointment }) {
   const queryClient = useQueryClient();
+  // 2026-09-14 (Group B): this Add/Edit control calls updateAppointment (PUT /:id), which is
+  // @RequiresCapability('SCHEDULE_VIEW_UPDATE') - used to render for every logged-in user
+  // regardless of capability, only 403ing on click.
+  const { has } = useMyCapabilities();
+  const canEdit = has('SCHEDULE_VIEW_UPDATE');
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(appointment.invoiceNumber ?? '');
   const [savedNumber, setSavedNumber] = useState(appointment.invoiceNumber ?? null);
@@ -860,16 +875,18 @@ function InvoiceNumberField({ appointment }: { appointment: Appointment }) {
     return (
       <div className="flex items-center gap-2">
         <span>{savedNumber ?? '—'}</span>
-        <button
-          type="button"
-          className="text-xs text-slate-500 hover:text-slate-700 hover:underline"
-          onClick={() => {
-            setValue(savedNumber ?? '');
-            setEditing(true);
-          }}
-        >
-          {savedNumber ? 'Edit' : 'Add'}
-        </button>
+        {canEdit && (
+          <button
+            type="button"
+            className="text-xs text-slate-500 hover:text-slate-700 hover:underline"
+            onClick={() => {
+              setValue(savedNumber ?? '');
+              setEditing(true);
+            }}
+          >
+            {savedNumber ? 'Edit' : 'Add'}
+          </button>
+        )}
       </div>
     );
   }

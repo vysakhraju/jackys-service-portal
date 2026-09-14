@@ -50,6 +50,7 @@ import { Link } from 'react-router-dom';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useToast } from '../../lib/toast';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { addCrewHelper, assignWorkshopTechnician, reassignWorkshopTechnician } from '../../lib/workshopApi';
@@ -187,6 +188,14 @@ function evaluateDragOver(e: DragEvent<HTMLDivElement>, targetRow: TechnicianSch
 }
 
 export function TechnicianGanttPage() {
+  // 2026-09-14 (Group B): this page had zero frontend capability check at all - it rendered
+  // for every logged-in user, only 403ing once the board query actually ran. Gated on the
+  // real capability now (mirrors technician-schedule.controller.ts's
+  // @RequiresCapability('TECHNICIAN_SCHEDULE_GANTT') on GET /gantt), so a role granted it via
+  // Designation access sees the board too, not just its default (Technical Team Leader)
+  // membership.
+  const { has } = useMyCapabilities();
+  const canView = has('TECHNICIAN_SCHEDULE_GANTT');
   const [date, setDate] = useState(todayIsoDate());
   const [technicianFilter, setTechnicianFilter] = useState('');
   const [helperTarget, setHelperTarget] = useState<{ jobCardId: string; jobCardNumber: string } | null>(null);
@@ -197,6 +206,7 @@ export function TechnicianGanttPage() {
   const boardQuery = useQuery({
     queryKey: ['technician-schedule', 'gantt', date],
     queryFn: () => getGanttBoard(date),
+    enabled: canView,
   });
 
   const conflictCount = boardQuery.data?.rows.filter((r) => r.hasConflict).length ?? 0;
@@ -325,6 +335,16 @@ export function TechnicianGanttPage() {
       payload.currentTechnicianId
         ? { kind: 'jobcard-reassign', id: payload.id, technicianId: targetRow.technicianId, label: payload.label }
         : { kind: 'jobcard-assign', id: payload.id, technicianId: targetRow.technicianId, label: payload.label },
+    );
+  }
+
+  if (!canView) {
+    return (
+      <div className="mx-auto max-w-2xl px-8 py-8">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-6 text-sm text-amber-800">
+          The Technician Assignment Board is restricted to Technical Team Leader / Service Head / Super Admin.
+        </div>
+      </div>
     );
   }
 

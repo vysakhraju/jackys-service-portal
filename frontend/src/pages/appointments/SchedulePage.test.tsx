@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeAppointment, makeAppointmentDashboardStats } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/appointmentsApi', () => ({
   assignTechnician: vi.fn(),
   cancelAppointment: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock('../../lib/technicianScheduleApi', () => ({
   getGanttBoard: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { assignTechnician, createAppointment, getAppointmentDashboardStats, getSchedulingGrid, getVisit, listAppointments, resolveMapLink, updateAppointment } from '../../lib/appointmentsApi';
 import { listServiceCentres } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
@@ -64,18 +64,21 @@ function schedulingGridFixture() {
 }
 
 // This page (unlike Finance/AMC) has no layout-level role gate at all - every logged-in
-// user reaches it. Only the dashboard-stats widget it now renders is itself role-gated
-// (DashboardStatsWidget checks canViewDashboardStats client-side), so most of this file's
-// existing tests don't care who's logged in - default to a role that CAN see it so the
-// widget's own query resolves quietly in the background rather than sitting disabled.
-function mockUser(roleName = 'SUPER_ADMIN') {
-  vi.mocked(useAuth).mockReturnValue({
-    user: { id: 'u1', firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } },
-    isLoading: false,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// user reaches it. Individual row actions and the dashboard-stats widget are each gated on
+// their own real capability (SCHEDULE_CCE_MANAGE/SCHEDULE_VIEW_UPDATE/
+// SCHEDULE_ASSIGN_TECHNICIAN/SCHEDULE_FIELD_VISIT, converted 2026-09-14, Group B) rather than
+// a hardcoded role list - most of this file's existing tests don't care about capability
+// gating specifically, so default to full access so every action renders and the widget's
+// own query resolves quietly in the background rather than sitting disabled.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function renderPage() {
@@ -104,7 +107,7 @@ beforeEach(() => {
     unassignedAppointments: [],
     unassignedJobCards: [],
   } as any);
-  mockUser();
+  mockCapabilities([], true);
 });
 
 // The page's filter row and the create modal's form are BOTH mounted at once once the
@@ -475,5 +478,119 @@ describe('SchedulePage - #218 name-based pickers', () => {
     await modal.findByText(/paste the technician's/);
     expect(modal.getByLabelText('Technician user id')).toBeInTheDocument();
     expect(modal.queryByTestId('name-picker-input')).not.toBeInTheDocument();
+  });
+});
+
+// 2026-09-14 (Group B): Assign/Confirm/Mark on-site/Complete/Cancel/+ New Appointment used
+// to render for every logged-in user regardless of role, only 403ing on click - each now
+// also requires the specific backend capability that guards its action
+// (AppointmentsController: assign-technician -> SCHEDULE_ASSIGN_TECHNICIAN, confirm/cancel/
+// create -> SCHEDULE_CCE_MANAGE, on-site/complete -> SCHEDULE_FIELD_VISIT).
+describe('SchedulePage - Group B capability gating', () => {
+  it('hides every row action and + New Appointment for a caller with no schedule capabilities, even though appointment status would otherwise allow them', async () => {
+    mockCapabilities([]);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED', jobCard: null })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0001');
+
+    expect(screen.queryByRole('button', { name: '+ New Appointment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Assign' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+
+  it('shows only Assign (not Confirm/Cancel/+ New Appointment) for a caller holding just SCHEDULE_ASSIGN_TECHNICIAN', async () => {
+    mockCapabilities(['SCHEDULE_ASSIGN_TECHNICIAN']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED', jobCard: null })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0001');
+
+    expect(screen.getByRole('button', { name: 'Assign' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '+ New Appointment' })).not.toBeInTheDocument();
+  });
+
+  it('shows Confirm, Cancel, and + New Appointment (not Assign) for a caller holding just SCHEDULE_CCE_MANAGE - the whole point being this is independent of role name, e.g. a role granted it only via Designation access', async () => {
+    mockCapabilities(['SCHEDULE_CCE_MANAGE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED', jobCard: null })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0001');
+
+    expect(screen.getByRole('button', { name: '+ New Appointment' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Assign' })).not.toBeInTheDocument();
+  });
+
+  it('hides Complete for an ON_SITE row without SCHEDULE_FIELD_VISIT', async () => {
+    mockCapabilities([]);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-onsite', appointmentNumber: 'APT-0005', status: 'ON_SITE', type: 'OUT_OF_WARRANTY' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0005');
+    expect(screen.queryByRole('button', { name: 'Complete' })).not.toBeInTheDocument();
+  });
+
+  it('shows Complete for an ON_SITE row once SCHEDULE_FIELD_VISIT is granted', async () => {
+    mockCapabilities(['SCHEDULE_FIELD_VISIT']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-onsite', appointmentNumber: 'APT-0005', status: 'ON_SITE', type: 'OUT_OF_WARRANTY' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    expect(await screen.findByRole('button', { name: 'Complete' })).toBeInTheDocument();
+  });
+
+  it('hides the dashboard-stats widget and the invoice number Add control without SCHEDULE_VIEW_UPDATE', async () => {
+    mockCapabilities([]);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-no-invoice', appointmentNumber: 'APT-0300', status: 'COMPLETED', invoiceNumber: null })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0300');
+    expect(screen.queryByText('Today at a glance')).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByText('APT-0300').closest('tr')!).getByRole('button', { name: 'View' }));
+    await screen.findByRole('heading', { name: /APT-0300/ });
+    expect(screen.queryByRole('button', { name: 'Add' })).not.toBeInTheDocument();
+  });
+
+  it('shows the dashboard-stats widget and the invoice number Add control once SCHEDULE_VIEW_UPDATE is granted', async () => {
+    mockCapabilities(['SCHEDULE_VIEW_UPDATE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-no-invoice', appointmentNumber: 'APT-0300', status: 'COMPLETED', invoiceNumber: null })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('Today at a glance');
+    fireEvent.click(within(screen.getByText('APT-0300').closest('tr')!).getByRole('button', { name: 'View' }));
+    await screen.findByRole('heading', { name: /APT-0300/ });
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
   });
 });

@@ -3,25 +3,27 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeAppointmentDashboardStats } from '../../test/fixtures';
 
-vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/appointmentsApi', () => ({
   getAppointmentDashboardStats: vi.fn(),
 }));
 
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getAppointmentDashboardStats } from '../../lib/appointmentsApi';
 import { DashboardStatsWidget } from './DashboardStatsWidget';
 
-function mockUser(roleName: string | undefined) {
-  vi.mocked(useAuth).mockReturnValue({
-    user: roleName
-      ? { id: 'u1', firstName: 'T', lastName: 'U', email: 't@jackys.com', employeeId: 'E1', status: 'ACTIVE', lastLoginAt: null, role: { id: 'r1', name: roleName, displayName: roleName } }
-      : null,
-    isLoading: false,
-    isAuthenticated: !!roleName,
-    login: vi.fn(),
-    logout: vi.fn(),
-  } as any);
+// 2026-09-14 (Group B): canViewDashboardStats() now gates on the real SCHEDULE_VIEW_UPDATE
+// capability rather than a hardcoded DASHBOARD_STATS_ROLES array - see appointmentsTypes.ts's
+// own comment. mockCapabilities replaces the old mockUser(roleName) role-array helper.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
 }
 
 function renderWidget(serviceCentreId?: string) {
@@ -37,23 +39,16 @@ beforeEach(() => {
   vi.mocked(getAppointmentDashboardStats).mockReset();
 });
 
-describe('DashboardStatsWidget - role gating', () => {
-  it('never calls getAppointmentDashboardStats and renders nothing for a role outside canViewDashboardStats', () => {
-    mockUser('TECHNICIAN_FIELD');
+describe('DashboardStatsWidget - capability gating', () => {
+  it('never calls getAppointmentDashboardStats and renders nothing for a caller with no SCHEDULE_VIEW_UPDATE capability', () => {
+    mockCapabilities([]);
     const { container } = renderWidget();
     expect(container).toBeEmptyDOMElement();
     expect(getAppointmentDashboardStats).not.toHaveBeenCalled();
   });
 
-  it('never calls getAppointmentDashboardStats for an unauthenticated user', () => {
-    mockUser(undefined);
-    const { container } = renderWidget();
-    expect(container).toBeEmptyDOMElement();
-    expect(getAppointmentDashboardStats).not.toHaveBeenCalled();
-  });
-
-  it('fetches and renders stats for an allowed role (SERVICE_HEAD)', async () => {
-    mockUser('SERVICE_HEAD');
+  it('fetches and renders stats for a full-access caller (SUPER_ADMIN/SERVICE_HEAD bypass)', async () => {
+    mockCapabilities([], true);
     vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
     renderWidget();
 
@@ -65,11 +60,23 @@ describe('DashboardStatsWidget - role gating', () => {
     expect(screen.getByText('Completed')).toBeInTheDocument();
     expect(screen.getByText('Cancelled')).toBeInTheDocument();
   });
+
+  it('fetches and renders stats for a role granted SCHEDULE_VIEW_UPDATE via Designation access, not just a default role', async () => {
+    // The whole point of this round's fix: a role with no default membership in
+    // SCHEDULE_VIEW_UPDATE sees the widget once Super Admin ticks the capability for
+    // them - proven here by mocking the capability directly, independent of role name.
+    mockCapabilities(['SCHEDULE_VIEW_UPDATE']);
+    vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
+    renderWidget();
+
+    await waitFor(() => expect(getAppointmentDashboardStats).toHaveBeenCalledWith(undefined));
+    expect(await screen.findByText('2')).toBeInTheDocument(); // scheduled
+  });
 });
 
 describe('DashboardStatsWidget - "last 7 days" accuracy (the-fool finding)', () => {
   it('labels the week figure "Last 7 days", never "This week" - the backend computes a rolling 7-day window, not a calendar week', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats({ week: { total: 17, byStatus: {} } }));
     renderWidget();
 
@@ -79,7 +86,7 @@ describe('DashboardStatsWidget - "last 7 days" accuracy (the-fool finding)', () 
   });
 
   it('uses singular "appointment" for a total of exactly 1', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats({ week: { total: 1, byStatus: {} } }));
     renderWidget();
 
@@ -89,7 +96,7 @@ describe('DashboardStatsWidget - "last 7 days" accuracy (the-fool finding)', () 
 
 describe('DashboardStatsWidget - service centre filter passthrough', () => {
   it('passes serviceCentreId through to the query when provided', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
     renderWidget('sc-42');
 
@@ -98,7 +105,7 @@ describe('DashboardStatsWidget - service centre filter passthrough', () => {
   });
 
   it('passes undefined (not an empty string) when no serviceCentreId filter is set', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
     renderWidget(undefined);
 
@@ -115,7 +122,7 @@ describe('DashboardStatsWidget - refetch policy (the-fool staleness finding)', (
   });
 
   it('refetches roughly every 60s rather than fetching once and going stale', async () => {
-    mockUser('SUPER_ADMIN');
+    mockCapabilities([], true);
     vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
     renderWidget();
 

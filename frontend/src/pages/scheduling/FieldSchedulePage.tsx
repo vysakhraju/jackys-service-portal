@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useToast } from '../../lib/toast';
 import { getFieldSchedule, reorderFieldSchedule } from '../../lib/technicianScheduleApi';
 import type { FieldScheduleAppointment, FieldScheduleTechnicianRow } from '../../lib/technicianScheduleTypes';
@@ -43,6 +44,15 @@ interface DragPayload {
 }
 
 export function FieldSchedulePage() {
+  // 2026-09-14 (Group B): this page had zero frontend capability check at all - it rendered
+  // for every logged-in user, only 403ing once the board query actually ran. Gated on the
+  // real capability now (mirrors technician-schedule.controller.ts's
+  // @RequiresCapability('FIELD_SCHEDULE_REORDER') on both GET /field-schedule and POST
+  // /field/reorder - the same capability governs viewing and reordering here), so a role
+  // granted it via Designation access sees the board too, not just its default (CCE/
+  // Technical Team Leader) membership.
+  const { has } = useMyCapabilities();
+  const canView = has('FIELD_SCHEDULE_REORDER');
   const [date, setDate] = useState(todayIsoDate());
   // Local per-technician ordering, seeded from the server and updated immediately on drag
   // for responsive feedback - see the effect below for how it re-syncs with fresh data.
@@ -54,6 +64,7 @@ export function FieldSchedulePage() {
   const boardQuery = useQuery({
     queryKey: ['technician-schedule', 'field-schedule', date],
     queryFn: () => getFieldSchedule(date),
+    enabled: canView,
   });
 
   // Re-seed local order whenever fresh board data arrives (initial load, date change, or a
@@ -97,6 +108,16 @@ export function FieldSchedulePage() {
     next.splice(toIndex, 0, fromId);
     setOrder((prev) => ({ ...prev, [technicianId]: next }));
     reorderMutation.mutate({ technicianId, orderedAppointmentIds: next });
+  }
+
+  if (!canView) {
+    return (
+      <div className="mx-auto max-w-2xl px-8 py-8">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-6 text-sm text-amber-800">
+          The Field Technician Schedule is restricted to CCE / Technical Team Leader / Service Head / Super Admin.
+        </div>
+      </div>
+    );
   }
 
   return (

@@ -33,12 +33,20 @@ export function WorkshopQueuePage() {
   // Master Data and Reports & Dashboards pages.
   const { has } = useMyCapabilities();
   const canEditCapacity = has('WORKSHOP_ASSIGN');
+  // 2026-09-14 (Group B): the board itself had zero capability check - it queried
+  // unconditionally for every logged-in user, only 403ing once the query actually ran.
+  // Gated on the real capability now (mirrors technician-schedule.controller.ts's
+  // @RequiresCapability('WORKSHOP_QUEUE_VIEW') on GET /workshop-queue), so a role granted it
+  // via Designation access (e.g. a CCE or Workshop Technician, per this page's own top
+  // comment) sees the board too, not just its default (Technical Team Leader) membership.
+  const canView = has('WORKSHOP_QUEUE_VIEW');
   const queryClient = useQueryClient();
   const { push } = useToast();
 
   const boardQuery = useQuery({
     queryKey: ['technician-schedule', 'workshop-queue'],
     queryFn: getWorkshopQueue,
+    enabled: canView,
   });
 
   const capacityMutation = useMutation({
@@ -54,6 +62,16 @@ export function WorkshopQueuePage() {
       });
     },
   });
+
+  if (!canView) {
+    return (
+      <div className="mx-auto max-w-2xl px-8 py-8">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-6 text-sm text-amber-800">
+          The Workshop Queue is restricted to Technical Team Leader / Service Head / Super Admin.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-8 py-8">

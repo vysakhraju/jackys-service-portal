@@ -7,6 +7,7 @@ import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getJobCard } from '../../lib/jobCardsApi';
 import type { JobCard } from '../../lib/jobCardsTypes';
 import {
@@ -48,6 +49,14 @@ export function EstimatesPage() {
   // #218/#251: see QcPage's identical field for why this isn't derived via an effect.
   const [pickedLabel, setPickedLabel] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  // 2026-09-14 (Group B): this page had zero frontend capability check at all - Create/Send/
+  // Revise (create/:id/send/:id/revise) and Record Decision (:id/record-response) rendered
+  // for every logged-in user, only 403ing on click. Gated on the real capabilities now
+  // (mirrors estimates.controller.ts's @RequiresCapability('ESTIMATE_MANAGE') /
+  // @RequiresCapability('ESTIMATE_RECORD_RESPONSE')).
+  const { has } = useMyCapabilities();
+  const canManage = has('ESTIMATE_MANAGE');
+  const canRecordResponse = has('ESTIMATE_RECORD_RESPONSE');
 
   const jobCardQuery = useQuery({
     queryKey: ['job-card', activeJobCardId],
@@ -84,6 +93,7 @@ export function EstimatesPage() {
   // an EXPIRED or REJECTED-with-no-revise-yet job card still needs a fresh Create option,
   // otherwise it's a dead end. the-fool pre-mortem, finding #1).
   const canCreate =
+    canManage &&
     !!jobCard &&
     jobCard.warrantyStatus === 'OOW' &&
     CAN_CREATE_STATUSES.includes(jobCard.status) &&
@@ -169,6 +179,8 @@ export function EstimatesPage() {
                         key={estimate.id}
                         estimate={estimate}
                         jobCard={jobCard}
+                        canManage={canManage}
+                        canRecordResponse={canRecordResponse}
                         onChanged={onChanged}
                       />
                     ) : (
@@ -287,10 +299,14 @@ function CreateEstimateCard({ mutation }: { mutation: UseMutationResult<Estimate
 function ActiveEstimateCard({
   estimate,
   jobCard,
+  canManage,
+  canRecordResponse,
   onChanged,
 }: {
   estimate: Estimate;
   jobCard: JobCard;
+  canManage: boolean;
+  canRecordResponse: boolean;
   onChanged: () => void;
 }) {
   const sendMutation = useMutation({ mutationFn: () => sendEstimate(estimate.id), onSuccess: onChanged });
@@ -337,7 +353,7 @@ function ActiveEstimateCard({
         ))}
       </ul>
 
-      {estimate.status === 'DRAFT' && (
+      {estimate.status === 'DRAFT' && canManage && (
         <ActionCard title="Send to customer">
           <ErrorNotice error={sendMutation.error} />
           <p className="mb-2 text-xs text-slate-400">
@@ -375,11 +391,11 @@ function ActiveEstimateCard({
             )}
           </ActionCard>
 
-          <RecordResponseCard jobCard={jobCard} mutation={respondMutation} />
+          {canRecordResponse && <RecordResponseCard jobCard={jobCard} mutation={respondMutation} />}
         </>
       )}
 
-      {estimate.status === 'REJECTED' && (
+      {estimate.status === 'REJECTED' && canManage && (
         <ActionCard title="Revise (FR-08: RWR is not a dead end)">
           <ErrorNotice error={reviseMutation.error} />
           <p className="mb-2 text-xs text-slate-400">

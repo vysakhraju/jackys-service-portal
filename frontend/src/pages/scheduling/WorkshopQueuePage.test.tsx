@@ -84,7 +84,7 @@ function board(overrides: Partial<WorkshopQueueBoard> = {}): WorkshopQueueBoard 
 beforeEach(() => {
   vi.mocked(getWorkshopQueue).mockReset();
   vi.mocked(setWorkshopCapacity).mockReset();
-  mockCapabilities(['WORKSHOP_ASSIGN']);
+  mockCapabilities(['WORKSHOP_QUEUE_VIEW', 'WORKSHOP_ASSIGN']);
 });
 
 describe('WorkshopQueuePage', () => {
@@ -157,8 +157,8 @@ describe('WorkshopQueuePage', () => {
     await waitFor(() => expect(setWorkshopCapacity).toHaveBeenCalledWith('wtech-1', 10));
   });
 
-  it('hides the capacity edit control for a role lacking WORKSHOP_ASSIGN', async () => {
-    mockCapabilities([]);
+  it('hides the capacity edit control for a role lacking WORKSHOP_ASSIGN, while still able to view the board', async () => {
+    mockCapabilities(['WORKSHOP_QUEUE_VIEW']);
     vi.mocked(getWorkshopQueue).mockResolvedValue(board());
     renderPage();
 
@@ -167,12 +167,31 @@ describe('WorkshopQueuePage', () => {
   });
 
   it('shows the capacity edit control once WORKSHOP_ASSIGN is granted to any role via Designation access', async () => {
-    mockCapabilities(['WORKSHOP_ASSIGN']);
+    mockCapabilities(['WORKSHOP_QUEUE_VIEW', 'WORKSHOP_ASSIGN']);
     vi.mocked(getWorkshopQueue).mockResolvedValue(board());
     renderPage();
 
     await screen.findByText('Ali Hassan');
     expect(screen.getByRole('button', { name: 'Edit capacity' })).toBeInTheDocument();
+  });
+
+  // 2026-09-14 (Group B): the board itself used to render for every logged-in user - now
+  // gated on WORKSHOP_QUEUE_VIEW, mirroring GET /workshop-queue's own
+  // @RequiresCapability('WORKSHOP_QUEUE_VIEW').
+  it('shows a restricted notice and never fetches the board for a caller with no WORKSHOP_QUEUE_VIEW capability', async () => {
+    mockCapabilities([]);
+    renderPage();
+
+    expect(await screen.findByText(/Workshop Queue is restricted to Technical Team Leader/i)).toBeInTheDocument();
+    expect(getWorkshopQueue).not.toHaveBeenCalled();
+  });
+
+  it('fetches the board for a role granted WORKSHOP_QUEUE_VIEW via Designation access, not just a default role', async () => {
+    mockCapabilities(['WORKSHOP_QUEUE_VIEW']);
+    vi.mocked(getWorkshopQueue).mockResolvedValue(board());
+    renderPage();
+
+    expect(await screen.findByText('Ali Hassan')).toBeInTheDocument();
   });
 
   it('renders the unassigned job card pool with a journey link', async () => {

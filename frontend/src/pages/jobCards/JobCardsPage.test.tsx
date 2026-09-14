@@ -109,22 +109,22 @@ describe('JobCardsPage - #218 name-based appointment picker', () => {
   });
 });
 
+async function loadJobCard(jobCard: ReturnType<typeof makeJobCard> = makeJobCard({ appointmentId: 'appt-55' })) {
+  const appointment = makeAppointment({ id: 'appt-55', appointmentNumber: 'APT-0055' });
+  vi.mocked(searchAppointments).mockResolvedValue([appointment]);
+  vi.mocked(getAppointment).mockResolvedValue(appointment);
+  vi.mocked(getJobCardByAppointment).mockResolvedValue(jobCard);
+
+  renderPage();
+  fireEvent.focus(screen.getByTestId('async-search-picker-input'));
+  fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-0055' } });
+  fireEvent.click(await screen.findByText('APT-0055'));
+  await waitFor(() => expect(getJobCardByAppointment).toHaveBeenCalledWith('appt-55'));
+}
+
 // 2026-09-14: canWarrantyOverride converted from a hardcoded WARRANTY_OVERRIDE_ROLES
 // array to the real JOB_CARD_WARRANTY_OVERRIDE capability.
 describe('JobCardsPage - Warranty Override capability gate', () => {
-  async function loadJobCard() {
-    const appointment = makeAppointment({ id: 'appt-55', appointmentNumber: 'APT-0055' });
-    vi.mocked(searchAppointments).mockResolvedValue([appointment]);
-    vi.mocked(getAppointment).mockResolvedValue(appointment);
-    vi.mocked(getJobCardByAppointment).mockResolvedValue(makeJobCard({ appointmentId: 'appt-55' }));
-
-    renderPage();
-    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
-    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-0055' } });
-    fireEvent.click(await screen.findByText('APT-0055'));
-    await waitFor(() => expect(getJobCardByAppointment).toHaveBeenCalledWith('appt-55'));
-  }
-
   it('hides the Warranty Override card for a caller with no JOB_CARD_WARRANTY_OVERRIDE capability', async () => {
     mockCapabilities([]);
     await loadJobCard();
@@ -138,5 +138,42 @@ describe('JobCardsPage - Warranty Override capability gate', () => {
     mockCapabilities(['JOB_CARD_WARRANTY_OVERRIDE']);
     await loadJobCard();
     expect(await screen.findByText(/Warranty Override/)).toBeInTheDocument();
+  });
+});
+
+// 2026-09-14 (Group B): canValidateSn/canAssignSection/canApproveCustomer/canCancel used to
+// be pure job-card-status booleans with zero capability check - every button rendered for
+// every logged-in user, only 403ing on click. Now each also requires JOB_CARD_MANAGE,
+// mirroring job-cards.controller.ts's @RequiresCapability('JOB_CARD_MANAGE') on all four
+// actions (validate-sn/assign-section/approve-customer/cancel).
+describe('JobCardsPage - JOB_CARD_MANAGE capability gate', () => {
+  it('hides Assign Section, Record customer approval, and Cancel for a caller with no JOB_CARD_MANAGE capability, even though the job card status would otherwise show them', async () => {
+    mockCapabilities([]);
+    // Default fixture: status SN_VALIDATED (would show canAssignSection/canCancel),
+    // warrantyStatus OOW + not CANCELLED (would show canApproveCustomer).
+    await loadJobCard();
+    expect(screen.queryByText(/Step 2 · Assign section/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Record customer approval (out-of-warranty jobs)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancel this Job Card')).not.toBeInTheDocument();
+  });
+
+  it('shows Assign Section, Record customer approval, and Cancel for a role granted JOB_CARD_MANAGE via Designation access, not just a default role', async () => {
+    mockCapabilities(['JOB_CARD_MANAGE']);
+    await loadJobCard();
+    expect(await screen.findByText(/Step 2 · Assign section/)).toBeInTheDocument();
+    expect(screen.getByText('Record customer approval (out-of-warranty jobs)')).toBeInTheDocument();
+    expect(screen.getByText('Cancel this Job Card')).toBeInTheDocument();
+  });
+
+  it('hides Validate Serial Number (OPEN-status job card) for a caller with no JOB_CARD_MANAGE capability', async () => {
+    mockCapabilities([]);
+    await loadJobCard(makeJobCard({ appointmentId: 'appt-55', status: 'OPEN', warrantyStatus: 'IW' }));
+    expect(screen.queryByText(/Step 1 · Validate serial number/)).not.toBeInTheDocument();
+  });
+
+  it('shows Validate Serial Number (OPEN-status job card) once JOB_CARD_MANAGE is granted', async () => {
+    mockCapabilities(['JOB_CARD_MANAGE']);
+    await loadJobCard(makeJobCard({ appointmentId: 'appt-55', status: 'OPEN', warrantyStatus: 'IW' }));
+    expect(await screen.findByText(/Step 1 · Validate serial number/)).toBeInTheDocument();
   });
 });

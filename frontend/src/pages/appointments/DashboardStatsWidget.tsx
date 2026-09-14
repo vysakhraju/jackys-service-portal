@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { COLOR_BY_STATUS } from '../../components/StatusBadge';
-import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getAppointmentDashboardStats } from '../../lib/appointmentsApi';
 import { canViewDashboardStats } from '../../lib/appointmentsTypes';
 
@@ -14,9 +14,9 @@ const TODAY_TILES: { key: 'scheduled' | 'confirmed' | 'onSite' | 'completed' | '
 
 // GET /appointments/dashboard/stats - typed on the frontend since an earlier phase
 // (getAppointmentDashboardStats / AppointmentDashboardStats) but never wired to a screen
-// until now (STATUS_TRACKER's "known issues to fix later" list). Gated client-side exactly
-// like every other role-restricted query in this app (Finance, Reports): a role outside
-// canViewDashboardStats() never even constructs this query, not just refused server-side.
+// until now (STATUS_TRACKER's "known issues to fix later" list). Gated client-side on the
+// real SCHEDULE_VIEW_UPDATE capability (via canViewDashboardStats(), converted 2026-09-14):
+// a caller without it never even constructs this query, not just refused server-side.
 //
 // Two the-fool pre-mortem findings baked in: (1) the backend's "week" is a rolling 7-day
 // window ending today, not a calendar week (see AppointmentDashboardStats's own doc
@@ -28,8 +28,8 @@ const TODAY_TILES: { key: 'scheduled' | 'confirmed' | 'onSite' | 'completed' | '
 // fit (Reports' own Kanban board uses a websocket for the same reason; a 60s poll is the
 // low-effort equivalent for a plain REST stat query that doesn't warrant its own socket).
 export function DashboardStatsWidget({ serviceCentreId }: { serviceCentreId?: string }) {
-  const { user } = useAuth();
-  const canView = canViewDashboardStats(user?.role.name);
+  const { has } = useMyCapabilities();
+  const canView = canViewDashboardStats(has);
 
   const query = useQuery({
     queryKey: ['appointment-dashboard-stats', serviceCentreId],

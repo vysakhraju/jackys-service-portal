@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '../../lib/toast';
 
+vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/technicianScheduleApi', () => ({ getGanttBoard: vi.fn() }));
 vi.mock('../../lib/workshopApi', () => ({
   addCrewHelper: vi.fn(),
@@ -16,11 +17,27 @@ vi.mock('../../lib/appointmentsApi', () => ({
   updateAppointment: vi.fn(),
 }));
 
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { addCrewHelper, assignWorkshopTechnician, reassignWorkshopTechnician } from '../../lib/workshopApi';
 import { assignTechnician, updateAppointment } from '../../lib/appointmentsApi';
 import { TechnicianGanttPage } from './TechnicianGanttPage';
 import type { GanttBoard } from '../../lib/technicianScheduleTypes';
+
+// 2026-09-14 (Group B): this page had zero frontend capability check at all - see
+// TechnicianGanttPage.tsx's own comment. mockCapabilities gates it on the real
+// TECHNICIAN_SCHEDULE_GANTT capability; every existing test below defaults to full access
+// so the board renders exactly as it did before this round's fix.
+function mockCapabilities(capabilities: string[], fullAccess = false) {
+  vi.mocked(useMyCapabilities).mockReturnValue({
+    loading: false,
+    error: null,
+    fullAccess,
+    capabilities,
+    has: (key: string) => fullAccess || capabilities.includes(key),
+    hasAny: (keys: string[]) => fullAccess || keys.some((k) => capabilities.includes(k)),
+  });
+}
 
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -163,6 +180,7 @@ function dragOverOnly(source: Element, target: Element, clientX = 500) {
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(new Date('2026-09-09T12:00:00.000Z'));
+  mockCapabilities([], true);
   vi.mocked(getGanttBoard).mockReset();
   vi.mocked(addCrewHelper).mockReset();
   vi.mocked(assignWorkshopTechnician).mockReset();
@@ -644,5 +662,27 @@ describe('TechnicianGanttPage', () => {
     dragAndDrop(bar, dropZone);
 
     expect(await screen.findByText('Current technician still holds an open spare-parts reservation.')).toBeInTheDocument();
+  });
+});
+
+// 2026-09-14 (Group B): the whole board used to render for every logged-in user - now
+// gated on TECHNICIAN_SCHEDULE_GANTT, mirroring GET /gantt's own
+// @RequiresCapability('TECHNICIAN_SCHEDULE_GANTT').
+describe('TechnicianGanttPage - capability gate', () => {
+  it('shows a restricted notice and never fetches the board for a caller with no TECHNICIAN_SCHEDULE_GANTT capability', async () => {
+    mockCapabilities([]);
+    renderPage();
+
+    expect(await screen.findByText(/Technician Assignment Board is restricted to Technical Team Leader/i)).toBeInTheDocument();
+    expect(getGanttBoard).not.toHaveBeenCalled();
+  });
+
+  it('fetches and renders the board for a role granted TECHNICIAN_SCHEDULE_GANTT via Designation access, not just a default role', async () => {
+    mockCapabilities(['TECHNICIAN_SCHEDULE_GANTT']);
+    vi.mocked(getGanttBoard).mockResolvedValue(board());
+    renderPage();
+
+    // "Ravi Kumar" appears both as a row label and as a <option> in the technician filter.
+    expect((await screen.findAllByText('Ravi Kumar')).length).toBeGreaterThan(0);
   });
 });

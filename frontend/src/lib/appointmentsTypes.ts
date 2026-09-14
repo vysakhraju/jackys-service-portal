@@ -151,16 +151,14 @@ export interface AppointmentDashboardStats {
   week: { total: number; byStatus: Record<string, number> };
 }
 
-// Same @Roles(...) list as AppointmentsController.getDashboardStats() - a technician or CCE
-// booking desk role other than these four never even fires the query (this endpoint is
-// still a plain @Roles() list, not a migrated designation-matrix capability, so a
-// hardcoded client-side mirror is still correct here - contrast with the Reports &
-// Dashboards pages in reportsTypes.ts, which moved to useMyCapabilities() once their own
-// backend endpoints migrated to @RequiresCapability).
-export const DASHBOARD_STATS_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER', 'CCE'];
-
-export function canViewDashboardStats(roleName: string | undefined): boolean {
-  return !!roleName && DASHBOARD_STATS_ROLES.includes(roleName);
+// 2026-09-14 (Group B): AppointmentsController.getDashboardStats() migrated to
+// @RequiresCapability('SCHEDULE_VIEW_UPDATE') a while back - this comment's old claim that
+// it was "still a plain @Roles() list" went stale then. canViewDashboardStats() now takes a
+// has()-style capability checker instead of a role name, same pattern as every other
+// converted permissions helper this round, so a role granted SCHEDULE_VIEW_UPDATE via
+// Designation access sees the widget too, not just its default role membership.
+export function canViewDashboardStats(has: (key: string) => boolean): boolean {
+  return has('SCHEDULE_VIEW_UPDATE');
 }
 
 // === Technician visits (src/technician) ===

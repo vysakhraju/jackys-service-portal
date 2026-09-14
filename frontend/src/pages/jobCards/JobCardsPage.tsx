@@ -211,6 +211,11 @@ export function JobCardsPage() {
   // so a role granted this via Designation access sees the button too.
   const { has } = useMyCapabilities();
   const canWarrantyOverride = has('JOB_CARD_WARRANTY_OVERRIDE');
+  // 2026-09-14 (Group B): validate-sn/assign-section/approve-customer/cancel were pure
+  // status-derived booleans with no capability check at all - every button rendered for
+  // every logged-in user regardless of role, and only 403'd on click (backend already
+  // gates all four actions on @RequiresCapability('JOB_CARD_MANAGE')). This mirrors that.
+  const canManage = has('JOB_CARD_MANAGE');
 
   const appointmentQuery = useQuery({
     queryKey: ['appointment', activeAppointmentId],
@@ -315,6 +320,7 @@ export function JobCardsPage() {
             <JobCardDetail
               jobCard={jobCardQuery.data}
               canWarrantyOverride={canWarrantyOverride}
+              canManage={canManage}
               onChanged={invalidateJobCard}
             />
           )}
@@ -327,10 +333,12 @@ export function JobCardsPage() {
 function JobCardDetail({
   jobCard,
   canWarrantyOverride,
+  canManage,
   onChanged,
 }: {
   jobCard: JobCard;
   canWarrantyOverride: boolean;
+  canManage: boolean;
   onChanged: () => void;
 }) {
   const validateSnMutation = useMutation({
@@ -354,12 +362,13 @@ function JobCardDetail({
     onSuccess: onChanged,
   });
 
-  const canValidateSn = jobCard.status === 'OPEN';
-  const canAssignSection = jobCard.status === 'SN_VALIDATED';
+  const canValidateSn = canManage && jobCard.status === 'OPEN';
+  const canAssignSection = canManage && jobCard.status === 'SN_VALIDATED';
+  const canApproveCustomer = canManage && jobCard.warrantyStatus === 'OOW' && jobCard.status !== 'CANCELLED';
   const blockedByCustomerApproval = jobCard.warrantyStatus === 'OOW' && !jobCard.customerApproved;
   const canOverride =
     canWarrantyOverride && jobCard.status !== 'RWR' && jobCard.status !== 'CANCELLED';
-  const canCancel = !['CANCELLED', 'READY_FOR_QC', 'QC_PASSED', 'DELIVERED'].includes(jobCard.status);
+  const canCancel = canManage && !['CANCELLED', 'READY_FOR_QC', 'QC_PASSED', 'DELIVERED'].includes(jobCard.status);
   const pastThisPhase = TERMINAL_FOR_THIS_PHASE.includes(jobCard.status);
   const showWorkshopLink =
     WORKSHOP_LINKED_STATUSES.includes(jobCard.status) ||
@@ -484,7 +493,7 @@ function JobCardDetail({
         </ActionCard>
       )}
 
-      {jobCard.warrantyStatus === 'OOW' && jobCard.status !== 'CANCELLED' && (
+      {canApproveCustomer && (
         <ApproveCustomerCard jobCard={jobCard} mutation={approveCustomerMutation} />
       )}
 
