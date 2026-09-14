@@ -81,6 +81,14 @@ export class MasterDataController {
     return this.masterDataService.findAllServiceCentres(country);
   }
 
+  @Get('service-centres/field-technicians')
+  @RequiresCapability('MASTER_DATA_SERVICE_CENTRE_CREATE')
+  @ApiOperation({ summary: '#218: list active Field Technician users, for the Service Centres name-based picker (GET /users is admin-only, GET /technician-schedule/gantt is Team-Leader-only - neither reachable by CCE, who creates/edits centres)' })
+  @ApiResponse({ status: 200, description: 'Active field technicians as {id, name}' })
+  listFieldTechnicians() {
+    return this.masterDataService.listActiveFieldTechnicians();
+  }
+
   @Get('service-centres/:id')
   @ApiOperation({ summary: 'Get service centre by ID' })
   @ApiResponse({ status: 200, type: ServiceCentre })

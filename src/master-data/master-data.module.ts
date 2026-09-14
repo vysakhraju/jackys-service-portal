@@ -11,6 +11,7 @@ import { TechnicianKpiRule } from './entities/technician-kpi-rule.entity';
 import { NotificationTemplate } from './entities/notification-template.entity';
 import { WarrantyMaster } from './entities/warranty-master.entity';
 import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
+import { User } from '../auth/entities/user.entity';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
@@ -25,6 +26,11 @@ import { AuthModule } from '../auth/auth.module';
       NotificationTemplate,
       WarrantyMaster,
       ComponentYieldMatrix,
+      // #218/#253: listActiveFieldTechnicians() below backs the Service Centres page's
+      // field-technician picker - CCE (who can create/update service centres) has no
+      // access to GET /users (admin-only) or GET /technician-schedule/gantt (Team-Leader-
+      // only), so this reads User directly rather than reusing either.
+      User,
     ]),
     // Needed because MasterDataController's @UseInterceptors(AuditInterceptor) resolves
     // AuditInterceptor -> AuthService, which AuthModule provides/exports.

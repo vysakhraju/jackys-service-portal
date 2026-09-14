@@ -20,6 +20,8 @@ import { ApplianceCategory } from './entities/fault-symptom.entity';
 import { ServiceActivityType } from './entities/service-price-list.entity';
 import { NotificationTrigger, NotificationChannel } from './entities/notification-template.entity';
 import { RecoveryCategory } from './entities/component-yield-matrix.entity';
+import { User, UserStatus } from '../auth/entities/user.entity';
+import { RoleName } from '../auth/entities/role.entity';
 
 @Injectable()
 export class MasterDataService {
@@ -42,6 +44,8 @@ export class MasterDataService {
     private warrantyMasterRepository: Repository<WarrantyMaster>,
     @InjectRepository(ComponentYieldMatrix)
     private componentYieldMatrixRepository: Repository<ComponentYieldMatrix>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
   ) {}
 
   // Service Centre
@@ -80,6 +84,24 @@ export class MasterDataService {
   async deleteServiceCentre(id: string): Promise<void> {
     await this.findServiceCentreById(id);
     await this.serviceCentreRepository.update(id, { isActive: false });
+  }
+
+  /**
+   * #218/#253: backs the Service Centres page's "Field technicians" checklist with real
+   * names instead of a raw-UUID paste-to-add flow. GET /users is SUPER_ADMIN/SERVICE_HEAD-
+   * only and GET /technician-schedule/gantt is Team-Leader-only - neither is reachable by
+   * CCE, who is exactly who MASTER_DATA_SERVICE_CENTRE_CREATE lets create/edit a centre in
+   * the first place (the pre-existing regression this fixes: CCE 403ing on GET /users just
+   * to see the checklist). A narrow, purpose-built list gated the same as that action, not
+   * a general user directory.
+   */
+  async listActiveFieldTechnicians(): Promise<{ id: string; name: string }[]> {
+    const technicians = await this.userRepository.find({
+      where: { role: { name: RoleName.TECHNICIAN_FIELD }, status: UserStatus.ACTIVE },
+      relations: { role: true },
+      order: { firstName: 'ASC', lastName: 'ASC' },
+    });
+    return technicians.map((t) => ({ id: t.id, name: t.fullName }));
   }
 
   // Fault & Symptom

@@ -12,6 +12,7 @@ describe('MasterDataService', () => {
   let notificationTemplateRepository: any;
   let warrantyMasterRepository: any;
   let componentYieldMatrixRepository: any;
+  let userRepository: any;
 
   const buildQb = (result: any, isMany = false) => ({
     where: jest.fn().mockReturnThis(),
@@ -41,6 +42,7 @@ describe('MasterDataService', () => {
     notificationTemplateRepository = repoFactory();
     warrantyMasterRepository = repoFactory();
     componentYieldMatrixRepository = repoFactory();
+    userRepository = repoFactory();
 
     service = new MasterDataService(
       serviceCentreRepository,
@@ -52,6 +54,7 @@ describe('MasterDataService', () => {
       notificationTemplateRepository,
       warrantyMasterRepository,
       componentYieldMatrixRepository,
+      userRepository,
     );
   });
 
@@ -120,6 +123,35 @@ describe('MasterDataService', () => {
       await service.deleteServiceCentre('1');
 
       expect(serviceCentreRepository.update).toHaveBeenCalledWith('1', { isActive: false });
+    });
+
+    describe('listActiveFieldTechnicians (#218/#253)', () => {
+      it('returns active field technicians as {id, name}, ordered by first/last name', async () => {
+        userRepository.find.mockResolvedValue([
+          { id: 't1', fullName: 'Ahmed Al Farsi' },
+          { id: 't2', fullName: 'Sanjay Rao' },
+        ]);
+
+        const result = await service.listActiveFieldTechnicians();
+
+        expect(userRepository.find).toHaveBeenCalledWith({
+          where: { role: { name: 'TECHNICIAN_FIELD' }, status: 'ACTIVE' },
+          relations: { role: true },
+          order: { firstName: 'ASC', lastName: 'ASC' },
+        });
+        expect(result).toEqual([
+          { id: 't1', name: 'Ahmed Al Farsi' },
+          { id: 't2', name: 'Sanjay Rao' },
+        ]);
+      });
+
+      it('returns an empty array when no field technicians are active', async () => {
+        userRepository.find.mockResolvedValue([]);
+
+        const result = await service.listActiveFieldTechnicians();
+
+        expect(result).toEqual([]);
+      });
     });
   });
 
