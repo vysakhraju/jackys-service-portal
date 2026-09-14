@@ -2,18 +2,16 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ServiceCentre } from '../../lib/masterDataTypes';
-import type { User } from '../../lib/types';
 
 vi.mock('../../lib/masterDataApi', () => ({
   listServiceCentres: vi.fn(),
   createServiceCentre: vi.fn(),
   updateServiceCentre: vi.fn(),
   deleteServiceCentre: vi.fn(),
+  listFieldTechnicians: vi.fn(),
 }));
-vi.mock('../../lib/usersApi', () => ({ listUsers: vi.fn() }));
 
-import { listServiceCentres, createServiceCentre, updateServiceCentre } from '../../lib/masterDataApi';
-import { listUsers } from '../../lib/usersApi';
+import { listServiceCentres, createServiceCentre, updateServiceCentre, listFieldTechnicians } from '../../lib/masterDataApi';
 import { ServiceCentresPage } from './ServiceCentresPage';
 
 function centre(overrides: Partial<ServiceCentre> = {}): ServiceCentre {
@@ -34,22 +32,6 @@ function centre(overrides: Partial<ServiceCentre> = {}): ServiceCentre {
   };
 }
 
-function fieldTech(id: string, firstName: string, lastName: string, status: User['status'] = 'ACTIVE'): User {
-  return {
-    id,
-    firstName,
-    lastName,
-    email: `${firstName.toLowerCase()}@jackys.com`,
-    employeeId: null,
-    phone: null,
-    status,
-    role: { id: 'r-field', name: 'TECHNICIAN_FIELD', displayName: 'Field Technician', description: null, permissions: [], isSystem: true },
-    lastLoginAt: null,
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-  };
-}
-
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -63,14 +45,13 @@ beforeEach(() => {
   vi.mocked(listServiceCentres).mockReset().mockResolvedValue([centre()]);
   vi.mocked(createServiceCentre).mockReset();
   vi.mocked(updateServiceCentre).mockReset();
-  vi.mocked(listUsers).mockReset().mockResolvedValue([
-    fieldTech('tech-1', 'Ravi', 'Kumar'),
-    fieldTech('tech-2', 'Fahad', 'Noor'),
-    fieldTech('tech-3', 'Inactive', 'Tech', 'INACTIVE'),
-    {
-      ...fieldTech('tech-4', 'Wasim', 'Workshop'),
-      role: { id: 'r-workshop', name: 'TECHNICIAN_WORKSHOP', displayName: 'Workshop Technician', description: null, permissions: [], isSystem: true },
-    },
+  // #218/#253: GET /users (admin-only) replaced with the new, CCE-reachable
+  // GET /master-data/service-centres/field-technicians - already active-Field-Technician-
+  // only server-side (see master-data.service.spec.ts's listActiveFieldTechnicians tests),
+  // so the mock here reflects that filtering, not a client-side one anymore.
+  vi.mocked(listFieldTechnicians).mockReset().mockResolvedValue([
+    { id: 'tech-1', name: 'Ravi Kumar' },
+    { id: 'tech-2', name: 'Fahad Noor' },
   ]);
 });
 
@@ -81,18 +62,16 @@ describe('ServiceCentresPage - field technician assignment', () => {
     expect(await screen.findByText('None assigned')).toBeInTheDocument();
   });
 
-  it('shows only active Field Technicians in the assignment picker, not workshop or inactive ones', async () => {
+  it('shows the active Field Technicians the backend returns in the assignment picker', async () => {
     renderPage();
     fireEvent.click(screen.getByText('+ New Service Centre'));
 
     expect(await screen.findByText('Ravi Kumar')).toBeInTheDocument();
     expect(screen.getByText('Fahad Noor')).toBeInTheDocument();
-    expect(screen.queryByText('Inactive Tech')).not.toBeInTheDocument();
-    expect(screen.queryByText('Wasim Workshop')).not.toBeInTheDocument();
   });
 
   it('shows a helpful empty state when there are no active field technicians at all', async () => {
-    vi.mocked(listUsers).mockResolvedValue([]);
+    vi.mocked(listFieldTechnicians).mockResolvedValue([]);
     renderPage();
     fireEvent.click(screen.getByText('+ New Service Centre'));
 

@@ -65,6 +65,14 @@ export const listSparePartModels = () =>
 export const createSparePartModel = (data: CreateSparePartModelInput) =>
   api.post<SparePartModel>(`${BASE}/spare-part-models`, data).then((r) => r.data);
 
+// #218/#253: backs the Service Centres page's field-technician picker. GET /users is
+// admin-only and GET /technician-schedule/gantt is Team-Leader-only - neither reachable by
+// CCE, who is exactly who creates/edits service centres - so this reads the same
+// MASTER_DATA_SERVICE_CENTRE_CREATE-gated list the backend built for it, not a general
+// user directory.
+export const listFieldTechnicians = () =>
+  api.get<{ id: string; name: string }[]>(`${BASE}/service-centres/field-technicians`).then((r) => r.data);
+
 // === Service Price List (create; list REQUIRES activityType — no unfiltered list route) ===
 export const getPriceList = (activityType: string, modelId?: string) =>
   api

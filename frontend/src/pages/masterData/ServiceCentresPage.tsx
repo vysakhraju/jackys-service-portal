@@ -4,8 +4,13 @@ import { useForm } from 'react-hook-form';
 import { ActiveBadge, DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Checkbox, Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
-import { createServiceCentre, deleteServiceCentre, listServiceCentres, updateServiceCentre } from '../../lib/masterDataApi';
-import { listUsers } from '../../lib/usersApi';
+import {
+  createServiceCentre,
+  deleteServiceCentre,
+  listFieldTechnicians,
+  listServiceCentres,
+  updateServiceCentre,
+} from '../../lib/masterDataApi';
 import {
   COUNTRIES,
   WEEKDAYS,
@@ -39,8 +44,14 @@ export function ServiceCentresPage() {
   const [assignedTechnicianIds, setAssignedTechnicianIds] = useState<string[]>([]);
 
   const { data, isLoading, error } = useQuery({ queryKey: ['service-centres'], queryFn: () => listServiceCentres() });
-  const { data: users, isLoading: usersLoading, error: usersError } = useQuery({ queryKey: ['users'], queryFn: () => listUsers() });
-  const fieldTechnicians = (users ?? []).filter((u) => u.role.name === 'TECHNICIAN_FIELD' && u.status === 'ACTIVE');
+  // #218/#253: was GET /users (admin-only, 403s for CCE - who's exactly who creates/edits
+  // service centres). Already active-Field-Technician-only server-side, so no client filter
+  // needed here anymore.
+  const {
+    data: fieldTechnicians,
+    isLoading: techniciansLoading,
+    error: techniciansError,
+  } = useQuery({ queryKey: ['master-data', 'field-technicians'], queryFn: () => listFieldTechnicians() });
 
   const {
     register,
@@ -110,7 +121,7 @@ export function ServiceCentresPage() {
     // resent on save, where the backend's @IsUUID validator rejects the WHOLE array
     // over one bad entry - permanently blocking that centre from ever being saved
     // again, including by an admin trying to fix exactly this.
-    const validTechIds = new Set(fieldTechnicians.map((t) => t.id));
+    const validTechIds = new Set((fieldTechnicians ?? []).map((t) => t.id));
     setAssignedTechnicianIds((centre.assignedTechnicianIds ?? []).filter((id) => validTechIds.has(id)));
     setModalOpen(true);
   }
@@ -255,16 +266,16 @@ export function ServiceCentresPage() {
               Technicians can be assigned — workshop technicians don't work off an appointment calendar.
             </p>
             <div className="rounded-md border border-slate-200 p-3">
-              {usersError && <ErrorNotice error={usersError} />}
-              {usersLoading && <p className="text-xs text-slate-400">Loading technicians…</p>}
-              {!usersLoading && !usersError && fieldTechnicians.length === 0 && (
+              {techniciansError && <ErrorNotice error={techniciansError} />}
+              {techniciansLoading && <p className="text-xs text-slate-400">Loading technicians…</p>}
+              {!techniciansLoading && !techniciansError && (fieldTechnicians ?? []).length === 0 && (
                 <p className="text-xs text-slate-400">
                   No active Field Technicians exist yet — create one from Users first.
                 </p>
               )}
-              {fieldTechnicians.length > 0 && (
+              {(fieldTechnicians ?? []).length > 0 && (
                 <div className="grid grid-cols-2 gap-1.5">
-                  {fieldTechnicians.map((tech) => (
+                  {(fieldTechnicians ?? []).map((tech) => (
                     <label key={tech.id} className="flex items-center gap-2 text-sm text-slate-700">
                       <input
                         type="checkbox"
@@ -272,7 +283,7 @@ export function ServiceCentresPage() {
                         onChange={() => toggleTechnician(tech.id)}
                         className="h-3.5 w-3.5 rounded border-slate-300"
                       />
-                      {tech.firstName} {tech.lastName}
+                      {tech.name}
                     </label>
                   ))}
                 </div>
