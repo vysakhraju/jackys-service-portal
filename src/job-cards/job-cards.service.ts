@@ -391,6 +391,17 @@ export class JobCardsService {
       );
     }
 
+    // #218/#248 (2026-09-14): this accepted any user id with zero role validation until
+    // now - found alongside DeliveryService.dispatch()'s identical gap while building the
+    // #218 name-based pickers. Mirrors addCrewHelper()'s own technician check just below.
+    const technician = await this.userRepository.findOne({ where: { id: technicianId }, relations: { role: true } });
+    if (!technician) {
+      throw new NotFoundException(`Technician ${technicianId} not found.`);
+    }
+    if (technician.role.name !== 'TECHNICIAN_WORKSHOP') {
+      throw new BadRequestException('A workshop technician assignment must hold the TECHNICIAN_WORKSHOP role.');
+    }
+
     jobCard.assignedWorkshopTechnicianId = technicianId;
     jobCard.workshopAssignedAt = new Date();
     jobCard.status = JobCardStatus.WORKSHOP_ASSIGNED;

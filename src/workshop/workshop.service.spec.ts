@@ -42,6 +42,7 @@ describe('WorkshopService', () => {
     };
     permissionsService = {
       requireActiveGrant: jest.fn().mockResolvedValue(undefined),
+      listGrantsByType: jest.fn().mockResolvedValue([]),
     };
     service = new WorkshopService(jobCardsService, inventoryService, permissionsService);
   });
@@ -339,6 +340,31 @@ describe('WorkshopService', () => {
 
       expect(result.staleReservations).toHaveLength(1);
       expect(result.staleReservations[0].id).toBe('res-1');
+    });
+  });
+
+  describe('listReworkApprovers', () => {
+    it('maps active REWORK_APPROVAL grants to {id, name}', async () => {
+      permissionsService.listGrantsByType.mockResolvedValue([
+        { user: { id: 'tl-1', fullName: 'Fatima Noor' } },
+        { user: { id: 'tl-2', fullName: 'Omar Suleiman' } },
+      ]);
+
+      const result = await service.listReworkApprovers();
+
+      expect(permissionsService.listGrantsByType).toHaveBeenCalledWith('REWORK_APPROVAL');
+      expect(result).toEqual([
+        { id: 'tl-1', name: 'Fatima Noor' },
+        { id: 'tl-2', name: 'Omar Suleiman' },
+      ]);
+    });
+
+    it('returns an empty array when no one currently holds the grant', async () => {
+      permissionsService.listGrantsByType.mockResolvedValue([]);
+
+      const result = await service.listReworkApprovers();
+
+      expect(result).toEqual([]);
     });
   });
 

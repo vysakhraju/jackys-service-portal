@@ -201,6 +201,19 @@ export class WorkshopService {
     return this.jobCardsService.completeWorkshop(jobCardId);
   }
 
+  /**
+   * #218 (2026-09-14): backs the rework-approver picker on the Request Spare form (rework
+   * re-request path) with real names instead of a pasted UUID. REWORK_APPROVAL is an
+   * admin-assignable per-user grant (see PermissionType doc comment), not a role - there is
+   * no role-based endpoint to list its holders from, and GET /permissions?type=... is
+   * admin-only (PERMISSION_ADMIN_ROLES), unusable by whoever is actually filling out this
+   * form. Gated the same capability as the request-spare action itself.
+   */
+  async listReworkApprovers(): Promise<{ id: string; name: string }[]> {
+    const grants = await this.permissionsService.listGrantsByType(PermissionType.REWORK_APPROVAL);
+    return grants.map((g) => ({ id: g.user.id, name: g.user.fullName }));
+  }
+
   async getWorkshopState(jobCardId: string) {
     const jobCard = await this.findEntityById(jobCardId);
     const stale = await this.inventoryService.getStaleReservations();

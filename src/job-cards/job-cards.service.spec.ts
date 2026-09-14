@@ -507,8 +507,11 @@ describe('JobCardsService', () => {
   });
 
   describe('assignWorkshopTechnician', () => {
+    const workshopTechnician = { id: 'tech-1', role: { name: 'TECHNICIAN_WORKSHOP' } };
+
     it('sets WORKSHOP_ASSIGNED from SECTION_ASSIGNED + section=WORKSHOP', async () => {
       jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SECTION_ASSIGNED, section: JobCardSection.WORKSHOP }));
+      userRepository.findOne.mockResolvedValue(workshopTechnician);
 
       const result = await service.assignWorkshopTechnician('jc-1', 'tech-1');
 
@@ -526,6 +529,22 @@ describe('JobCardsService', () => {
       jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SN_VALIDATED, section: null }));
 
       await expect(service.assignWorkshopTechnician('jc-1', 'tech-1')).rejects.toThrow(BadRequestException);
+    });
+
+    // #218/#248: assignWorkshopTechnician() previously accepted any user id with zero role
+    // validation - these two guard the fix.
+    it('rejects a technicianId that does not exist', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SECTION_ASSIGNED, section: JobCardSection.WORKSHOP }));
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.assignWorkshopTechnician('jc-1', 'ghost-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects a technicianId that does not hold the TECHNICIAN_WORKSHOP role', async () => {
+      jobCardRepository.findOne.mockResolvedValue(jobCard({ status: JobCardStatus.SECTION_ASSIGNED, section: JobCardSection.WORKSHOP }));
+      userRepository.findOne.mockResolvedValue({ id: 'field-1', role: { name: 'TECHNICIAN_FIELD' } });
+
+      await expect(service.assignWorkshopTechnician('jc-1', 'field-1')).rejects.toThrow(BadRequestException);
     });
   });
 

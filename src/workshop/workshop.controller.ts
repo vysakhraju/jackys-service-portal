@@ -118,6 +118,16 @@ export class WorkshopController {
     return this.workshopService.complete(jobCardId, user.id, isPrivileged);
   }
 
+  // #218: static route, must be registered before the ':jobCardId' route below so
+  // "rework-approvers" isn't swallowed by that param (and rejected by its ParseUUIDPipe).
+  @Get('rework-approvers')
+  @RequiresCapability('WORKSHOP_ACTION')
+  @ApiOperation({ summary: '#218: list users holding an active REWORK_APPROVAL grant, for the Request Spare rework-approver name-based picker (GET /permissions is admin-only, unusable here)' })
+  @ApiResponse({ status: 200, description: 'Active REWORK_APPROVAL holders as {id, name}' })
+  async listReworkApprovers() {
+    return this.workshopService.listReworkApprovers();
+  }
+
   @Get(':jobCardId')
   @RequiresCapability('WORKSHOP_VIEW')
   @ApiOperation({ summary: 'Full workshop state for a Job Card, including any stale reservations against it' })
