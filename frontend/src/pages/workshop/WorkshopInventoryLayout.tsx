@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { WorkshopInventoryProvider } from './WorkshopInventoryContext';
 
 const TABS: { label: string; path: string }[] = [
   { label: 'Workshop', path: '/workshop-inventory/workshop' },
@@ -40,7 +41,13 @@ export function WorkshopInventoryLayout() {
         </nav>
       </div>
       <div className="flex-1 overflow-y-auto bg-slate-50 px-8 py-6">
-        <Outlet />
+        {/* 2026-09-14 live-tested finding: this provider is what keeps the loaded Job Card
+            alive across a tab switch - see WorkshopInventoryContext.tsx's doc comment. It
+            lives here, above the <Outlet />, specifically because this layout never
+            unmounts when the child route changes, only the Outlet's content does. */}
+        <WorkshopInventoryProvider>
+          <Outlet />
+        </WorkshopInventoryProvider>
       </div>
     </div>
   );

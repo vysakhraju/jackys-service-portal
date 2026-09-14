@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -9,6 +9,7 @@ import { NamePicker } from '../../components/pickers/NamePicker';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useAuth } from '../../lib/auth';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
+import { useWorkshopJobCardSelection } from './WorkshopInventoryContext';
 import {
   assignWorkshopTechnician,
   completeWorkshop,
@@ -48,22 +49,53 @@ const RETURN_CONFIRM_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'WAREHOUSE_CLERK'];
 export function WorkshopPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const prefill = searchParams.get('jobCardId') ?? '';
-  const [activeJobCardId, setActiveJobCardId] = useState(prefill);
-  // #218/#251: see QcPage's identical field for why this isn't derived via an effect.
-  const [pickedLabel, setPickedLabel] = useState<string | null>(null);
+  // 2026-09-14 live-tested finding, round 2: a first attempt at this fix had activeJobCardId
+  // as page-local state, seeded from ?jobCardId= once and echoed back into the url on every
+  // pick - that survives a page refresh, but NOT the actual reported bug: switching to the
+  // Inventory & Stock or Need Spare Requests tab and back. Those 3 tabs are sibling ROUTES
+  // under WorkshopInventoryLayout's one <Outlet />, and the "Workshop" tab's <NavLink> target
+  // is a fixed path carrying no query string - so switching back navigates to a bare
+  // /workshop-inventory/workshop and this page remounts with page-local state reset to
+  // nothing, no matter what the url held a moment before. The fix: the selection now lives
+  // in WorkshopInventoryContext, provided by the layout itself (which never unmounts across
+  // its child routes) - see that file's doc comment.
+  const { selection, setSelection } = useWorkshopJobCardSelection();
+  const activeJobCardId = selection.id;
   const queryClient = useQueryClient();
 
-  // 2026-09-14 live-tested finding: this page's activeJobCardId used to seed from
-  // ?jobCardId= once on mount and never write back to the URL - so picking a job via
-  // search left the URL blank, and switching to a sibling tab under
-  // WorkshopInventoryLayout (Inventory & Stock / Need Spare Requests) fully unmounts this
-  // page via its <Outlet /> and remounts it with nothing to re-seed from, silently losing
-  // the loaded job. Keeping the URL in sync (same setSearchParams({ jobCardId }) convention
-  // JobCardJourneyPage already uses) means a tab switch and back re-seeds activeJobCardId
-  // from the URL exactly as it would on a fresh "Go to Workshop ->" link. This does not
-  // require any new autosave mechanism - every action below (assign/startWip/complete/
-  // requestSpare) already calls the backend immediately via useMutation and is persisted
-  // the instant it succeeds; the job only *looked* wiped because the pointer to it was lost.
+  // Guards the reconciliation effect below against a real render race: setSearchParams()
+  // can take one extra render to actually change what useSearchParams() returns, one
+  // render behind a plain useState update made in the SAME event handler (onSelect/
+  // onClear below, and the effect's own "restore" branch). Without this, the effect would
+  // see a `prefill` that hasn't caught up yet, treat it as a genuinely different value, and
+  // fight its own just-made change - live-tested: clicking "Change" cleared `selection` but
+  // then immediately un-cleared it because `prefill` was still momentarily the old id.
+  // Holds the id we're waiting for `prefill` to catch up to; null once settled.
+  const pendingUrlIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (pendingUrlIdRef.current !== null) {
+      if (prefill === pendingUrlIdRef.current) {
+        pendingUrlIdRef.current = null;
+      }
+      return;
+    }
+    if (prefill && prefill !== selection.id) {
+      // A fresh deep link (initial page load, or a "Go to Workshop ->" link for a
+      // DIFFERENT job while this one was already open) - adopt it into the shared
+      // selection. Never fires on a bare tab-switch-back navigation (no ?jobCardId= in the
+      // url at all), so the previously-loaded job in context survives that case untouched.
+      setSelection({ id: prefill, label: null });
+    } else if (!prefill && selection.id) {
+      // Landed back on the tab's bare path (exactly what the NavLink does) but the shared
+      // context still has a job loaded - restore it into this page's own url too, so a
+      // browser refresh right after switching tabs back also still works, not just the
+      // in-session switch itself.
+      pendingUrlIdRef.current = selection.id;
+      setSearchParams({ jobCardId: selection.id }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill, selection.id]);
 
   const stateQuery = useQuery({
     queryKey: ['workshop-state', activeJobCardId],
@@ -76,7 +108,7 @@ export function WorkshopPage() {
     queryClient.invalidateQueries({ queryKey: ['workshop-state', activeJobCardId] });
   }
 
-  const selectedLabel = activeJobCardId ? (pickedLabel ?? stateQuery.data?.jobCard.jobCardNumber ?? activeJobCardId) : null;
+  const selectedLabel = activeJobCardId ? (selection.label ?? stateQuery.data?.jobCard.jobCardNumber ?? activeJobCardId) : null;
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -91,8 +123,8 @@ export function WorkshopPage() {
           <AsyncSearchPicker<JourneySearchResult>
             search={searchJobCardJourney}
             onSelect={(item) => {
-              setPickedLabel(item.jobCardNumber);
-              setActiveJobCardId(item.jobCardId);
+              pendingUrlIdRef.current = item.jobCardId;
+              setSelection({ id: item.jobCardId, label: item.jobCardNumber });
               setSearchParams({ jobCardId: item.jobCardId });
             }}
             renderOption={renderJobCardOption}
@@ -100,8 +132,8 @@ export function WorkshopPage() {
             placeholder="Search by job card #, appointment #, customer name or phone…"
             selectedLabel={selectedLabel}
             onClear={() => {
-              setPickedLabel(null);
-              setActiveJobCardId('');
+              pendingUrlIdRef.current = '';
+              setSelection({ id: '', label: null });
               setSearchParams({});
             }}
           />
