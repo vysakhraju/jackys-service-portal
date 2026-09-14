@@ -196,19 +196,36 @@ export class TechnicianScheduleService {
    * - per the business's decision, a technician already at capacity still accepts new
    * assignments, they just queue; overCapacity only drives the gauge's colour, nothing is
    * ever blocked here.
+   *
+   * Self-scoping (2026-09-14, live-tested finding): WORKSHOP_QUEUE_VIEW is grantable to a
+   * plain TECHNICIAN_WORKSHOP (that's the whole point of splitting it off
+   * TECHNICIAN_SCHEDULE_GANTT, see the capability-catalog.ts entry) - but this endpoint used
+   * to return every technician's full backlog unconditionally, so a workshop technician
+   * granted this capability could see every OTHER technician's jobs too, which the business
+   * explicitly does not want ("he should only see what is in there for him"). A caller whose
+   * OWN role is TECHNICIAN_WORKSHOP now only ever gets their own row back, and the
+   * unassigned-job pool (a planning/assignment tool, not something they act on) is hidden
+   * for them. Anyone else holding the capability - TEAM_LEADER by default, or CCE/SUPER_ADMIN/
+   * SERVICE_HEAD/anyone else via Designation access - still sees every technician, unchanged.
    */
-  async getWorkshopQueue(): Promise<{
+  async getWorkshopQueue(caller: User): Promise<{
     technicians: WorkshopQueueTechnicianRow[];
     unassignedJobCards: UnassignedJobCard[];
   }> {
+    const isSelfOnly = caller.role.name === RoleName.TECHNICIAN_WORKSHOP;
+
     const [technicians, activeJobs, unassignedJobCardEntities] = await Promise.all([
       this.userRepository.find({
-        where: { role: { name: RoleName.TECHNICIAN_WORKSHOP }, status: UserStatus.ACTIVE },
+        where: {
+          role: { name: RoleName.TECHNICIAN_WORKSHOP },
+          status: UserStatus.ACTIVE,
+          ...(isSelfOnly ? { id: caller.id } : {}),
+        },
         relations: { role: true },
         order: { firstName: 'ASC', lastName: 'ASC' },
       }),
       this.jobCardsService.findActiveWorkshopQueue(),
-      this.jobCardsService.findUnassignedWorkshopJobs(),
+      isSelfOnly ? Promise.resolve([]) : this.jobCardsService.findUnassignedWorkshopJobs(),
     ]);
 
     const jobsByTechnician = new Map<string, JobCard[]>();

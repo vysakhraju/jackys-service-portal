@@ -1,4 +1,5 @@
 import { NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { In } from 'typeorm';
 import { InventoryService, STALE_HOURS, BLOCK_HOURS } from './inventory.service';
 import { InventoryStock, InventoryLocation } from './entities/inventory-stock.entity';
 import { InventoryReservation, ReservationStatus, ReviewDecision, NeedSpareReviewDecision } from './entities/inventory-reservation.entity';
@@ -310,6 +311,48 @@ describe('InventoryService', () => {
       reservationRepository.find.mockResolvedValue([]);
 
       const result = await service.getPendingNeedSpareRequests();
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('getActiveReservationsForJobCard (2026-09-14 fix - desktop Workshop screen\'s equivalent of the mobile "forgotten request" bug)', () => {
+    it('queries for HELD/PARTIALLY_RESERVED/RETURN_PENDING/PENDING_REVIEW on this job card, newest first, with sparePart/custodian relations', async () => {
+      reservationRepository.find.mockResolvedValue([reservation({ id: 'res-1', status: ReservationStatus.HELD })]);
+
+      const result = await service.getActiveReservationsForJobCard('jc-1');
+
+      expect(reservationRepository.find).toHaveBeenCalledWith({
+        where: {
+          jobCardId: 'jc-1',
+          status: In([
+            ReservationStatus.PENDING_REVIEW,
+            ReservationStatus.HELD,
+            ReservationStatus.PARTIALLY_RESERVED,
+            ReservationStatus.RETURN_PENDING,
+          ]),
+        },
+        relations: { sparePart: true, custodian: true },
+        order: { requestedAt: 'DESC' },
+      });
+      expect(result).toEqual([reservation({ id: 'res-1', status: ReservationStatus.HELD })]);
+    });
+
+    it('never includes a terminal reservation (RETURNED/CONSUMED/REJECTED) - proven by the where clause, not just by example data', async () => {
+      reservationRepository.find.mockResolvedValue([]);
+
+      await service.getActiveReservationsForJobCard('jc-1');
+
+      const calledStatuses: ReservationStatus[] = reservationRepository.find.mock.calls[0][0].where.status.value;
+      expect(calledStatuses).not.toContain(ReservationStatus.RETURNED);
+      expect(calledStatuses).not.toContain(ReservationStatus.CONSUMED);
+      expect(calledStatuses).not.toContain(ReservationStatus.REJECTED);
+    });
+
+    it('returns an empty array when the job card has no outstanding reservations at all', async () => {
+      reservationRepository.find.mockResolvedValue([]);
+
+      const result = await service.getActiveReservationsForJobCard('jc-1');
 
       expect(result).toEqual([]);
     });

@@ -247,10 +247,17 @@ describe('TechnicianScheduleService', () => {
     const workshopTech = (overrides: any = {}) =>
       technician({ id: 'wtech-1', role: { name: 'TECHNICIAN_WORKSHOP' }, workshopDailyCapacity: 6, ...overrides });
 
+    // A privileged/TL+ caller - sees every technician, exactly like calling with no caller
+    // identity at all did before the 2026-09-14 self-scoping fix.
+    const teamLeaderCaller = technician({ id: 'tl-1', role: { name: 'TECHNICAL_TEAM_LEADER' } });
+    // A plain workshop technician calling their own Workshop Queue - must only ever see
+    // their own row (2026-09-14 live-tested finding, see the service method's doc comment).
+    const selfCaller = (id = 'wtech-1') => technician({ id, role: { name: 'TECHNICIAN_WORKSHOP' } });
+
     it('queries only active TECHNICIAN_WORKSHOP users, no date param', async () => {
       userRepository.find.mockResolvedValue([workshopTech()]);
 
-      await service.getWorkshopQueue();
+      await service.getWorkshopQueue(teamLeaderCaller);
 
       expect(userRepository.find).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -258,6 +265,42 @@ describe('TechnicianScheduleService', () => {
         }),
       );
       expect(jobCardsService.findActiveWorkshopQueue).toHaveBeenCalledWith();
+    });
+
+    it('a TL+/CCE-with-access caller sees every workshop technician, unchanged', async () => {
+      userRepository.find.mockResolvedValue([workshopTech({ id: 'wtech-1' }), workshopTech({ id: 'wtech-2' })]);
+
+      await service.getWorkshopQueue(teamLeaderCaller);
+
+      expect(userRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.not.objectContaining({ id: expect.anything() }),
+        }),
+      );
+    });
+
+    it('a plain workshop technician caller only sees their own technician row, not every technician', async () => {
+      userRepository.find.mockResolvedValue([workshopTech({ id: 'wtech-1' })]);
+
+      await service.getWorkshopQueue(selfCaller('wtech-1'));
+
+      expect(userRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 'wtech-1' }),
+        }),
+      );
+    });
+
+    it('a plain workshop technician caller never sees the unassigned-job pool (a planning tool, not for them)', async () => {
+      jobCardsService.findUnassignedWorkshopJobs.mockResolvedValue([
+        { id: 'jc-9', jobCardNumber: 'JC-0300', faultCode: 'F009', symptomCode: 'S009', warrantyStatus: 'IN_WARRANTY', createdAt: new Date() },
+      ]);
+      userRepository.find.mockResolvedValue([workshopTech({ id: 'wtech-1' })]);
+
+      const result = await service.getWorkshopQueue(selfCaller('wtech-1'));
+
+      expect(result.unassignedJobCards).toEqual([]);
+      expect(jobCardsService.findUnassignedWorkshopJobs).not.toHaveBeenCalled();
     });
 
     it('groups active jobs under their assigned technician, preserving FIFO order', async () => {
@@ -285,7 +328,7 @@ describe('TechnicianScheduleService', () => {
         },
       ]);
 
-      const result = await service.getWorkshopQueue();
+      const result = await service.getWorkshopQueue(teamLeaderCaller);
 
       expect(result.technicians).toHaveLength(1);
       expect(result.technicians[0].id).toBe('wtech-1');
@@ -300,7 +343,7 @@ describe('TechnicianScheduleService', () => {
         { id: 'jc-2', jobCardNumber: 'JC-0002', status: JobCardStatus.IN_PROGRESS, assignedWorkshopTechnicianId: 'wtech-1', workshopAssignedAt: new Date(), faultCode: 'F2', symptomCode: 'S2', warrantyStatus: 'IN_WARRANTY' },
       ]);
 
-      const result = await service.getWorkshopQueue();
+      const result = await service.getWorkshopQueue(teamLeaderCaller);
 
       expect(result.technicians[0].overCapacity).toBe(true);
       expect(result.technicians[0].activeCount).toBe(2);
@@ -309,7 +352,7 @@ describe('TechnicianScheduleService', () => {
     it('returns a technician with an empty queue and overCapacity false when nothing is assigned', async () => {
       userRepository.find.mockResolvedValue([workshopTech()]);
 
-      const result = await service.getWorkshopQueue();
+      const result = await service.getWorkshopQueue(teamLeaderCaller);
 
       expect(result.technicians[0].jobs).toEqual([]);
       expect(result.technicians[0].activeCount).toBe(0);
@@ -321,7 +364,7 @@ describe('TechnicianScheduleService', () => {
         { id: 'jc-9', jobCardNumber: 'JC-0300', faultCode: 'F009', symptomCode: 'S009', warrantyStatus: 'IN_WARRANTY', createdAt: new Date('2026-09-08T12:00:00Z') },
       ]);
 
-      const result = await service.getWorkshopQueue();
+      const result = await service.getWorkshopQueue(teamLeaderCaller);
 
       expect(result.unassignedJobCards).toEqual([
         { id: 'jc-9', jobCardNumber: 'JC-0300', faultCode: 'F009', symptomCode: 'S009', warrantyStatus: 'IN_WARRANTY', createdAt: new Date('2026-09-08T12:00:00Z') },

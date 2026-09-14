@@ -152,7 +152,7 @@ export function WorkshopPage() {
 }
 
 function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged: () => void }) {
-  const { jobCard, staleReservations } = state;
+  const { jobCard, staleReservations, activeReservations } = state;
   const { user } = useAuth();
   const isPrivileged = !!user && PRIVILEGED_ROLES.includes(user.role.name);
   const canAssign = !!user && ASSIGN_ROLES.includes(user.role.name);
@@ -264,6 +264,7 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
       {!notWorkshopSection && ['IN_PROGRESS', 'SPARE_PENDING', 'READY_FOR_QC'].includes(jobCard.status) && canAct && (
         <>
           <RequestSpareCard jobCard={jobCard} mutation={requestSpareMutation} />
+          <ActiveReservationsSection reservations={activeReservations} isPrivileged={isPrivileged} onChanged={onChanged} />
           {jobCard.status === 'IN_PROGRESS' && (
             <ActionCard title="Mark workshop work done">
               <ErrorNotice error={completeMutation.error} />
@@ -304,10 +305,8 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
           Stale reservations on this job ({staleReservations.length})
         </p>
         <p className="mb-2 text-xs text-slate-400">
-          Only reservations idle 24h+ (or whose custodian was deactivated) show up here -
-          the backend has no "list every reservation for this job" endpoint, so a spare
-          request from a few minutes ago that came back short won't appear until it goes
-          stale. See the request result above for anything just requested.
+          Only reservations idle 24h+ (or whose custodian was deactivated) show up here - a
+          fresh request shows in "Active reservations on this job" above instead.
         </p>
         {staleReservations.length === 0 ? (
           <p className="text-sm text-slate-400">Nothing idle right now.</p>
@@ -529,6 +528,96 @@ function RequestSpareCard({
         </div>
       )}
     </ActionCard>
+  );
+}
+
+/**
+ * 2026-09-14 live-tested finding: RequestSpareCard's `justReserved` banner above is
+ * ephemeral component state - it's gone the instant this screen remounts (switch to
+ * Inventory & Stock and back, or just refresh), even though the reservation itself is
+ * still sitting there exactly as HELD/PARTIALLY_RESERVED in the database. This section is
+ * the persistent fix: it renders straight from `WorkshopState.activeReservations` (fetched
+ * fresh on every `getWorkshopState` call, same as jobCard/staleReservations), so it's
+ * always there regardless of whether this page was just loaded or has been open all day.
+ * A reservation moves out of this list only once InventoryService.
+ * getActiveReservationsForJobCard's terminal-status filter excludes it (RETURNED/
+ * CONSUMED/REJECTED) - see that method's own doc comment.
+ */
+function ActiveReservationsSection({
+  reservations,
+  isPrivileged,
+  onChanged,
+}: {
+  reservations: InventoryReservation[];
+  isPrivileged: boolean;
+  onChanged: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+        Active reservations on this job ({reservations.length})
+      </p>
+      {reservations.length === 0 ? (
+        <p className="text-sm text-slate-400">Nothing currently reserved for this job.</p>
+      ) : (
+        <div className="space-y-2">
+          {reservations.map((r) => (
+            <ActiveReservationRow key={r.id} reservation={r} isPrivileged={isPrivileged} onChanged={onChanged} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActiveReservationRow({
+  reservation,
+  isPrivileged,
+  onChanged,
+}: {
+  reservation: InventoryReservation;
+  isPrivileged: boolean;
+  onChanged: () => void;
+}) {
+  const { user } = useAuth();
+  const canRequestReturn = isPrivileged || user?.id === reservation.custodianUserId;
+  const returnMutation = useMutation({
+    mutationFn: (id: string) => requestReturn(id),
+    onSuccess: onChanged,
+  });
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-2.5 text-xs">
+      <div className="flex items-center justify-between">
+        <p className="font-medium text-slate-700">
+          {reservation.sparePart ? `${reservation.sparePart.code} — ${reservation.sparePart.name}` : 'Spare part'} ·{' '}
+          {reservation.quantityReserved}/{reservation.quantityRequested} reserved
+        </p>
+        <StatusBadge status={reservation.status} />
+      </div>
+      <p className="mt-0.5 text-slate-400">Reservation id: {reservation.id}</p>
+      {reservation.status === 'PARTIALLY_RESERVED' && (
+        <p className="mt-1 text-amber-700">
+          Short of stock - only {reservation.quantityReserved} of {reservation.quantityRequested} could be
+          reserved. Request a top-up above once more stock is available.
+        </p>
+      )}
+      {reservation.status === 'RETURN_PENDING' && (
+        <p className="mt-1">Marked for return - an Inventory Clerk still needs to confirm it physically arrived back.</p>
+      )}
+      {['HELD', 'PARTIALLY_RESERVED'].includes(reservation.status) && canRequestReturn && (
+        <>
+          <button
+            onClick={() => returnMutation.mutate(reservation.id)}
+            disabled={returnMutation.isPending}
+            className="mt-2 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+          >
+            Not needed - request return
+          </button>
+          <ErrorNotice error={returnMutation.error} />
+        </>
+      )}
+    </div>
   );
 }
 

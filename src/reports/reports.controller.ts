@@ -4,6 +4,8 @@ import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { RequiresCapability } from '../auth/decorators/requires-capability.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../auth/entities/user.entity';
 
 // BRD 18.1 "Service Manager Dashboard" audience. The BRD's other three dashboards -
 // 18.2 Finance, 18.3 Quality/Product, 18.4 Operational Reports - are explicitly out of
@@ -22,17 +24,17 @@ export class ReportsController {
   constructor(private reportsService: ReportsService) {}
 
   @Get('dashboard/kanban')
-  @ApiOperation({ summary: 'BRD 18.1 Job Status Board - full Kanban board with job cards per column' })
+  @ApiOperation({ summary: 'BRD 18.1 Job Status Board - full Kanban board with job cards per column. A caller who is themselves a plain technician only sees their own job cards - see ReportsService.getSelfScopedJobCardIds\'s doc comment.' })
   @ApiResponse({ status: 200, description: 'Kanban board snapshot' })
-  getKanban() {
-    return this.reportsService.getKanbanBoard();
+  getKanban(@CurrentUser() user: User) {
+    return this.reportsService.getKanbanBoard(user);
   }
 
   @Get('dashboard/kanban/summary')
-  @ApiOperation({ summary: 'Job Status Board - counts only, for lightweight polling clients' })
+  @ApiOperation({ summary: 'Job Status Board - counts only, for lightweight polling clients. Self-scoped for a plain technician caller, same as the full board.' })
   @ApiResponse({ status: 200, description: 'Kanban column counts' })
-  getKanbanSummary() {
-    return this.reportsService.getKanbanSummary();
+  getKanbanSummary(@CurrentUser() user: User) {
+    return this.reportsService.getKanbanSummary(user);
   }
 
   @Get('dashboard/approval-aging')
@@ -57,9 +59,9 @@ export class ReportsController {
   }
 
   @Get('dashboard/overview')
-  @ApiOperation({ summary: 'Combined single-call payload for the dashboard\'s initial page load' })
+  @ApiOperation({ summary: 'Combined single-call payload for the dashboard\'s initial page load - kanbanSummary is self-scoped for a plain technician caller, the rest are unchanged aggregates' })
   @ApiResponse({ status: 200, description: 'Dashboard overview' })
-  getOverview() {
-    return this.reportsService.getOverview();
+  getOverview(@CurrentUser() user: User) {
+    return this.reportsService.getOverview(user);
   }
 }

@@ -9,6 +9,8 @@ import { RequiresCapability } from '../auth/decorators/requires-capability.decor
 import { AuditInterceptor } from '../common/interceptors/audit.interceptor';
 import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../auth/entities/user.entity';
 
 // Same set as who can assign a technician in the first place (AppointmentsController's
 // assign-technician / WorkshopController's ASSIGN_ROLES) - viewing/using the board is a
@@ -49,9 +51,9 @@ export class TechnicianScheduleController {
 
   @Get('workshop-queue')
   @RequiresCapability('WORKSHOP_QUEUE_VIEW')
-  @ApiOperation({ summary: 'Workshop Queue board (2026-09-10): per-technician FIFO backlog of actively-assigned WORKSHOP Job Cards, no time axis, plus each technician\'s (display-only) capacity gauge and the unassigned-workshop-job pool' })
-  async getWorkshopQueue() {
-    return this.scheduleService.getWorkshopQueue();
+  @ApiOperation({ summary: 'Workshop Queue board (2026-09-10): per-technician FIFO backlog of actively-assigned WORKSHOP Job Cards, no time axis, plus each technician\'s (display-only) capacity gauge and the unassigned-workshop-job pool. A caller who is themselves a plain workshop technician only ever gets their own row back - see the service method\'s doc comment.' })
+  async getWorkshopQueue(@CurrentUser() user: User) {
+    return this.scheduleService.getWorkshopQueue(user);
   }
 
   @Patch('workshop-queue/technicians/:id/capacity')

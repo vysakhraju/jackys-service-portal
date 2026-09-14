@@ -33,6 +33,7 @@ vi.mock('../../lib/jobCardJourneyApi', () => ({
 
 import { useAuth } from '../../lib/auth';
 import { assignWorkshopTechnician, getWorkshopState, listReworkApprovers, requestSpare } from '../../lib/workshopApi';
+import { requestReturn } from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
@@ -332,10 +333,9 @@ describe('WorkshopPage - ownership gating (the-fool pre-mortem finding #4)', () 
 describe('WorkshopPage - READY_FOR_QC stays in scope (the-fool pre-mortem finding #1)', () => {
   it('still shows the Request Spare form on a READY_FOR_QC job (top-up path), not a "past this phase" dead end', async () => {
     mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
-    vi.mocked(getWorkshopState).mockResolvedValue({
-      jobCard: { ...makeWorkshopState().jobCard, status: 'READY_FOR_QC' },
-      staleReservations: [],
-    });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({ jobCard: { ...makeWorkshopState().jobCard, status: 'READY_FOR_QC' } }),
+    );
     renderPage();
     expect(await screen.findByText('Request a spare part (FR-09: reserves, does not deduct)')).toBeInTheDocument();
     // Complete is NOT offered on a READY_FOR_QC job (it's already complete) - only the
@@ -348,10 +348,9 @@ describe('WorkshopPage - READY_FOR_QC stays in scope (the-fool pre-mortem findin
 describe('WorkshopPage - rework re-request hint', () => {
   it('shows the rework sign-off hint when the job has a prior QC rejection', async () => {
     mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
-    vi.mocked(getWorkshopState).mockResolvedValue({
-      jobCard: { ...makeWorkshopState().jobCard, qcRejectionCount: 1 },
-      staleReservations: [],
-    });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({ jobCard: { ...makeWorkshopState().jobCard, qcRejectionCount: 1 } }),
+    );
     renderPage();
     expect(await screen.findByText(/QC-rejected before \(1x\)/i)).toBeInTheDocument();
   });
@@ -368,10 +367,9 @@ describe('WorkshopPage - rework re-request hint', () => {
   // GET /workshop/rework-approvers), not a raw-paste user id.
   it('picks the rework approver by name and submits their real id', async () => {
     mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
-    vi.mocked(getWorkshopState).mockResolvedValue({
-      jobCard: { ...makeWorkshopState().jobCard, qcRejectionCount: 1 },
-      staleReservations: [],
-    });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({ jobCard: { ...makeWorkshopState().jobCard, qcRejectionCount: 1 } }),
+    );
     vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
     vi.mocked(requestSpare).mockResolvedValue(makeReservation());
     renderPage();
@@ -392,16 +390,76 @@ describe('WorkshopPage - rework re-request hint', () => {
 });
 
 describe('WorkshopPage - stale reservation visibility gap is documented', () => {
-  it('lists a stale reservation with its age and explains the visibility limit (finding #2)', async () => {
+  it('lists a stale reservation with its age and points to the always-current Active reservations section for anything fresh', async () => {
     mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
     vi.mocked(getWorkshopState).mockResolvedValue(
       makeWorkshopState({ staleReservations: [makeReservation({ ageHours: 30 })] }),
     );
     renderPage();
     expect(await screen.findByText(/held 30h/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/won't appear until it goes stale/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/shows in "Active reservations on this job" above instead/i)).toBeInTheDocument();
+  });
+});
+
+// 2026-09-14 live-tested finding: a technician requested a spare, switched to the
+// Inventory & Stock tab and back (a full remount of this screen), and the reservation
+// looked gone even though it was still HELD in the database - staleReservations only ever
+// shows something once it's idle 24h+. activeReservations (fetched fresh on every
+// getWorkshopState call, same as jobCard itself) is the fix - these tests simulate the
+// exact remount and prove the reservation survives it.
+describe('WorkshopPage - Active reservations on this job (persists across a remount, unlike the old justReserved-only banner)', () => {
+  it('shows a fresh HELD reservation from activeReservations even on a fresh page load - not only right after submitting the form', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        activeReservations: [makeReservation({ id: 'res-fresh', status: 'HELD', quantityReserved: 1, quantityRequested: 1 })],
+      }),
+    );
+    renderPage();
+
+    expect(await screen.findByText(/Active reservations on this job \(1\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Reservation id: res-fresh/i)).toBeInTheDocument();
+    expect(screen.getByText(/1\/1 reserved/)).toBeInTheDocument();
+  });
+
+  it('shows "nothing currently reserved" when activeReservations is empty, rather than hiding the section', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState({ activeReservations: [] }));
+    renderPage();
+
+    expect(await screen.findByText(/Active reservations on this job \(0\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing currently reserved for this job/i)).toBeInTheDocument();
+  });
+
+  it('lets the custodian technician request a return on their own active reservation, and refetches state on success', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        activeReservations: [makeReservation({ id: 'res-fresh', status: 'HELD', custodianUserId: 'tech-1' })],
+      }),
+    );
+    vi.mocked(requestReturn).mockResolvedValue(makeReservation({ id: 'res-fresh', status: 'RETURN_PENDING' }));
+    renderPage();
+
+    await screen.findByText(/Active reservations on this job \(1\)/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Not needed - request return' }));
+
+    await waitFor(() => expect(vi.mocked(requestReturn)).toHaveBeenCalledWith('res-fresh'));
+    await waitFor(() => expect(vi.mocked(getWorkshopState)).toHaveBeenCalledTimes(2)); // onChanged() re-fetched state
+  });
+
+  it('does not let a different, non-privileged technician request a return on a reservation they are not the custodian of', async () => {
+    mockUser({ id: 'tech-2', roleName: 'TECHNICIAN_WORKSHOP' });
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        jobCard: { ...makeWorkshopState().jobCard, assignedWorkshopTechnicianId: 'tech-2' },
+        activeReservations: [makeReservation({ id: 'res-fresh', status: 'HELD', custodianUserId: 'tech-1' })],
+      }),
+    );
+    renderPage();
+
+    await screen.findByText(/Active reservations on this job \(1\)/i);
+    expect(screen.queryByRole('button', { name: 'Not needed - request return' })).not.toBeInTheDocument();
   });
 });
 

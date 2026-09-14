@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { In } from 'typeorm';
 import { ReportsService, KanbanColumn } from './reports.service';
 import { JobCard, JobCardStatus, JobCardSection } from '../job-cards/entities/job-card.entity';
 import { Delivery } from '../delivery/entities/delivery.entity';
@@ -7,6 +8,7 @@ import { Estimate, EstimateStatus } from '../estimates/entities/estimate.entity'
 import { TechnicianVisit } from '../technician/entities/technician-visit.entity';
 import { FaultSymptom, ApplianceCategory } from '../master-data/entities/fault-symptom.entity';
 import { User } from '../auth/entities/user.entity';
+import { Appointment } from '../appointments/entities/appointment.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 
 function mockQueryBuilder(rawRows: any[]) {
@@ -30,6 +32,7 @@ describe('ReportsService', () => {
   let estimateRepo: { find: jest.Mock };
   let faultSymptomRepo: { find: jest.Mock };
   let userRepo: { find: jest.Mock };
+  let appointmentRepo: { find: jest.Mock };
 
   const baseJob = (overrides: Partial<JobCard> = {}): JobCard =>
     ({
@@ -51,6 +54,7 @@ describe('ReportsService', () => {
     estimateRepo = { find: jest.fn() };
     faultSymptomRepo = { find: jest.fn() };
     userRepo = { find: jest.fn() };
+    appointmentRepo = { find: jest.fn().mockResolvedValue([]) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -61,6 +65,7 @@ describe('ReportsService', () => {
         { provide: getRepositoryToken(TechnicianVisit), useValue: {} },
         { provide: getRepositoryToken(FaultSymptom), useValue: faultSymptomRepo },
         { provide: getRepositoryToken(User), useValue: userRepo },
+        { provide: getRepositoryToken(Appointment), useValue: appointmentRepo },
       ],
     }).compile();
 
@@ -119,6 +124,83 @@ describe('ReportsService', () => {
       const summary = await service.getKanbanSummary();
       expect(summary.totalActiveJobs).toBe(2);
       expect(summary.columns.find((c) => c.key === KanbanColumn.DELIVERED)!.count).toBe(1);
+    });
+  });
+
+  describe('Live Job Status Board self-scoping (2026-09-14, live-tested finding)', () => {
+    const teamLeaderCaller = { id: 'tl-1', role: { name: 'TECHNICAL_TEAM_LEADER' } } as unknown as User;
+    const workshopTechCaller = { id: 'wtech-1', role: { name: 'TECHNICIAN_WORKSHOP' } } as unknown as User;
+    const fieldTechCaller = { id: 'ftech-1', role: { name: 'TECHNICIAN_FIELD' } } as unknown as User;
+
+    it('a TL+/CCE-with-access caller sees the whole board, unfiltered', async () => {
+      const jobs = [baseJob({ id: '1', status: JobCardStatus.OPEN }), baseJob({ id: '2', status: JobCardStatus.SPARE_PENDING })];
+      jobCardRepo.find.mockResolvedValue(jobs);
+
+      const board = await service.getKanbanBoard(teamLeaderCaller);
+
+      expect(board.totalActiveJobs).toBe(2);
+      // No caller-identity lookup happened for a non-technician caller.
+      expect(appointmentRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('a plain workshop technician caller only sees job cards assigned to them', async () => {
+      // First call: fetch own job card ids via assignedWorkshopTechnicianId. Second call:
+      // the actual board query, scoped to those ids.
+      jobCardRepo.find.mockResolvedValueOnce([{ id: 'jc-mine' }]).mockResolvedValueOnce([baseJob({ id: 'jc-mine', status: JobCardStatus.IN_PROGRESS })]);
+
+      const board = await service.getKanbanBoard(workshopTechCaller);
+
+      expect(jobCardRepo.find).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ where: { assignedWorkshopTechnicianId: 'wtech-1' } }),
+      );
+      expect(jobCardRepo.find).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ where: expect.objectContaining({ id: In(['jc-mine']) }) }),
+      );
+      expect(board.totalActiveJobs).toBe(1);
+    });
+
+    it('a plain workshop technician caller with zero assigned jobs gets an empty board without querying further', async () => {
+      jobCardRepo.find.mockResolvedValueOnce([]); // no job cards assigned to this technician
+
+      const board = await service.getKanbanBoard(workshopTechCaller);
+
+      expect(jobCardRepo.find).toHaveBeenCalledTimes(1); // never issued the second (unnecessary) query
+      expect(board.totalActiveJobs).toBe(0);
+    });
+
+    it('a plain field technician caller is scoped via their own appointments, not every appointment', async () => {
+      appointmentRepo.find.mockResolvedValue([{ id: 'apt-1' }, { id: 'apt-2' }]);
+      jobCardRepo.find
+        .mockResolvedValueOnce([{ id: 'jc-mine' }])
+        .mockResolvedValueOnce([baseJob({ id: 'jc-mine', status: JobCardStatus.OPEN })]);
+
+      const summary = await service.getKanbanSummary(fieldTechCaller);
+
+      expect(appointmentRepo.find).toHaveBeenCalledWith(expect.objectContaining({ where: { technicianId: 'ftech-1' } }));
+      expect(summary.totalActiveJobs).toBe(1);
+    });
+
+    it('a plain field technician caller with no appointments at all gets an empty board, never a 500 from an empty IN()', async () => {
+      appointmentRepo.find.mockResolvedValue([]);
+
+      const summary = await service.getKanbanSummary(fieldTechCaller);
+
+      expect(jobCardRepo.find).not.toHaveBeenCalled();
+      expect(summary.totalActiveJobs).toBe(0);
+    });
+
+    it('getOverview only self-scopes the kanbanSummary slice, for a plain technician caller', async () => {
+      jobCardRepo.find.mockResolvedValueOnce([]); // workshop tech: zero assigned jobs
+      estimateRepo.find.mockResolvedValue([]);
+      jobCardRepo.count = jest.fn().mockResolvedValue(0);
+      jobCardRepo.createQueryBuilder = jest.fn().mockReturnValue(mockQueryBuilder([]));
+      faultSymptomRepo.find.mockResolvedValue([]);
+
+      const overview = await service.getOverview(workshopTechCaller);
+
+      expect(overview.kanbanSummary.totalActiveJobs).toBe(0);
     });
   });
 

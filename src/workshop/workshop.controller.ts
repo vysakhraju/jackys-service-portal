@@ -130,7 +130,7 @@ export class WorkshopController {
 
   @Get(':jobCardId')
   @RequiresCapability('WORKSHOP_VIEW')
-  @ApiOperation({ summary: 'Full workshop state for a Job Card, including any stale reservations against it' })
+  @ApiOperation({ summary: 'Full workshop state for a Job Card - the job card itself, any stale (24h+ idle) reservations against it, and every currently-active (non-terminal) reservation against it regardless of age' })
   @ApiResponse({ status: 200 })
   async getState(@Param('jobCardId', ParseUUIDPipe) jobCardId: string) {
     return this.workshopService.getWorkshopState(jobCardId);

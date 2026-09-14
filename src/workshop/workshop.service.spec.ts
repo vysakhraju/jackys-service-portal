@@ -37,6 +37,7 @@ describe('WorkshopService', () => {
       hasUnresolvedStaleReservation: jest.fn().mockResolvedValue(null),
       reserve: jest.fn(),
       getStaleReservations: jest.fn().mockResolvedValue([]),
+      getActiveReservationsForJobCard: jest.fn().mockResolvedValue([]),
       hasPriorReservationForPart: jest.fn().mockResolvedValue(false),
       hasActiveReservationInCustody: jest.fn().mockResolvedValue(false),
     };
@@ -340,6 +341,25 @@ describe('WorkshopService', () => {
 
       expect(result.staleReservations).toHaveLength(1);
       expect(result.staleReservations[0].id).toBe('res-1');
+    });
+
+    // 2026-09-14 live-tested finding: a technician's own just-requested spare (HELD,
+    // seconds old, nowhere near the 24h staleness threshold) used to be invisible on this
+    // screen the moment they navigated away and back - staleReservations alone can never
+    // show it. activeReservations is the fix - see InventoryService
+    // .getActiveReservationsForJobCard's own doc comment for the full history.
+    it('surfaces a fresh, non-stale reservation via activeReservations, not just staleReservations', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard());
+      inventoryService.getStaleReservations.mockResolvedValue([]); // too fresh to be stale yet
+      inventoryService.getActiveReservationsForJobCard.mockResolvedValue([
+        { id: 'res-fresh', jobCardId: 'jc-1', status: 'HELD' },
+      ]);
+
+      const result = await service.getWorkshopState('jc-1');
+
+      expect(inventoryService.getActiveReservationsForJobCard).toHaveBeenCalledWith('jc-1');
+      expect(result.staleReservations).toEqual([]);
+      expect(result.activeReservations).toEqual([{ id: 'res-fresh', jobCardId: 'jc-1', status: 'HELD' }]);
     });
   });
 

@@ -151,4 +151,96 @@ describe('ReportsGateway.handleConnection', () => {
     expect(socket.disconnect).toHaveBeenCalledWith(true);
     expect(jwtVerifyAsync).not.toHaveBeenCalled();
   });
+
+  it('stashes the whole authenticated user on the socket, for pollAndBroadcastKanban to self-scope by later', async () => {
+    const user = buildUser({ roleName: RoleName.SUPER_ADMIN });
+    userRepoFindOne.mockResolvedValue(user);
+    const socket = buildSocket();
+
+    await gateway.handleConnection(socket);
+
+    expect(socket.data.user).toBe(user);
+  });
+
+  // Live-tested finding (2026-09-14): getKanbanBoard/getKanbanSummary used to be called with
+  // no argument at all here, and the single resulting board was broadcast identically to
+  // every connected socket via .to(DASHBOARD_ROOM).emit(...) - so a plain technician granted
+  // REPORTS_DASHBOARD_VIEW would see every OTHER technician's jobs too on every live update,
+  // even though their initial page load (a separate, already-scoped REST call) showed only
+  // their own. These tests pin down the fix: each connected socket's OWN stashed user is
+  // passed through on every poll tick, and updates are emitted directly to that socket only,
+  // never broadcast to the shared room.
+  describe('pollAndBroadcastKanban (self-scoping, 2026-09-14)', () => {
+    function buildConnectedSocket(id: string, user: User) {
+      return { id, data: { user }, emit: jest.fn() } as any;
+    }
+
+    it('computes a separately-scoped summary/board per socket and emits only to that socket', async () => {
+      const workshopTechUser = buildUser({ roleName: RoleName.TECHNICIAN_WORKSHOP, roleId: 'role-wtech' });
+      workshopTechUser.id = 'wtech-1';
+      const socket = buildConnectedSocket('sock-1', workshopTechUser);
+      (gateway as any).server = { sockets: { sockets: new Map([['sock-1', socket]]) } };
+
+      getKanbanBoard.mockResolvedValue({ columns: [{ key: 'WIP', label: 'WIP', count: 1, jobCards: [] }], totalActiveJobs: 1, asOf: new Date() });
+      const getKanbanSummary = jest.fn().mockResolvedValue({ columns: [{ key: 'WIP', label: 'WIP', count: 1 }], totalActiveJobs: 1, asOf: new Date() });
+      (gateway as any).reportsService.getKanbanSummary = getKanbanSummary;
+
+      await (gateway as any).pollAndBroadcastKanban();
+
+      expect(getKanbanSummary).toHaveBeenCalledWith(workshopTechUser);
+      expect(getKanbanBoard).toHaveBeenCalledWith(workshopTechUser);
+      expect(socket.emit).toHaveBeenCalledWith('kanban:update', expect.objectContaining({ totalActiveJobs: 1 }));
+    });
+
+    it('two different sockets with different scoped pictures each get their own update, independently', async () => {
+      const userA = buildUser({ roleName: RoleName.TECHNICIAN_WORKSHOP });
+      userA.id = 'wtech-a';
+      const userB = buildUser({ roleName: RoleName.TECHNICIAN_WORKSHOP });
+      userB.id = 'wtech-b';
+      const socketA = buildConnectedSocket('sock-a', userA);
+      const socketB = buildConnectedSocket('sock-b', userB);
+      (gateway as any).server = { sockets: { sockets: new Map([['sock-a', socketA], ['sock-b', socketB]]) } };
+
+      const getKanbanSummary = jest.fn().mockImplementation((u: User) =>
+        Promise.resolve({
+          columns: [{ key: 'WIP', label: 'WIP', count: u.id === 'wtech-a' ? 1 : 2 }],
+          totalActiveJobs: u.id === 'wtech-a' ? 1 : 2,
+          asOf: new Date(),
+        }),
+      );
+      (gateway as any).reportsService.getKanbanSummary = getKanbanSummary;
+      getKanbanBoard.mockImplementation((u: User) =>
+        Promise.resolve({ columns: [], totalActiveJobs: u.id === 'wtech-a' ? 1 : 2, asOf: new Date() }),
+      );
+
+      await (gateway as any).pollAndBroadcastKanban();
+
+      expect(socketA.emit).toHaveBeenCalledWith('kanban:update', expect.objectContaining({ totalActiveJobs: 1 }));
+      expect(socketB.emit).toHaveBeenCalledWith('kanban:update', expect.objectContaining({ totalActiveJobs: 2 }));
+    });
+
+    it('skips a socket entirely when its own scoped signature has not changed, without touching other sockets', async () => {
+      const user = buildUser({ roleName: RoleName.TECHNICAL_TEAM_LEADER });
+      user.id = 'tl-1';
+      const socket = buildConnectedSocket('sock-1', user);
+      (gateway as any).server = { sockets: { sockets: new Map([['sock-1', socket]]) } };
+      (gateway as any).lastSummarySignatureBySocket.set('sock-1', 'WIP:1');
+
+      const getKanbanSummary = jest.fn().mockResolvedValue({ columns: [{ key: 'WIP', label: 'WIP', count: 1 }], totalActiveJobs: 1, asOf: new Date() });
+      (gateway as any).reportsService.getKanbanSummary = getKanbanSummary;
+
+      await (gateway as any).pollAndBroadcastKanban();
+
+      expect(socket.emit).not.toHaveBeenCalled();
+      expect(getKanbanBoard).not.toHaveBeenCalled();
+    });
+
+    it('clears a disconnected socket\'s stored signature so a later reconnect is never compared against stale state', () => {
+      (gateway as any).lastSummarySignatureBySocket.set('sock-1', 'WIP:1');
+
+      gateway.handleDisconnect({ id: 'sock-1' } as any);
+
+      expect((gateway as any).lastSummarySignatureBySocket.has('sock-1')).toBe(false);
+    });
+  });
 });

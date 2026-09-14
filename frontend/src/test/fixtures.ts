@@ -222,6 +222,7 @@ export function makeWorkshopState(overrides: Partial<WorkshopState> = {}): Works
   return {
     jobCard: makeJobCard({ status: 'IN_PROGRESS', section: 'WORKSHOP', assignedWorkshopTechnicianId: 'tech-1' }),
     staleReservations: [],
+    activeReservations: [],
     ...overrides,
   };
 }

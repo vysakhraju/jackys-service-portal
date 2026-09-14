@@ -1,15 +1,24 @@
 // Shapes mirror src/workshop/dto/*.ts exactly - status/enum values are the backend's own
 // strings, not re-worded. WorkshopState is the exact shape WorkshopService.getWorkshopState()
-// returns: { jobCard, staleReservations } - staleReservations is filtered to this job only,
-// and is NOT a full "all active reservations" list (see the-fool pre-mortem finding #2 -
-// STATUS_TRACKER.md's Frontend Phase 6 section). It reuses InventoryReservation shape plus
-// the two computed fields getStaleReservations() adds.
+// returns: { jobCard, staleReservations, activeReservations }.
+//
+// staleReservations is filtered to this job only, and used to ONLY ever be a fresh
+// reservation's one and only visible representation on this screen - a documented gap (the-
+// fool pre-mortem finding #2, STATUS_TRACKER.md's Frontend Phase 6 section) that live use
+// proved wrong 2026-09-14: a technician who requested a spare, switched tabs, and came back
+// saw nothing, because staleReservations only ever shows something once it's idle 24h+.
+// activeReservations closes that gap - every reservation on this job that hasn't reached a
+// terminal state yet (HELD/PARTIALLY_RESERVED/RETURN_PENDING/PENDING_REVIEW), always
+// current, surviving a remount/refresh/tab-switch. staleReservations stays a separate field
+// (a different, TL-facing triage concern - which of these have gone idle too long) rather
+// than being folded into activeReservations.
 import type { JobCard } from './jobCardsTypes';
-import type { InventoryReservationWithAge } from './inventoryTypes';
+import type { InventoryReservation, InventoryReservationWithAge } from './inventoryTypes';
 
 export interface WorkshopState {
   jobCard: JobCard;
   staleReservations: InventoryReservationWithAge[];
+  activeReservations: InventoryReservation[];
 }
 
 export interface AssignWorkshopInput {

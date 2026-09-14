@@ -7,6 +7,8 @@ import { Estimate, EstimateStatus } from '../estimates/entities/estimate.entity'
 import { TechnicianVisit } from '../technician/entities/technician-visit.entity';
 import { FaultSymptom, ApplianceCategory } from '../master-data/entities/fault-symptom.entity';
 import { User } from '../auth/entities/user.entity';
+import { RoleName } from '../auth/entities/role.entity';
+import { Appointment } from '../appointments/entities/appointment.entity';
 
 /**
  * BRD 18.1 "Job Status Board" Kanban columns, in board order. JobCardStatus has 10 values
@@ -134,7 +136,46 @@ export class ReportsService {
     @InjectRepository(TechnicianVisit) private visitRepo: Repository<TechnicianVisit>,
     @InjectRepository(FaultSymptom) private faultSymptomRepo: Repository<FaultSymptom>,
     @InjectRepository(User) private userRepo: Repository<User>,
+    @InjectRepository(Appointment) private appointmentRepo: Repository<Appointment>,
   ) {}
+
+  /**
+   * Live Job Status Board self-scoping (2026-09-14, live-tested finding): REPORTS_DASHBOARD_VIEW
+   * defaults to TECHNICAL_TEAM_LEADER only, but - same as WORKSHOP_QUEUE_VIEW - it's a
+   * migrated capability, so a Super Admin can grant it to a plain technician via Designation
+   * access (the business explicitly wants technicians to have SOME dashboard visibility,
+   * just scoped to their own work: "he should only see what is in there for him"). Returns
+   * null for anyone who should see the whole board unchanged (TL+/CCE-with-access/anyone not
+   * a plain technician); returns the caller's own job card ids for a plain TECHNICIAN_WORKSHOP
+   * or TECHNICIAN_FIELD caller, so the Kanban board/summary can be filtered down to just those.
+   */
+  private async getSelfScopedJobCardIds(caller: User | undefined): Promise<string[] | null> {
+    if (!caller) return null;
+
+    if (caller.role.name === RoleName.TECHNICIAN_WORKSHOP) {
+      const jobs = await this.jobCardRepo.find({
+        where: { assignedWorkshopTechnicianId: caller.id },
+        select: { id: true },
+      });
+      return jobs.map((j) => j.id);
+    }
+
+    if (caller.role.name === RoleName.TECHNICIAN_FIELD) {
+      const appointments = await this.appointmentRepo.find({
+        where: { technicianId: caller.id },
+        select: { id: true },
+      });
+      if (appointments.length === 0) return [];
+      const appointmentIds = appointments.map((a) => a.id);
+      const jobs = await this.jobCardRepo.find({
+        where: { appointmentId: In(appointmentIds) },
+        select: { id: true },
+      });
+      return jobs.map((j) => j.id);
+    }
+
+    return null;
+  }
 
   /**
    * Maps one Job Card onto a Kanban column. Returns null for CANCELLED (dropped from the
@@ -166,15 +207,20 @@ export class ReportsService {
     }
   }
 
-  private async loadActiveJobCards(): Promise<JobCard[]> {
+  private async loadActiveJobCards(scopedIds: string[] | null): Promise<JobCard[]> {
+    if (scopedIds !== null && scopedIds.length === 0) return [];
     return this.jobCardRepo.find({
-      where: { status: In(Object.values(JobCardStatus).filter((s) => s !== JobCardStatus.CANCELLED)) },
+      where: {
+        status: In(Object.values(JobCardStatus).filter((s) => s !== JobCardStatus.CANCELLED)),
+        ...(scopedIds !== null ? { id: In(scopedIds) } : {}),
+      },
       order: { updatedAt: 'DESC' },
     });
   }
 
-  async getKanbanBoard(): Promise<KanbanBoard> {
-    const jobs = await this.loadActiveJobCards();
+  async getKanbanBoard(caller?: User): Promise<KanbanBoard> {
+    const scopedIds = await this.getSelfScopedJobCardIds(caller);
+    const jobs = await this.loadActiveJobCards(scopedIds);
 
     const deliveryIds = [...new Set(jobs.map((j) => j.deliveryId).filter((id): id is string => !!id))];
     const deliveries = deliveryIds.length
@@ -215,11 +261,18 @@ export class ReportsService {
   }
 
   /** Lightweight counts-only variant - used for the WebSocket poll's cheap diff check. */
-  async getKanbanSummary(): Promise<KanbanSummary> {
-    const jobs = await this.jobCardRepo.find({
-      select: { id: true, status: true, section: true, deliveryId: true },
-      where: { status: In(Object.values(JobCardStatus).filter((s) => s !== JobCardStatus.CANCELLED)) },
-    });
+  async getKanbanSummary(caller?: User): Promise<KanbanSummary> {
+    const scopedIds = await this.getSelfScopedJobCardIds(caller);
+    const jobs =
+      scopedIds !== null && scopedIds.length === 0
+        ? []
+        : await this.jobCardRepo.find({
+            select: { id: true, status: true, section: true, deliveryId: true },
+            where: {
+              status: In(Object.values(JobCardStatus).filter((s) => s !== JobCardStatus.CANCELLED)),
+              ...(scopedIds !== null ? { id: In(scopedIds) } : {}),
+            },
+          });
 
     const counts = new Map<KanbanColumn, number>(KANBAN_COLUMN_ORDER.map((c) => [c, 0]));
     for (const job of jobs) {
@@ -372,10 +425,16 @@ export class ReportsService {
     };
   }
 
-  /** Single-call payload for the dashboard's initial page load - one round trip instead of four. */
-  async getOverview(): Promise<DashboardOverview> {
+  /**
+   * Single-call payload for the dashboard's initial page load - one round trip instead of
+   * four. Only the kanbanSummary slice (the Live Job Status Board) is self-scoped for a
+   * plain technician caller - approvalAging/firstTimeFixRate/serviceEfficiency are
+   * management-level aggregates with no natural "this is mine" narrowing, and are out of
+   * scope for this fix (2026-09-14).
+   */
+  async getOverview(caller?: User): Promise<DashboardOverview> {
     const [kanbanSummary, approvalAging, firstTimeFixRate, serviceEfficiency] = await Promise.all([
-      this.getKanbanSummary(),
+      this.getKanbanSummary(caller),
       this.getApprovalAging(),
       this.getFirstTimeFixRate(),
       this.getServiceEfficiency(),

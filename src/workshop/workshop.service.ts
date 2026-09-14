@@ -214,11 +214,24 @@ export class WorkshopService {
     return grants.map((g) => ({ id: g.user.id, name: g.user.fullName }));
   }
 
+  /**
+   * activeReservations added 2026-09-14 (live-tested finding - see
+   * InventoryService.getActiveReservationsForJobCard's own doc comment for the full
+   * history): staleReservations alone only ever shows a reservation once it's gone idle
+   * 24h+, which is exactly why a technician's own just-requested spare used to vanish from
+   * this screen the moment they navigated away and back. activeReservations is the
+   * persistent, always-current answer to "what's outstanding on this job right now" -
+   * staleReservations stays as its own field (a different, TL-facing triage concern: which
+   * of these have gone idle too long) rather than being folded together.
+   */
   async getWorkshopState(jobCardId: string) {
     const jobCard = await this.findEntityById(jobCardId);
-    const stale = await this.inventoryService.getStaleReservations();
+    const [stale, activeReservations] = await Promise.all([
+      this.inventoryService.getStaleReservations(),
+      this.inventoryService.getActiveReservationsForJobCard(jobCardId),
+    ]);
     const relevantStale = stale.filter((r) => r.jobCardId === jobCardId);
-    return { jobCard, staleReservations: relevantStale };
+    return { jobCard, staleReservations: relevantStale, activeReservations };
   }
 
   // Thin passthroughs, same "every mutation goes through JobCardsService" convention as

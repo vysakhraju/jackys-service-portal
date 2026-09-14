@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, Not, IsNull } from 'typeorm';
+import { Repository, DataSource, Not, IsNull, In } from 'typeorm';
 import { InventoryStock, InventoryLocation } from './entities/inventory-stock.entity';
 import { InventoryReservation, ReservationStatus, ReviewDecision, NeedSpareReviewDecision } from './entities/inventory-reservation.entity';
 import { SparePart } from '../master-data/entities/spare-part.entity';
@@ -467,6 +467,43 @@ export class InventoryService {
         return a.custodianActive ? 1 : -1; // inactive-custodian reservations first
       }
       return b.ageHours - a.ageHours; // oldest first
+    });
+  }
+
+  /**
+   * GET /workshop/:jobCardId's `activeReservations` (2026-09-14, live-tested finding - the
+   * exact gap the-fool's pre-mortem #2 flagged and Phase 6 shipped as a documented known
+   * limitation: "a fresh stock shortfall is invisible... shown inline for the session"
+   * only, via the request-spare mutation's own response). Live use proved that
+   * session-only display wrong: a technician who requests a spare, switches tabs, and
+   * comes back (or just refreshes) sees nothing - the reservation is still sitting there
+   * in the DB exactly as HELD/PARTIALLY_RESERVED as it was, but the only UI that ever
+   * showed it was gone. Same fix shape as findLatestNeedSpareRequestForJobCard() (the
+   * mobile app's identical bug, closed 2026-09-07) - rehydrate from the database instead of
+   * relying on ephemeral mutation-response state. Deliberately broader than "just requested
+   * a moment ago": every reservation on this job that hasn't reached a terminal state
+   * (RETURNED/CONSUMED/REJECTED) yet, so a technician coming back to a job days later still
+   * sees exactly what's currently reserved against it, not only what's fresh. Newest-first -
+   * unlike getStaleReservations() (oldest-idle-first, a triage queue), this is "what's
+   * currently outstanding on THIS job", so the most recent request is what a technician
+   * checking back in cares about first. PENDING_REVIEW is included defensively (a WORKSHOP
+   * job card should never actually have one - that status is Mobile Phase 5's field-
+   * technician Need Spare flow, requestSpare() never creates it - but there's no harm in
+   * surfacing it here if it ever did).
+   */
+  async getActiveReservationsForJobCard(jobCardId: string): Promise<InventoryReservation[]> {
+    return this.reservationRepository.find({
+      where: {
+        jobCardId,
+        status: In([
+          ReservationStatus.PENDING_REVIEW,
+          ReservationStatus.HELD,
+          ReservationStatus.PARTIALLY_RESERVED,
+          ReservationStatus.RETURN_PENDING,
+        ]),
+      },
+      relations: { sparePart: true, custodian: true },
+      order: { requestedAt: 'DESC' },
     });
   }
 

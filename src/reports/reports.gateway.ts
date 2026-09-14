@@ -80,7 +80,10 @@ export class ReportsGateway implements OnGatewayConnection, OnGatewayDisconnect,
   private readonly logger = new Logger(ReportsGateway.name);
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private agingTimer: ReturnType<typeof setInterval> | null = null;
-  private lastSummarySignature = '';
+  // Keyed per-socket (not one shared value) since 2026-09-14's self-scoping fix - see
+  // pollAndBroadcastKanban()'s doc comment for why a single shared signature/broadcast no
+  // longer makes sense once different viewers can legitimately see different boards.
+  private lastSummarySignatureBySocket = new Map<string, string>();
 
   constructor(
     private reportsService: ReportsService,
@@ -121,11 +124,16 @@ export class ReportsGateway implements OnGatewayConnection, OnGatewayDisconnect,
       }
 
       client.data.userId = user.id;
+      // Self-scoping (2026-09-14): stash the whole user (with its loaded role) on the
+      // socket so every later poll tick knows whether this connection should see the full
+      // board or only its own jobs - see ReportsService.getSelfScopedJobCardIds's doc
+      // comment for why REPORTS_DASHBOARD_VIEW can legitimately reach a plain technician.
+      client.data.user = user;
       client.join(DASHBOARD_ROOM);
 
       // Send an immediate full snapshot rather than making the client wait for the next poll tick.
       const [board, aging] = await Promise.all([
-        this.reportsService.getKanbanBoard(),
+        this.reportsService.getKanbanBoard(user),
         this.reportsService.getApprovalAging(),
       ]);
       client.emit('kanban:update', board);
@@ -137,8 +145,8 @@ export class ReportsGateway implements OnGatewayConnection, OnGatewayDisconnect,
     }
   }
 
-  handleDisconnect(_client: Socket) {
-    // No per-connection state to clean up beyond what Socket.io already handles on disconnect.
+  handleDisconnect(client: Socket) {
+    this.lastSummarySignatureBySocket.delete(client.id);
   }
 
   // Mirrors RolesGuard.checkCapability's exact order (hardcoded MATRIX_LOCKED_ROLES bypass,
@@ -178,19 +186,39 @@ export class ReportsGateway implements OnGatewayConnection, OnGatewayDisconnect,
     return typeof fromQuery === 'string' ? fromQuery : null;
   }
 
+  /**
+   * Self-scoping (2026-09-14, live-tested finding): this used to compute ONE board and
+   * `.to(DASHBOARD_ROOM).emit(...)` it to every connected socket regardless of who they
+   * were - fine when REPORTS_DASHBOARD_VIEW was Team-Leader-only (everyone with access was
+   * meant to see everything), but wrong the moment a plain technician can be granted the
+   * same capability and is meant to see only their own jobs (same complaint as the Workshop
+   * Queue's). A single shared signature/broadcast can no longer represent "did anything
+   * change" for every viewer at once, so each connected socket now gets its own scoped
+   * summary, its own change-signature, and (only when that specific viewer's picture
+   * actually changed) its own scoped board emitted directly to it - never to the shared room.
+   */
   private async pollAndBroadcastKanban() {
     if (!this.server) return;
-    try {
-      const summary = await this.reportsService.getKanbanSummary();
-      const signature = summary.columns.map((c) => `${c.key}:${c.count}`).join('|');
-      if (signature === this.lastSummarySignature) return; // nothing changed - skip the broadcast
+    const sockets = [...this.server.sockets.sockets.values()];
+    if (sockets.length === 0) return;
 
-      this.lastSummarySignature = signature;
-      const board = await this.reportsService.getKanbanBoard();
-      this.server.to(DASHBOARD_ROOM).emit('kanban:update', board);
-    } catch (err) {
-      this.logger.error(`Kanban poll/broadcast failed: ${(err as Error).message}`);
-    }
+    await Promise.all(
+      sockets.map(async (socket) => {
+        const user: User | undefined = socket.data?.user;
+        if (!user) return; // shouldn't happen - handleConnection always sets it before joining the room
+        try {
+          const summary = await this.reportsService.getKanbanSummary(user);
+          const signature = summary.columns.map((c) => `${c.key}:${c.count}`).join('|');
+          if (signature === this.lastSummarySignatureBySocket.get(socket.id)) return;
+
+          this.lastSummarySignatureBySocket.set(socket.id, signature);
+          const board = await this.reportsService.getKanbanBoard(user);
+          socket.emit('kanban:update', board);
+        } catch (err) {
+          this.logger.error(`Kanban poll/broadcast failed for socket ${socket.id}: ${(err as Error).message}`);
+        }
+      }),
+    );
   }
 
   private async broadcastApprovalAging() {
