@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -12,9 +12,16 @@ vi.mock('../../lib/permissionsApi', () => ({
   listGrantsForUser: vi.fn(),
   listGrantsByType: vi.fn(),
 }));
+// #218/#254: the two "paste the user's id" fields are now NamePickers backed by this -
+// GET /users is SUPER_ADMIN/SERVICE_HEAD-only, same as this whole page, so no fallback
+// needed (unlike most other #218 pickers).
+vi.mock('../../lib/usersApi', () => ({
+  listUsers: vi.fn(),
+}));
 
 import { useAuth } from '../../lib/auth';
 import { grantPermission, listGrantsByType, listGrantsForUser, revokePermission } from '../../lib/permissionsApi';
+import { listUsers } from '../../lib/usersApi';
 import { PermissionsPage } from './PermissionsPage';
 
 function renderPage() {
@@ -53,6 +60,34 @@ beforeEach(() => {
   vi.mocked(listGrantsForUser).mockReset();
   vi.mocked(listGrantsByType).mockReset();
   vi.mocked(listGrantsByType).mockResolvedValue([]);
+  vi.mocked(listUsers).mockReset().mockResolvedValue([
+    {
+      id: 'user-9',
+      firstName: 'Noor',
+      lastName: 'Hassan',
+      email: 'noor@jackys.com',
+      employeeId: 'E9',
+      phone: null,
+      status: 'ACTIVE',
+      role: { id: 'r-qc', name: 'QC_OFFICER', displayName: 'QC Officer' },
+      lastLoginAt: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'user-2',
+      firstName: 'Quinn',
+      lastName: 'Carter',
+      email: 'quinn@jackys.com',
+      employeeId: 'E2',
+      phone: null,
+      status: 'ACTIVE',
+      role: { id: 'r-tl', name: 'TECHNICAL_TEAM_LEADER', displayName: 'Technical Team Leader' },
+      lastLoginAt: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+  ] as any);
 });
 
 describe('PermissionsPage - admin-only gating', () => {
@@ -97,17 +132,18 @@ describe('PermissionsPage - who holds a permission + revoke', () => {
 });
 
 describe('PermissionsPage - grant form', () => {
-  it('submits the pasted user id, selected type, and notes to grantPermission', async () => {
+  it('submits the picked user id, selected type, and notes to grantPermission', async () => {
     mockUser('SUPER_ADMIN');
     vi.mocked(grantPermission).mockResolvedValue(makeGrant());
     const user = userEvent.setup();
     renderPage();
 
-    // "User id" and "Permission type" labels also appear in the Who-holds filter and the
-    // history lookup below - scope to this section's own <section> so the query is
-    // unambiguous rather than matching the wrong one of three same-labelled fields.
+    // "Permission type" also appears in the Who-holds filter above, and the user-picker
+    // testid is shared with the history lookup below - scope to this section's own
+    // <section> so the queries are unambiguous.
     const section = (await screen.findByText('Grant a permission')).closest('section') as HTMLElement;
-    await user.type(within(section).getByLabelText('User id'), 'user-9');
+    fireEvent.focus(within(section).getByTestId('name-picker-input'));
+    fireEvent.click(await within(section).findByText(/Noor Hassan/));
     await user.selectOptions(within(section).getByLabelText('Permission type'), 'REWORK_APPROVAL');
     // The Notes field also renders a hint span inside the same <label> ("Optional - why
     // this grant was made."), which becomes part of the label's full accessible name -
@@ -123,6 +159,18 @@ describe('PermissionsPage - grant form', () => {
       }),
     );
   });
+
+  it('blocks submission with no user picked (required validation still active)', async () => {
+    mockUser('SUPER_ADMIN');
+    const user = userEvent.setup();
+    renderPage();
+
+    const section = (await screen.findByText('Grant a permission')).closest('section') as HTMLElement;
+    await user.click(within(section).getByRole('button', { name: 'Grant' }));
+
+    expect(await within(section).findByText('Required')).toBeInTheDocument();
+    expect(grantPermission).not.toHaveBeenCalled();
+  });
 });
 
 describe('PermissionsPage - per-user grant history lookup', () => {
@@ -132,12 +180,11 @@ describe('PermissionsPage - per-user grant history lookup', () => {
       makeGrant({ id: 'g1', permissionType: 'QC_APPROVAL', revokedAt: null }),
       makeGrant({ id: 'g2', permissionType: 'REWORK_APPROVAL', revokedAt: '2026-08-15T00:00:00Z' }),
     ]);
-    const user = userEvent.setup();
     renderPage();
 
     const section = (await screen.findByText("Look up a user's full grant history")).closest('section') as HTMLElement;
-    await user.type(within(section).getByLabelText('User id'), 'user-2');
-    await user.click(within(section).getByRole('button', { name: 'Look up' }));
+    fireEvent.focus(within(section).getByTestId('name-picker-input'));
+    fireEvent.click(await within(section).findByText(/Quinn Carter/));
 
     expect(await screen.findByText('Active')).toBeInTheDocument();
     expect(screen.getByText('Inactive')).toBeInTheDocument();

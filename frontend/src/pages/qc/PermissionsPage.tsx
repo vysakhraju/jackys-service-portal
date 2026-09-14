@@ -3,9 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { ActiveBadge, DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
+import { NamePicker } from '../../components/pickers/NamePicker';
 import { useAuth } from '../../lib/auth';
 import { grantPermission, listGrantsByType, listGrantsForUser, revokePermission } from '../../lib/permissionsApi';
 import { PERMISSION_TYPES, type PermissionTypeValue, type UserPermissionGrant } from '../../lib/permissionsTypes';
+import { useUserOptions } from '../../lib/useUserOptions';
 
 // Granting/revoking is itself a high-trust admin action - mirrors PERMISSION_ADMIN_ROLES
 // in permissions.controller.ts exactly (deliberately narrower than QC_GATE_ROLES: only
@@ -103,9 +105,18 @@ function WhoHoldsSection() {
 
 function GrantSection() {
   const queryClient = useQueryClient();
-  const { register, handleSubmit, reset } = useForm<{ userId: string; permissionType: PermissionTypeValue; notes: string }>({
+  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<{
+    userId: string;
+    permissionType: PermissionTypeValue;
+    notes: string;
+  }>({
     defaultValues: { userId: '', permissionType: 'QC_APPROVAL', notes: '' },
   });
+  // #218/#254: userId is driven by NamePicker via setValue()/watch(), not a native
+  // <input {...register()}> - registered here (not spread onto any element) to keep its
+  // `required` validation active.
+  register('userId', { required: 'Required' });
+  const { options: userOptions, loading: usersLoading } = useUserOptions();
   const grantMutation = useMutation({
     mutationFn: (values: { userId: string; permissionType: PermissionTypeValue; notes: string }) =>
       grantPermission({ userId: values.userId, permissionType: values.permissionType, notes: values.notes || undefined }),
@@ -116,17 +127,21 @@ function GrantSection() {
     <section className="border-t border-slate-200 pt-6">
       <p className="mb-1 text-sm font-semibold text-slate-900">Grant a permission</p>
       <p className="mb-3 text-xs text-slate-400">
-        Same "no list-users endpoint" convention as everywhere else on this app - paste the user's id (check the
-        "who currently holds this" list above first, or the history lookup below, if you're not sure they already
-        have it: the backend 409s on a duplicate active grant).
+        Check the "who currently holds this" list above first, or the history lookup below, if you're not sure
+        the person already has it: the backend 409s on a duplicate active grant.
       </p>
       <ErrorNotice error={grantMutation.error} />
       <form
         onSubmit={handleSubmit((values) => grantMutation.mutate(values, { onSuccess: () => reset() }))}
         className="space-y-3"
       >
-        <Field label="User id">
-          <input className={inputClass} {...register('userId', { required: true })} />
+        <Field label="User" error={errors.userId?.message}>
+          <NamePicker
+            value={watch('userId') || null}
+            options={userOptions}
+            loading={usersLoading}
+            onChange={(id) => setValue('userId', id ?? '', { shouldValidate: true })}
+          />
         </Field>
         <Field label="Permission type">
           <select className={inputClass} {...register('permissionType', { required: true })}>
@@ -153,8 +168,8 @@ function GrantSection() {
 }
 
 function UserHistorySection() {
-  const [userIdInput, setUserIdInput] = useState('');
   const [activeUserId, setActiveUserId] = useState('');
+  const { options: userOptions, loading: usersLoading } = useUserOptions();
   const historyQuery = useQuery({
     queryKey: ['permission-grants', 'by-user', activeUserId],
     queryFn: () => listGrantsForUser(activeUserId),
@@ -176,26 +191,16 @@ function UserHistorySection() {
       <p className="mb-3 text-xs text-slate-400">
         GET /permissions/users/:userId - active and revoked grants, most recent first.
       </p>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setActiveUserId(userIdInput.trim());
-        }}
-        className="mb-3 flex items-end gap-2"
-      >
-        <div className="flex-1">
-          <Field label="User id">
-            <input className={inputClass} value={userIdInput} onChange={(e) => setUserIdInput(e.target.value)} />
-          </Field>
-        </div>
-        <button
-          type="submit"
-          disabled={!userIdInput.trim()}
-          className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Look up
-        </button>
-      </form>
+      <div className="mb-3 max-w-sm">
+        <Field label="User">
+          <NamePicker
+            value={activeUserId || null}
+            options={userOptions}
+            loading={usersLoading}
+            onChange={(id) => setActiveUserId(id ?? '')}
+          />
+        </Field>
+      </div>
       {activeUserId && (
         <DataTable
           columns={columns}
