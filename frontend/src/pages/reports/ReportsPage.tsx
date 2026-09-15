@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
@@ -186,7 +187,12 @@ function KanbanCardTile({ card }: { card: KanbanCard }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs">
       <div className="flex items-center justify-between gap-2">
-        <span className="font-semibold text-slate-800">{card.jobCardNumber}</span>
+        <Link
+          to={`/job-cards/journey?jobCardId=${card.jobCardId}`}
+          className="font-semibold text-slate-800 hover:underline"
+        >
+          {card.jobCardNumber}
+        </Link>
         <StatusBadge status={card.warrantyStatus} />
       </div>
       <p className="mt-1 text-slate-500">
@@ -237,7 +243,12 @@ function ApprovalAgingCard({
                 item.breached ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-600'
               }`}
             >
-              <span className="font-medium">{item.jobCardNumber}</span>
+              <Link
+                to={`/job-cards/journey?jobCardId=${item.jobCardId}`}
+                className="font-medium hover:underline"
+              >
+                {item.jobCardNumber}
+              </Link>
               <span>{item.ageHours.toFixed(1)}h</span>
             </li>
           ))}

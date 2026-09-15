@@ -302,6 +302,8 @@ export interface RepeatComplaintItem {
   totalJobCount: number;
   repeatWithin30Days: boolean;
   jobCardNumbers: string[];
+  // Same order/index as jobCardNumbers (#220 - Journey deep-links).
+  jobCardIds: string[];
   minGapDays: number | null;
 }
 

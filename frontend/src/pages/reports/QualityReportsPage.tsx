@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
@@ -163,7 +164,16 @@ export function QualityReportsPage() {
                           )}
                         </td>
                         <td className="px-3 py-2 tabular-nums text-slate-700">{row.minGapDays ?? '—'}</td>
-                        <td className="px-3 py-2 text-slate-500">{row.jobCardNumbers.join(', ')}</td>
+                        <td className="px-3 py-2 text-slate-500">
+                          {row.jobCardNumbers.map((num, i) => (
+                            <span key={row.jobCardIds[i] ?? num}>
+                              {i > 0 && ', '}
+                              <Link to={`/job-cards/journey?jobCardId=${row.jobCardIds[i]}`} className="hover:underline">
+                                {num}
+                              </Link>
+                            </span>
+                          ))}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

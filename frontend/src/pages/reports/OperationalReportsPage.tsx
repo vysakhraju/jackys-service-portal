@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
@@ -170,7 +171,11 @@ export function OperationalReportsPage() {
                       <tbody className="divide-y divide-slate-100">
                         {slaQuery.data.items.map((item) => (
                           <tr key={item.jobCardId} className="hover:bg-slate-50">
-                            <td className="px-3 py-2 text-slate-700">{item.jobCardNumber}</td>
+                            <td className="px-3 py-2 text-slate-700">
+                              <Link to={`/job-cards/journey?jobCardId=${item.jobCardId}`} className="font-medium hover:underline">
+                                {item.jobCardNumber}
+                              </Link>
+                            </td>
                             <td className="px-3 py-2 text-slate-500">{new Date(item.createdAt).toLocaleDateString()}</td>
                             <td className="px-3 py-2 text-slate-500">{new Date(item.qcApprovedAt).toLocaleDateString()}</td>
                             <td className="px-3 py-2 tabular-nums text-slate-700">{item.hoursElapsed.toFixed(1)}</td>

@@ -64,6 +64,16 @@ describe('QualityReportsService', () => {
       expect(results[0].jobCardNumbers).toEqual(expect.arrayContaining(['JC-1', 'JC-2']));
     });
 
+    it('returns jobCardIds (the real .id, distinct from jobCardNumber) in the same order as jobCardNumbers, for Journey deep-links (#220)', async () => {
+      jobCardRepo.find = jest.fn().mockResolvedValue([
+        { id: 'uuid-1', jobCardNumber: 'JC-1', serialNumber: 'SN-5', createdAt: new Date(Date.now() - 40 * 86_400_000), status: JobCardStatus.DELIVERED },
+        { id: 'uuid-2', jobCardNumber: 'JC-2', serialNumber: 'SN-5', createdAt: new Date(Date.now() - 15 * 86_400_000), status: JobCardStatus.DELIVERED },
+      ]);
+      const results = await service.getRepeatComplaints();
+      expect(results[0].jobCardNumbers).toEqual(['JC-1', 'JC-2']);
+      expect(results[0].jobCardIds).toEqual(['uuid-1', 'uuid-2']);
+    });
+
     it('does not flag a S/N whose jobs are more than 30 days apart', async () => {
       jobCardRepo.find = jest.fn().mockResolvedValue([job('JC-1', 'SN-2', 90), job('JC-2', 'SN-2', 40)]);
       const results = await service.getRepeatComplaints();

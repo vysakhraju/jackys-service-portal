@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeProductFailureRatioRow, makeRepeatComplaintItem, makeRwrAnalysisRow } from '../../test/fixtures';
 
@@ -32,7 +33,9 @@ function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <QualityReportsPage />
+      <MemoryRouter>
+        <QualityReportsPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -84,6 +87,20 @@ describe('QualityReportsPage - widgets', () => {
     renderPage();
     expect(await screen.findByText('SN-000123')).toBeInTheDocument();
     expect(screen.getByText('Yes')).toBeInTheDocument();
+  });
+
+  it('#220: each job card in a Repeat Complaints row links straight to its own Journey view', async () => {
+    mockCapabilities(['REPORTS_QUALITY_VIEW']);
+    renderPage();
+    await screen.findByText('SN-000123');
+
+    // The fixture's two job cards (JC-0001/jc-1, JC-0002/jc-2) must each get their own
+    // link - not a single link covering the whole comma-joined cell, since only one
+    // jobCardId could ever be encoded in that case.
+    const first = screen.getByRole('link', { name: 'JC-0001' });
+    const second = screen.getByRole('link', { name: 'JC-0002' });
+    expect(first).toHaveAttribute('href', '/job-cards/journey?jobCardId=jc-1');
+    expect(second).toHaveAttribute('href', '/job-cards/journey?jobCardId=jc-2');
   });
 
   it('renders the RWR Analysis table with free-text reason', async () => {

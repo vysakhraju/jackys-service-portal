@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeSlaBreachReport, makeSpareConsumptionReport, makeTechnicianProductivityReport } from '../../test/fixtures';
 
@@ -33,7 +34,9 @@ function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <OperationalReportsPage />
+      <MemoryRouter>
+        <OperationalReportsPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -94,6 +97,14 @@ describe('OperationalReportsPage - widgets', () => {
     await user.type(input, '24');
 
     await waitFor(() => expect(getSlaBreach).toHaveBeenLastCalledWith(24));
+  });
+
+  it('#220: an SLA Breach row\'s job card number links straight to its Journey view', async () => {
+    mockCapabilities(['REPORTS_OPERATIONAL_VIEW']);
+    renderPage();
+
+    const link = await screen.findByRole('link', { name: 'JC-0001' });
+    expect(link).toHaveAttribute('href', expect.stringContaining('/job-cards/journey?jobCardId='));
   });
 
   it('renders Spare Parts Consumption top-by-quantity and top-by-value lists', async () => {

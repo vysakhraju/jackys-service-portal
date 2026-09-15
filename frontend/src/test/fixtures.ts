@@ -883,6 +883,7 @@ export function makeRepeatComplaintItem(overrides: Partial<RepeatComplaintItem> 
     totalJobCount: 2,
     repeatWithin30Days: true,
     jobCardNumbers: ['JC-0001', 'JC-0002'],
+    jobCardIds: ['jc-1', 'jc-2'],
     minGapDays: 10,
     ...overrides,
   };

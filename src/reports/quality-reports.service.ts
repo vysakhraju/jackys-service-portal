@@ -32,6 +32,9 @@ export interface RepeatComplaintItem {
   totalJobCount: number;
   repeatWithin30Days: boolean;
   jobCardNumbers: string[];
+  // Same order/index as jobCardNumbers - added so the frontend can deep-link each job
+  // card straight into the Job Card Journey view (#220) without a second lookup.
+  jobCardIds: string[];
   minGapDays: number | null;
 }
 
@@ -109,10 +112,10 @@ export class QualityReportsService {
       order: { createdAt: 'ASC' },
     });
 
-    const bySerial = new Map<string, { jobCardNumber: string; createdAt: Date }[]>();
+    const bySerial = new Map<string, { jobCardId: string; jobCardNumber: string; createdAt: Date }[]>();
     for (const j of jobs) {
       const list = bySerial.get(j.serialNumber) ?? [];
-      list.push({ jobCardNumber: j.jobCardNumber, createdAt: j.createdAt });
+      list.push({ jobCardId: j.id, jobCardNumber: j.jobCardNumber, createdAt: j.createdAt });
       bySerial.set(j.serialNumber, list);
     }
 
@@ -135,6 +138,7 @@ export class QualityReportsService {
           totalJobCount: entries.length,
           repeatWithin30Days: true,
           jobCardNumbers: entries.map((e) => e.jobCardNumber),
+          jobCardIds: entries.map((e) => e.jobCardId),
           minGapDays: Math.round((minGapMs / 86_400_000) * 100) / 100,
         });
       }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   makeApprovalAgingReport,
@@ -52,7 +53,9 @@ function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <ReportsPage />
+      <MemoryRouter>
+        <ReportsPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -142,6 +145,15 @@ describe('ReportsPage - Kanban board', () => {
 
     expect(await screen.findByText('JC-0001')).toBeInTheDocument();
   });
+
+  it('#220: a Kanban card\'s job card number links straight to its Journey view', async () => {
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
+    mockSocket({ status: 'live', kanban: makeKanbanBoard() });
+    renderPage();
+
+    const link = await screen.findByRole('link', { name: 'JC-0001' });
+    expect(link).toHaveAttribute('href', expect.stringContaining('/job-cards/journey?jobCardId='));
+  });
 });
 
 describe('ReportsPage - Approval Aging', () => {
@@ -159,6 +171,15 @@ describe('ReportsPage - Approval Aging', () => {
 
     expect(await screen.findByText('JC-0001')).toBeInTheDocument();
     expect(await screen.findByText('1 past threshold')).toBeInTheDocument();
+  });
+
+  it('#220: an Approval Aging item\'s job card number links straight to its Journey view', async () => {
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
+    mockSocket({ status: 'live', approvalAging: makeApprovalAgingReport() });
+    renderPage();
+
+    const link = await screen.findByRole('link', { name: 'JC-0001' });
+    expect(link).toHaveAttribute('href', expect.stringContaining('/job-cards/journey?jobCardId='));
   });
 });
 
