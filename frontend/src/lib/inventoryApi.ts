@@ -40,6 +40,13 @@ export const reviewReservation = (id: string, data: ReviewReservationInput) =>
 export const requestReturn = (id: string) =>
   api.post<InventoryReservation>(`${BASE}/reservations/${id}/request-return`).then((r) => r.data);
 
+// Bug fix + new feature 2026-09-16: one-click "physically returned" for a caller handling
+// this Job Card end-to-end (TL+, or a CCE holding WORKSHOP_ACTION_ANY_JOB) - collapses
+// request-return + confirm-return into a single call. See InventoryController.
+// markPhysicallyReturned()'s own doc comment; backend 403s anyone not privileged.
+export const markPhysicallyReturned = (id: string) =>
+  api.post<InventoryReservation>(`${BASE}/reservations/${id}/mark-physically-returned`).then((r) => r.data);
+
 export const confirmReturn = (id: string, data: ConfirmReturnInput) =>
   api.post<InventoryReservation>(`${BASE}/reservations/${id}/confirm-return`, data).then((r) => r.data);
 

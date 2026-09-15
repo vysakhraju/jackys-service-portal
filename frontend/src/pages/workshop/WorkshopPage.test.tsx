@@ -16,6 +16,9 @@ vi.mock('../../lib/workshopApi', () => ({
 }));
 vi.mock('../../lib/inventoryApi', () => ({
   requestReturn: vi.fn(),
+  // Bug fix + new feature 2026-09-16: one-click "physically returned" for a privileged
+  // (TL+/WORKSHOP_ACTION_ANY_JOB) caller - see WorkshopPage.tsx's own doc comments.
+  markPhysicallyReturned: vi.fn(),
   reviewReservation: vi.fn(),
   // Modification Request (2026-09-15): the pill-shaped "Inventory" button opens
   // StockLookupPanel (shared with InventoryPage) in a Modal - it calls this directly.
@@ -37,7 +40,7 @@ vi.mock('../../lib/jobCardJourneyApi', () => ({
 import { useAuth } from '../../lib/auth';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { assignWorkshopTechnician, getWorkshopState, listReworkApprovers, requestSpare } from '../../lib/workshopApi';
-import { requestReturn, reviewReservation, getStock } from '../../lib/inventoryApi';
+import { requestReturn, markPhysicallyReturned, reviewReservation, getStock } from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
@@ -411,6 +414,11 @@ describe('WorkshopPage - Active reservations on this job (persists across a remo
 
   it('lets the custodian technician request a return on their own active reservation, and refetches state on success', async () => {
     mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    // 2026-09-16 follow-up: a privileged caller only ever sees "Physically returned" now
+    // (see the describe block below) - this test is specifically about the plain,
+    // non-privileged custodian path, so it must not inherit the beforeEach's fullAccess
+    // convenience default.
+    mockCapabilities([], false);
     vi.mocked(getWorkshopState).mockResolvedValue(
       makeWorkshopState({
         activeReservations: [makeReservation({ id: 'res-fresh', status: 'HELD', custodianUserId: 'tech-1' })],
@@ -439,6 +447,70 @@ describe('WorkshopPage - Active reservations on this job (persists across a remo
 
     await screen.findByText(/Active reservations on this job \(1\)/i);
     expect(screen.queryByRole('button', { name: 'Not needed - request return' })).not.toBeInTheDocument();
+  });
+});
+
+// Bug fix + new feature 2026-09-16 (live-tested finding): a CCE granted WORKSHOP_ACTION_ANY_JOB
+// did WIP + requested spares on a job not assigned to them, then got a 403 requesting the
+// return ("Only the technician currently holding this reservation..."), since that check never
+// knew about the capability. Fixed backend-side (see inventory.controller.ts) and extended with
+// a one-click "Physically returned" action for exactly this privileged population - explicitly
+// NOT shown to a plain assigned technician, who keeps the existing two-step flow.
+describe('WorkshopPage - "Physically returned" one-click action (privileged callers only)', () => {
+  it('shows the button for a caller holding WORKSHOP_ACTION_ANY_JOB, even though they are not this reservation\'s custodian, and it refetches state on success', async () => {
+    mockUser({ id: 'cce-1', roleName: 'CUSTOMER_CARE_EXECUTIVE' });
+    mockCapabilities(['WORKSHOP_ACTION_ANY_JOB'], false);
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        activeReservations: [makeReservation({ id: 'res-fresh', status: 'HELD', custodianUserId: 'cce-1' })],
+      }),
+    );
+    vi.mocked(markPhysicallyReturned).mockResolvedValue(makeReservation({ id: 'res-fresh', status: 'RETURNED' }));
+    renderPage();
+
+    await screen.findByText(/Active reservations on this job \(1\)/i);
+    // 2026-09-16 follow-up: a privileged caller gets ONLY the one-click shortcut now - the
+    // old 2-step button used to render alongside it, inviting the wrong one to be clicked.
+    expect(screen.queryByRole('button', { name: 'Not needed - request return' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Physically returned' }));
+
+    await waitFor(() => expect(vi.mocked(markPhysicallyReturned)).toHaveBeenCalledWith('res-fresh'));
+    await waitFor(() => expect(vi.mocked(getWorkshopState)).toHaveBeenCalledTimes(2)); // onChanged() re-fetched state
+  });
+
+  it('does NOT show the button to a plain assigned technician who is only the custodian, not privileged', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    mockCapabilities([], false);
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        jobCard: { ...makeWorkshopState().jobCard, assignedWorkshopTechnicianId: 'tech-1' },
+        activeReservations: [makeReservation({ id: 'res-fresh', status: 'HELD', custodianUserId: 'tech-1' })],
+      }),
+    );
+    renderPage();
+
+    await screen.findByText(/Active reservations on this job \(1\)/i);
+    // Still gets the normal two-step action...
+    expect(screen.getByRole('button', { name: 'Not needed - request return' })).toBeInTheDocument();
+    // ...but never the privileged one-click shortcut.
+    expect(screen.queryByRole('button', { name: 'Physically returned' })).not.toBeInTheDocument();
+  });
+
+  it('also offers the button on an already RETURN_PENDING reservation, for a privileged caller', async () => {
+    mockUser({ id: 'tl-1', roleName: 'TECHNICAL_TEAM_LEADER' });
+    mockCapabilities([], false);
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        activeReservations: [makeReservation({ id: 'res-pending', status: 'RETURN_PENDING', custodianUserId: 'tech-1' })],
+      }),
+    );
+    vi.mocked(markPhysicallyReturned).mockResolvedValue(makeReservation({ id: 'res-pending', status: 'RETURNED' }));
+    renderPage();
+
+    await screen.findByText(/Active reservations on this job \(1\)/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Physically returned' }));
+
+    await waitFor(() => expect(vi.mocked(markPhysicallyReturned)).toHaveBeenCalledWith('res-pending'));
   });
 });
 
@@ -554,6 +626,49 @@ describe('WorkshopPage - confirm before requesting the same spare part again', (
 
     expect(screen.queryByText('Request more of the same spare?')).not.toBeInTheDocument();
     await waitFor(() => expect(vi.mocked(requestSpare)).toHaveBeenCalled());
+  });
+});
+
+// 2026-09-16 live-tested finding: right after a successful "Request Spare" submit, the
+// same new reservation used to render TWICE on screen - once in RequestSpareCard's own
+// ephemeral "justReserved" echo card (full status badge + its own request-return/
+// physically-returned buttons) and again in "Active reservations on this job" below
+// (which had already refetched via the same mutation's onChanged -> invalidateQueries).
+// Only a full page reload reset the ephemeral echo and dropped it back to 1. Fixed by
+// removing the echo's duplicated status/buttons entirely - it's now just a small dismissible
+// confirmation strip with no reservation state of its own, so the Active reservations list
+// is the only place a reservation (and its action buttons) ever renders.
+describe('WorkshopPage - a just-requested spare renders exactly once, not duplicated (2026-09-16 fix)', () => {
+  it('shows the new reservation only in "Active reservations on this job", never as a second echoed card with its own buttons', async () => {
+    mockUser({ id: 'tech-1', roleName: 'TECHNICIAN_WORKSHOP' });
+    mockCapabilities([], false);
+    vi.mocked(getWorkshopState)
+      .mockResolvedValueOnce(makeWorkshopState({ activeReservations: [] }))
+      .mockResolvedValue(
+        makeWorkshopState({
+          activeReservations: [
+            makeReservation({ id: 'res-new', status: 'HELD', sparePartId: 'sp-1', custodianUserId: 'tech-1' }),
+          ],
+        }),
+      );
+    vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
+    vi.mocked(requestSpare).mockResolvedValue(
+      makeReservation({ id: 'res-new', status: 'HELD', sparePartId: 'sp-1', custodianUserId: 'tech-1' }),
+    );
+    renderPage();
+
+    await screen.findByText('SP-001 — Compressor');
+    fireEvent.change(screen.getByLabelText('Spare part'), { target: { value: 'sp-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Request Spare' }));
+
+    await screen.findByText(/Active reservations on this job \(1\)/i);
+    // The reservation's id and its return action render exactly once - not twice.
+    expect(screen.getAllByText(/Reservation id: res-new/i)).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Not needed - request return' })).toHaveLength(1);
+    // A brief, non-duplicating confirmation note is still shown, and it's dismissible.
+    expect(screen.getByText(/Reservation requested/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/Reservation requested/i)).not.toBeInTheDocument();
   });
 });
 

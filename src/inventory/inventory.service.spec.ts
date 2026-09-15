@@ -543,6 +543,54 @@ describe('InventoryService', () => {
     });
   });
 
+  // Bug fix + new feature 2026-09-16: one-click "physically returned" for a caller
+  // privileged enough to handle this Job Card end-to-end (TL+, or a CCE holding
+  // WORKSHOP_ACTION_ANY_JOB) - see the method's own doc comment.
+  describe('markPhysicallyReturned', () => {
+    it('moves a HELD reservation straight to RETURNED and increments stock, for a privileged caller', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ custodianUserId: 'tech-1', status: ReservationStatus.HELD, quantityReserved: 3 }));
+      manager.findOne.mockResolvedValue(stock({ quantityOnHand: 10, quantityReserved: 3 }));
+
+      const result = await service.markPhysicallyReturned('res-1', 'cce-1', true);
+
+      expect(result.status).toBe(ReservationStatus.RETURNED);
+      expect(result.quantityReturned).toBe(3);
+      expect(result.returnConfirmedByUserId).toBe('cce-1');
+      const savedStock = manager.save.mock.calls[0][0];
+      expect(savedStock.quantityOnHand).toBe(13);
+    });
+
+    it('confirms straight through when the reservation is already RETURN_PENDING', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ custodianUserId: 'tech-1', status: ReservationStatus.RETURN_PENDING, quantityReserved: 2 }));
+      manager.findOne.mockResolvedValue(stock({ quantityOnHand: 5, quantityReserved: 2 }));
+
+      const result = await service.markPhysicallyReturned('res-1', 'tl-1', true);
+
+      expect(result.status).toBe(ReservationStatus.RETURNED);
+    });
+
+    it('a non-custodian, non-privileged caller is forbidden - this is the exact 2026-09-16 CCE bug, now also covered here', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ custodianUserId: 'tech-1', status: ReservationStatus.HELD }));
+
+      await expect(service.markPhysicallyReturned('res-1', 'cce-1', false)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('the custodian themself can also use it (not just a privileged third party)', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ custodianUserId: 'tech-1', status: ReservationStatus.HELD, quantityReserved: 1 }));
+      manager.findOne.mockResolvedValue(stock({ quantityOnHand: 0, quantityReserved: 1 }));
+
+      const result = await service.markPhysicallyReturned('res-1', 'tech-1', false);
+
+      expect(result.status).toBe(ReservationStatus.RETURNED);
+    });
+
+    it('rejects a reservation already in a terminal state', async () => {
+      reservationRepository.findOne.mockResolvedValue(reservation({ status: ReservationStatus.RETURNED }));
+
+      await expect(service.markPhysicallyReturned('res-1', 'tl-1', true)).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('cancelReservationsForJobCard', () => {
     it('moves every active reservation on the job to RETURN_PENDING, never touching stock', async () => {
       const active = [reservation({ id: 'res-a', status: ReservationStatus.HELD }), reservation({ id: 'res-b', status: ReservationStatus.PARTIALLY_RESERVED })];

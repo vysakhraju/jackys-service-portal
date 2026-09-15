@@ -21,7 +21,7 @@ import {
   requestSpare,
   startWip,
 } from '../../lib/workshopApi';
-import { requestReturn, reviewReservation } from '../../lib/inventoryApi';
+import { markPhysicallyReturned, requestReturn, reviewReservation } from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import type { WorkshopState } from '../../lib/workshopTypes';
 import type { InventoryReservation, InventoryReservationWithAge } from '../../lib/inventoryTypes';
@@ -105,11 +105,20 @@ export function WorkshopPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill, selection.id]);
 
+  // 2026-09-16 live-tested finding: the app disables refetchOnWindowFocus globally
+  // (App.tsx's QueryClient defaultOptions), so nothing ever refreshed this screen on its
+  // own - a second technician's or CCE's change (e.g. someone else completing a return,
+  // or requesting a spare on a shared job) only ever showed up after a manual reload.
+  // Polls every 15s while this page is open and focused (react-query pauses
+  // refetchInterval in a background tab by default) so every section fed by this one
+  // query - job card status, active reservations, stale reservations, the assigned
+  // technician - stays live without the user having to reload.
   const stateQuery = useQuery({
     queryKey: ['workshop-state', activeJobCardId],
     queryFn: () => getWorkshopState(activeJobCardId),
     enabled: !!activeJobCardId,
     retry: false,
+    refetchInterval: 15000,
   });
 
   function onChanged() {
@@ -433,15 +442,17 @@ function RequestSpareCard({
   // for every caller who can even reach this form - no raw-paste fallback needed.
   const reworkApproversQuery = useQuery({ queryKey: ['workshop', 'rework-approvers'], queryFn: listReworkApprovers });
   const reworkApproverOptions = reworkApproversQuery.data ?? [];
-  const [justReserved, setJustReserved] = useState<InventoryReservation | null>(null);
-  const { user } = useAuth();
-  const isPrivileged = useIsPrivilegedWorkshopCaller();
-  const canRequestReturnOnJustReserved = !!justReserved && (isPrivileged || user?.id === justReserved.custodianUserId);
-
-  const returnMutation = useMutation({
-    mutationFn: (id: string) => requestReturn(id),
-    onSuccess: (r) => setJustReserved(r),
-  });
+  // 2026-09-16 live-tested finding: this used to hold the FULL just-submitted reservation
+  // (status badge, "short of stock" warning, its own request-return/physically-returned
+  // buttons) as a persistent echo card - which duplicated "Active reservations on this
+  // job" below almost exactly, since that section ALSO refetches immediately on this same
+  // mutation's success (via the parent's onChanged -> invalidateQueries). The two together
+  // rendered the identical reservation twice with two independent sets of action buttons
+  // (a real double-action risk, not just a visual glitch) until the page was reloaded and
+  // this ephemeral state reset. Now this only remembers whether a submit just succeeded
+  // and its bare outcome text - no status badge, no buttons - so there is exactly one
+  // place a reservation's live state and its actions ever render: the list below.
+  const [justReservedNote, setJustReservedNote] = useState<{ partiallyReserved: boolean } | null>(null);
 
   const hadPriorRejection = jobCard.qcRejectionCount > 0;
 
@@ -466,7 +477,7 @@ function RequestSpareCard({
       },
       {
         onSuccess: (r) => {
-          setJustReserved(r);
+          setJustReservedNote({ partiallyReserved: r.status === 'PARTIALLY_RESERVED' });
           reset({ sparePartId: '', quantity: 1, approverId: '', verbalOverrideBy: '', verbalOverrideNotes: '' });
         },
       },
@@ -563,32 +574,21 @@ function RequestSpareCard({
         </button>
       </form>
 
-      {justReserved && (
-        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2.5 text-xs">
-          <p className="font-medium text-slate-700">
-            Reservation {justReserved.id.slice(0, 8)}… ·{' '}
-            <StatusBadge status={justReserved.status} /> · {justReserved.quantityReserved}/
-            {justReserved.quantityRequested} reserved
+      {justReservedNote && (
+        <div className="mt-3 flex items-start justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-800">
+          <p>
+            Reservation requested — see "Active reservations on this job" below for its live
+            status and return actions.
+            {justReservedNote.partiallyReserved && ' Short of stock, see the amber note below.'}
           </p>
-          {justReserved.status === 'PARTIALLY_RESERVED' && (
-            <p className="mt-1 text-amber-700">
-              Short of stock - only {justReserved.quantityReserved} of {justReserved.quantityRequested} could be
-              reserved. This job is now (or stays) SPARE_PENDING until a follow-up request fully fills it.
-            </p>
-          )}
-          {justReserved.status === 'RETURN_PENDING' && (
-            <p className="mt-1">Marked for return - an Inventory Clerk still needs to confirm it physically arrived back.</p>
-          )}
-          {['HELD', 'PARTIALLY_RESERVED'].includes(justReserved.status) && canRequestReturnOnJustReserved && (
-            <button
-              onClick={() => returnMutation.mutate(justReserved.id)}
-              disabled={returnMutation.isPending}
-              className="mt-2 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-            >
-              Not needed - request return
-            </button>
-          )}
-          <ErrorNotice error={returnMutation.error} />
+          <button
+            type="button"
+            onClick={() => setJustReservedNote(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-emerald-600 hover:text-emerald-800"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -683,6 +683,15 @@ function ActiveReservationRow({
     mutationFn: (id: string) => requestReturn(id),
     onSuccess: onChanged,
   });
+  // 2026-09-16 bug fix + new feature: a caller handling this job end-to-end (isPrivileged -
+  // TL+, or a CCE holding WORKSHOP_ACTION_ANY_JOB) gets a one-click "physically returned"
+  // action instead of request-return + waiting on a separate Inventory Clerk. Deliberately
+  // NOT shown to a plain assigned technician (canRequestReturn-but-not-isPrivileged) - they
+  // keep the existing two-step flow, per the reported request.
+  const physicallyReturnedMutation = useMutation({
+    mutationFn: (id: string) => markPhysicallyReturned(id),
+    onSuccess: onChanged,
+  });
 
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-2.5 text-xs">
@@ -701,18 +710,55 @@ function ActiveReservationRow({
         </p>
       )}
       {reservation.status === 'RETURN_PENDING' && (
-        <p className="mt-1">Marked for return - an Inventory Clerk still needs to confirm it physically arrived back.</p>
+        <>
+          <p className="mt-1">
+            {isPrivileged
+              ? 'Marked for return - confirm below once the part is physically in hand.'
+              : 'Marked for return - an Inventory Clerk still needs to confirm it physically arrived back.'}
+          </p>
+          {isPrivileged && (
+            <>
+              <button
+                onClick={() => physicallyReturnedMutation.mutate(reservation.id)}
+                disabled={physicallyReturnedMutation.isPending}
+                className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+              >
+                Physically returned
+              </button>
+              <ErrorNotice error={physicallyReturnedMutation.error} />
+            </>
+          )}
+        </>
       )}
       {['HELD', 'PARTIALLY_RESERVED'].includes(reservation.status) && canRequestReturn && (
         <>
-          <button
-            onClick={() => returnMutation.mutate(reservation.id)}
-            disabled={returnMutation.isPending}
-            className="mt-2 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-          >
-            Not needed - request return
-          </button>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {/* 2026-09-16 follow-up: a privileged end-to-end handler (TL+, or
+                WORKSHOP_ACTION_ANY_JOB) only ever needs the one-click shortcut - showing
+                the old 2-step "request return" button alongside it just invited using the
+                wrong one. A plain assigned technician still gets only the 2-step button,
+                unchanged. */}
+            {isPrivileged ? (
+              <button
+                onClick={() => physicallyReturnedMutation.mutate(reservation.id)}
+                disabled={physicallyReturnedMutation.isPending}
+                title="Marks this reservation returned in one step - use when you're handling this job's whole journey and the part is physically back in hand."
+                className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+              >
+                Physically returned
+              </button>
+            ) : (
+              <button
+                onClick={() => returnMutation.mutate(reservation.id)}
+                disabled={returnMutation.isPending}
+                className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Not needed - request return
+              </button>
+            )}
+          </div>
           <ErrorNotice error={returnMutation.error} />
+          <ErrorNotice error={physicallyReturnedMutation.error} />
         </>
       )}
     </div>

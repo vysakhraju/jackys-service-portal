@@ -256,6 +256,33 @@ export class InventoryService {
   }
 
   /**
+   * One-click "physically returned" for a caller handling this Job Card end-to-end (e.g. a
+   * Customer Care Executive holding WORKSHOP_ACTION_ANY_JOB, doing the whole journey - WIP,
+   * spare request, AND the return - on behalf of the technician the job isn't assigned to).
+   * Collapses the normal two-actor requestReturn() -> confirmReturn() lifecycle into one
+   * step, reusing both unchanged rather than duplicating stock-transition logic. A plain
+   * assigned technician is NOT privileged here (per bug report 2026-09-16: their capability
+   * set gives them requestReturn() only) so they keep going through the existing two-step
+   * flow - this action is deliberately reserved for the CCE-end-to-end scenario and TL+.
+   */
+  async markPhysicallyReturned(reservationId: string, callerId: string, callerIsPrivileged: boolean, now: Date = new Date()): Promise<InventoryReservation> {
+    const reservation = await this.findReservationById(reservationId);
+
+    if (!callerIsPrivileged && reservation.custodianUserId !== callerId) {
+      throw new ForbiddenException('Only the technician currently holding this reservation (or a Team Leader+) can mark it physically returned.');
+    }
+
+    if (reservation.status === ReservationStatus.HELD || reservation.status === ReservationStatus.PARTIALLY_RESERVED) {
+      reservation.status = ReservationStatus.RETURN_PENDING;
+      await this.reservationRepository.save(reservation);
+    } else if (reservation.status !== ReservationStatus.RETURN_PENDING) {
+      throw new BadRequestException(`Cannot mark this reservation physically returned - it is already ${reservation.status}.`);
+    }
+
+    return this.confirmReturn(reservationId, reservation.quantityReserved, callerId, now);
+  }
+
+  /**
    * GET /inventory/reservations/return-pending - the dashboard-style listing that closes
    * the "impossible to know the reservation id" gap (see this file's own note above the
    * ReturnPendingJobCardGroup interface). Every currently RETURN_PENDING reservation,

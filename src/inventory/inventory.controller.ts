@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, UseInterceptors, ParseUUIDPipe, Request } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, UseInterceptors, ParseUUIDPipe, Request, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { InventoryService } from './inventory.service';
 import { GrnDto } from './dto/grn.dto';
@@ -15,6 +15,8 @@ import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
+import { RolePermissionsService } from '../auth/role-permissions.service';
+import { bypassesWorkshopOwnership } from '../workshop/workshop-ownership.util';
 
 // INVENTORY_STAFF_ROLES/REVIEW_ROLES/READ_ROLES, plus request-return's own inline role
 // list, all migrated onto the designation permission matrix (2026-09-10) as
@@ -25,15 +27,33 @@ import { User } from '../auth/entities/user.entity';
 // always cover for them via RolesGuard's hardcoded bypass. Reviewing a stale reservation is
 // a supervisory call.
 //
-// request-return's own inline isPrivileged check (who bypasses the "must be this
-// reservation's own custodian" rule) stays a plain business-logic array, not a gate.
+// request-return's own isPrivileged check (who bypasses the "must be this reservation's own
+// custodian" rule) used to be a plain hardcoded role array. Bug fix 2026-09-16: a CCE
+// granted WORKSHOP_ACTION_ANY_JOB could WIP + request spares on a job not assigned to them,
+// but got 403'd requesting the return, since that array never knew about the capability.
+// Now reuses workshop-ownership.util.ts's bypassesWorkshopOwnership() - the same "TL+ role OR
+// WORKSHOP_ACTION_ANY_JOB capability" rule already governing start-wip/request-spare/complete
+// on WorkshopController - so a caller privileged enough to run the whole job end-to-end is
+// privileged enough to hand its spare parts back too.
+const WORKSHOP_ACTION_ANY_JOB_CAPABILITY = 'WORKSHOP_ACTION_ANY_JOB';
 
 @ApiTags('inventory')
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth('JWT-auth')
 export class InventoryController {
-  constructor(private inventoryService: InventoryService) {}
+  constructor(
+    private inventoryService: InventoryService,
+    private rolePermissionsService: RolePermissionsService,
+  ) {}
+
+  private async resolveIsPrivileged(user: User): Promise<boolean> {
+    const hasAnyJobCapability = await this.rolePermissionsService.userHasCapability(
+      user as any,
+      WORKSHOP_ACTION_ANY_JOB_CAPABILITY,
+    );
+    return bypassesWorkshopOwnership(user.role?.name, hasAnyJobCapability);
+  }
 
   @Post('grn')
   @RequiresCapability('INVENTORY_STAFF')
@@ -129,9 +149,35 @@ export class InventoryController {
   @ApiOperation({ summary: "The custodian technician voluntarily returning an unused reservation (or a TL doing it on their behalf)" })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 403, description: 'Not this reservation\'s custodian' })
-  async requestReturn(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User, @Request() req: any) {
-    const isPrivileged = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'].includes(req.user.role?.name);
+  async requestReturn(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
+    const isPrivileged = await this.resolveIsPrivileged(user);
     return this.inventoryService.requestReturn(id, user.id, isPrivileged);
+  }
+
+  // Bug fix 2026-09-16 + new feature: a caller privileged enough to run this Job Card
+  // end-to-end (TL+, or a CCE holding WORKSHOP_ACTION_ANY_JOB) gets a single-click
+  // "physically returned" action instead of the normal two-actor request-return ->
+  // Inventory Clerk confirm-return split - see InventoryService.markPhysicallyReturned()'s
+  // own doc comment. Deliberately NOT capability-gated via @RequiresCapability - it's
+  // available only to the same isPrivileged population as start-wip/request-spare/complete,
+  // checked inline, so a plain assigned workshop technician never sees/can call this.
+  @Post('reservations/:id/mark-physically-returned')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.INVENTORY_RESERVE,
+    entityType: 'InventoryReservation',
+    getEntityId: (args) => args.params.id,
+    getNewValues: (result) => ({ status: result?.status, quantityReturned: result?.quantityReturned }),
+  })
+  @ApiOperation({ summary: 'One-click "physically returned" for a caller handling this Job Card end-to-end (TL+, or a CCE holding WORKSHOP_ACTION_ANY_JOB) - combines request-return + confirm-return into a single step. Not available to a plain assigned technician, who keeps the two-step flow.' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 403, description: 'Caller is not privileged for end-to-end job handling' })
+  async markPhysicallyReturned(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
+    const isPrivileged = await this.resolveIsPrivileged(user);
+    if (!isPrivileged) {
+      throw new ForbiddenException('Only a caller handling this job end-to-end (or a Team Leader+) can mark a reservation physically returned in one step.');
+    }
+    return this.inventoryService.markPhysicallyReturned(id, user.id, true);
   }
 
   @Post('reservations/:id/confirm-return')
