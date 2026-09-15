@@ -1,9 +1,9 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { useAuth } from '../lib/auth';
 import { useMyCapabilities } from '../lib/useMyCapabilities';
 import { ToastProvider } from '../lib/toast';
 import { NeedSpareNotifier } from './NeedSpareNotifier';
 import { NotificationPermissionBanner } from './NotificationPermissionBanner';
+import { UserMenu } from './UserMenu';
 
 // One row per module in the build plan. `path` is only set once that
 // module's screens actually exist — until then it renders as a disabled
@@ -82,7 +82,6 @@ const NAV_ITEMS: { label: string; path?: string; capabilities?: string[]; adminO
 ];
 
 export function AppLayout() {
-  const { user, logout } = useAuth();
   // 2026-09-14 (Group C): same REVIEW_ROLES -> INVENTORY_REVIEW conversion as
   // NeedSpareNotifier's own gate (see its doc comment) - was a hardcoded array kept in
   // sync by hand.
@@ -146,24 +145,16 @@ export function AppLayout() {
               ),
             )}
           </nav>
-
-          <div className="border-t border-slate-200 p-3">
-            <div className="mb-2 px-2">
-              <p className="truncate text-sm font-medium text-slate-800">
-                {user?.firstName} {user?.lastName}
-              </p>
-              <p className="truncate text-xs text-slate-400">{user?.role.displayName}</p>
-            </div>
-            <button
-              onClick={() => void logout()}
-              className="w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
-            >
-              Log out
-            </button>
-          </div>
         </aside>
 
         <main className="flex flex-1 flex-col overflow-y-auto">
+          {/* Modification Request (2026-09-15): replaces the old always-visible bottom-of-
+              sidebar name/role/"Log out" block - logged-in details + logout/change-password/
+              profile now live in this one top-right menu instead, freeing the Dashboard page
+              itself to drop its own redundant user-details grid. */}
+          <div className="sticky top-0 z-30 flex justify-end border-b border-slate-200 bg-white px-4 py-2">
+            <UserMenu />
+          </div>
           {/* Same reviewer gate as NeedSpareNotifier - only whoever actually holds
               INVENTORY_REVIEW is asked to turn on OS notifications for it. */}
           {canReviewNeedSpare && <NotificationPermissionBanner />}

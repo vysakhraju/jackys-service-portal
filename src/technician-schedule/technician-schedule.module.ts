@@ -17,5 +17,8 @@ import { AuthModule } from '../auth/auth.module';
   ],
   controllers: [TechnicianScheduleController],
   providers: [TechnicianScheduleService],
+  // Exported so DashboardModule (2026-09-15) can reuse getWorkshopQueue() for the new
+  // "Workshop Queue" dashboard widget without duplicating its aggregation logic.
+  exports: [TechnicianScheduleService],
 })
 export class TechnicianScheduleModule {}

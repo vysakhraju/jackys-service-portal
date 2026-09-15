@@ -95,6 +95,12 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'ESTIMATE_RECORD_RESPONSE', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'CCE'] },
   { key: 'CREDIT_NOTE_POST', defaultRoles: ['ACCOUNTANT', 'FINANCE_MANAGER'] },
   { key: 'FIELD_SCHEDULE_REORDER', defaultRoles: ['CCE', 'TECHNICAL_TEAM_LEADER'] },
+  // Dashboard module (2026-09-15) - see capability-catalog.ts's own comment on these four
+  // keys for why this isn't a zero-behavior-change migration like everything above it.
+  { key: 'DASHBOARD_WIDGET_JOB_STATUS', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'CCE'] },
+  { key: 'DASHBOARD_WIDGET_WORKSHOP_QUEUE', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
+  { key: 'DASHBOARD_WIDGET_SLA_BREACH', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
+  { key: 'DASHBOARD_WIDGET_SPARE_CONSUMPTION', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

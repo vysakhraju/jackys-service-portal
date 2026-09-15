@@ -534,6 +534,50 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE],
     migrated: true,
   },
+
+  // --- Dashboard --- new module (2026-09-15), not a migration of any existing @Roles()
+  // array. The new post-login Dashboard page (src/dashboard/) is reachable by every logged
+  // in user (its controller carries no class-level capability gate - only JwtAuthGuard), and
+  // each widget on it is independently gated by one of these four keys, checked inside
+  // DashboardService.getOverview() via RolePermissionsService.userHasCapability() rather than
+  // a controller-level @RequiresCapability() - a caller who lacks a widget's key simply gets
+  // that key omitted from the response, everyone else on the page still loads fine. This
+  // reuses the existing admin "tick and save" Designation access UI for free (RolePermissionsSection
+  // groups checkboxes by `module`, so a new module value here needs zero new admin-UI code).
+  // defaultRoles picked to mirror the closest existing reused-data-source capability's
+  // audience (Jobs by Status mirrors JOB_CARD_MANAGE's TL+CCE population, since both already
+  // manage the underlying Job Cards; the other three mirror their source report/queue's own
+  // existing TECHNICAL_TEAM_LEADER-only audience) - not a zero-behavior-change migration
+  // (this is new screen real estate, not an existing endpoint), just a sensible starting point
+  // an admin can widen or narrow via Designation access like any other capability here.
+  {
+    key: 'DASHBOARD_WIDGET_JOB_STATUS',
+    label: 'Dashboard: "Jobs by Status" widget (Kanban column counts, reuses Reports\' own Job Status Board data)',
+    module: 'Dashboard',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.CCE],
+    migrated: true,
+  },
+  {
+    key: 'DASHBOARD_WIDGET_WORKSHOP_QUEUE',
+    label: 'Dashboard: "Workshop Queue" widget (active job count per workshop technician, reuses the Workshop Queue board data)',
+    module: 'Dashboard',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'DASHBOARD_WIDGET_SLA_BREACH',
+    label: 'Dashboard: "SLA Breach" widget (jobs past the SLA threshold, reuses Operational Reports\' own data)',
+    module: 'Dashboard',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
+  {
+    key: 'DASHBOARD_WIDGET_SPARE_CONSUMPTION',
+    label: 'Dashboard: "Spare Parts Consumption" widget (top parts by quantity/value, reuses Operational Reports\' own data)',
+    module: 'Dashboard',
+    defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {
