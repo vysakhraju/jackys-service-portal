@@ -5,37 +5,47 @@ import { useForm } from 'react-hook-form';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
+import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
+import { StockLookupPanel } from '../../components/StockLookupPanel';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   confirmAllReturnsForJobCard,
   confirmReturn,
   getReturnPendingByJobCard,
   getStaleReservations,
-  getStock,
   grn,
   reviewReservation,
 } from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
-import type {
-  InventoryReservation,
-  InventoryReservationWithAge,
-  ReturnPendingJobCardGroup,
-  StockLookupResult,
-} from '../../lib/inventoryTypes';
+import type { InventoryReservation, InventoryReservationWithAge, ReturnPendingJobCardGroup } from '../../lib/inventoryTypes';
 
 // 2026-09-14: was a plain role-array mirror of InventoryController's own @RequiresCapability()
 // gates - meant Super Admin ticking INVENTORY_STAFF/INVENTORY_REVIEW for some other role via
 // Designation access had no visible effect here (the buttons just never appeared). Now reads
 // the same capability the backend actually checks, so a grant takes effect immediately - same
 // fix already applied to ServiceCentresPage/the Reports pages.
+//
+// Modification Request (2026-09-15): Stock lookup and Stale Reservations used to fire their
+// queries unconditionally regardless of capability, so a caller holding some other inventory
+// capability (e.g. INVENTORY_STAFF/INVENTORY_REVIEW only, no INVENTORY_VIEW) got a raw
+// "Access denied. Missing capability: INVENTORY_VIEW" ErrorNotice - the backend's real error
+// message, bubbling straight through instead of a designed "you don't have access" notice.
+// Both are now gated on `canView` client-side too (query disabled, section hidden), matching
+// GrnCard/ReturnPendingDashboardCard/ConfirmReturnCard's existing hide-if-no-capability
+// pattern below. This page is only reachable at all via InventoryLayout, which already
+// requires ANY one of the 4 inventory capabilities (see its own comment) - hasNothingToShow
+// below is defense-in-depth for the one combination that layout gate still admits but this
+// page has nothing for (INVENTORY_RETURN_REQUEST alone, used only on the Workshop screen).
 export function InventoryPage() {
   const { has } = useMyCapabilities();
   const canGrn = has('INVENTORY_STAFF');
   const canConfirmReturn = has('INVENTORY_STAFF');
   const canReview = has('INVENTORY_REVIEW');
+  const canView = has('INVENTORY_VIEW');
+  const hasNothingToShow = !canGrn && !canView && !canConfirmReturn;
 
   const queryClient = useQueryClient();
-  const staleQuery = useQuery({ queryKey: ['reservations', 'stale'], queryFn: getStaleReservations });
+  const staleQuery = useQuery({ queryKey: ['reservations', 'stale'], queryFn: getStaleReservations, enabled: canView });
   function onReservationChanged() {
     queryClient.invalidateQueries({ queryKey: ['reservations', 'stale'] });
   }
@@ -50,33 +60,41 @@ export function InventoryPage() {
 
       {canGrn && <GrnCard />}
 
-      <StockLookupCard />
+      {canView && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <StockLookupPanel />
+        </div>
+      )}
 
-      <div>
-        <p className="mb-1 text-sm font-medium text-slate-800">
-          Stale reservations, all jobs ({staleQuery.data?.length ?? 0})
-        </p>
-        <p className="mb-3 text-xs text-slate-400">
-          Idle 24h+ since last request/review, or whose custodian was deactivated (surfaced
-          first regardless of age) - oldest first. A reservation that's short of stock but
-          under 24h old won't be here yet; check the requesting Job Card's Workshop screen
-          for that.
-        </p>
-        {staleQuery.isLoading && <p className="text-sm text-slate-400">Loading…</p>}
-        {staleQuery.error && <ErrorNotice error={staleQuery.error} />}
-        {staleQuery.data && staleQuery.data.length === 0 && (
-          <p className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-400">
-            Nothing idle right now.
+      {canView && (
+        <div>
+          <p className="mb-1 text-sm font-medium text-slate-800">
+            Stale reservations, all jobs ({staleQuery.data?.length ?? 0})
           </p>
-        )}
-        {staleQuery.data && staleQuery.data.length > 0 && (
-          <div className="space-y-2">
-            {staleQuery.data.map((r) => (
-              <ReservationRow key={r.id} reservation={r} canReview={canReview} onChanged={onReservationChanged} />
-            ))}
-          </div>
-        )}
-      </div>
+          <p className="mb-3 text-xs text-slate-400">
+            Idle 24h+ since last request/review, or whose custodian was deactivated (surfaced
+            first regardless of age) - oldest first. A reservation that's short of stock but
+            under 24h old won't be here yet; check the requesting Job Card's Workshop screen
+            for that.
+          </p>
+          {staleQuery.isLoading && <p className="text-sm text-slate-400">Loading…</p>}
+          {staleQuery.error && <ErrorNotice error={staleQuery.error} />}
+          {staleQuery.data && staleQuery.data.length === 0 && (
+            <p className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-400">
+              Nothing idle right now.
+            </p>
+          )}
+          {staleQuery.data && staleQuery.data.length > 0 && (
+            <div className="space-y-2">
+              {staleQuery.data.map((r) => (
+                <ReservationRow key={r.id} reservation={r} canReview={canReview} onChanged={onReservationChanged} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {hasNothingToShow && <AccessDeniedNotice what="Inventory" />}
 
       {canConfirmReturn && <ReturnPendingDashboardCard />}
 
@@ -162,100 +180,6 @@ function GrnCard() {
   );
 }
 
-function StockLookupCard() {
-  const sparePartsQuery = useQuery({ queryKey: ['spare-parts', 'active'], queryFn: () => listSpareParts({ active: true }) });
-  const [sparePartId, setSparePartId] = useState('');
-  const [location, setLocation] = useState<'MAIN_STORE' | 'DAMAGE_LOCATION'>('MAIN_STORE');
-  const [activeId, setActiveId] = useState('');
-  const stockQuery = useQuery({
-    queryKey: ['stock', activeId, location],
-    queryFn: () => getStock(activeId, location),
-    enabled: !!activeId,
-    retry: false,
-  });
-
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <p className="mb-1 text-sm font-medium text-slate-800">Stock lookup</p>
-      <p className="mb-3 text-xs text-slate-400">
-        Main Store is what's available to reserve. Damage Location is Phase 6's
-        consumption total - stock that's permanently moved there on QC approval.
-      </p>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setActiveId(sparePartId);
-        }}
-        className="flex items-end gap-2"
-      >
-        <div className="flex-1">
-          <Field label="Spare part">
-            <select className={inputClass} value={sparePartId} onChange={(e) => setSparePartId(e.target.value)}>
-              <option value="">Select…</option>
-              {(sparePartsQuery.data ?? []).map((sp) => (
-                <option key={sp.id} value={sp.id}>
-                  {sp.code} — {sp.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <div className="w-40">
-          <Field label="Location">
-            <select className={inputClass} value={location} onChange={(e) => setLocation(e.target.value as typeof location)}>
-              <option value="MAIN_STORE">Main Store</option>
-              <option value="DAMAGE_LOCATION">Damage Location</option>
-            </select>
-          </Field>
-        </div>
-        <button
-          type="submit"
-          disabled={!sparePartId}
-          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Look up
-        </button>
-      </form>
-
-      {activeId && (
-        <div className="mt-3">
-          {stockQuery.isLoading && <p className="text-sm text-slate-400">Loading…</p>}
-          {stockQuery.error && <ErrorNotice error={stockQuery.error} />}
-          {stockQuery.data && <StockSummary stock={stockQuery.data} />}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StockSummary({ stock }: { stock: StockLookupResult }) {
-  const neverReceived = !stock.id;
-  const available = stock.quantityOnHand - stock.quantityReserved;
-  return (
-    <div className="grid grid-cols-3 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-      <div>
-        <p className="text-xs text-slate-400">On hand</p>
-        <p className="font-medium text-slate-800">{stock.quantityOnHand}</p>
-      </div>
-      <div>
-        <p className="text-xs text-slate-400">Reserved</p>
-        <p className="font-medium text-slate-800">{stock.quantityReserved}</p>
-      </div>
-      <div>
-        <p className="text-xs text-slate-400">Available</p>
-        <p className="font-medium text-slate-800">{available}</p>
-      </div>
-      {neverReceived && (
-        <p className="col-span-3 mt-1 text-xs text-amber-700">
-          No stock row exists yet for this part/location - it's never been received via GRN
-          (or, for Damage Location, never had anything consumed into it), not necessarily a
-          real zero.
-        </p>
-      )}
-    </div>
-  );
-}
-
 function ReservationRow({
   reservation,
   canReview,
@@ -285,7 +209,7 @@ function ReservationRow({
       </div>
       <p className="mt-0.5 text-slate-400">
         Reservation id: {reservation.id} ·{' '}
-        <Link to={`/workshop-inventory/workshop?jobCardId=${reservation.jobCardId}`} className="underline">
+        <Link to={`/workshop?jobCardId=${reservation.jobCardId}`} className="underline">
           Go to Job Card's Workshop screen →
         </Link>
       </p>

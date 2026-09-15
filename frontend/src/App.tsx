@@ -29,9 +29,9 @@ import { WorkshopQueuePage } from './pages/scheduling/WorkshopQueuePage';
 import { FieldSchedulePage } from './pages/scheduling/FieldSchedulePage';
 import { EstimatesPage } from './pages/estimates/EstimatesPage';
 import { EstimatePublicPage } from './pages/estimates/EstimatePublicPage';
-import { WorkshopInventoryLayout } from './pages/workshop/WorkshopInventoryLayout';
-import { WorkshopInventoryHome } from './pages/workshop/WorkshopInventoryHome';
 import { WorkshopPage } from './pages/workshop/WorkshopPage';
+import { InventoryLayout } from './pages/inventory/InventoryLayout';
+import { InventoryHome } from './pages/inventory/InventoryHome';
 import { InventoryPage } from './pages/inventory/InventoryPage';
 import { NeedSpareReviewPage } from './pages/inventory/NeedSpareReviewPage';
 import { QcPermissionsLayout } from './pages/qc/QcPermissionsLayout';
@@ -119,10 +119,11 @@ export function App() {
                 <Route path="/technician-schedule/field-schedule" element={<FieldSchedulePage />} />
                 <Route path="/estimates" element={<EstimatesPage />} />
 
-                <Route path="/workshop-inventory" element={<WorkshopInventoryLayout />}>
-                  <Route index element={<WorkshopInventoryHome />} />
-                  <Route path="workshop" element={<WorkshopPage />} />
-                  <Route path="inventory" element={<InventoryPage />} />
+                <Route path="/workshop" element={<WorkshopPage />} />
+
+                <Route path="/inventory" element={<InventoryLayout />}>
+                  <Route index element={<InventoryHome />} />
+                  <Route path="stock" element={<InventoryPage />} />
                   <Route path="need-spare" element={<NeedSpareReviewPage />} />
                 </Route>
 

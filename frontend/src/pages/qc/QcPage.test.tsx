@@ -182,7 +182,7 @@ describe('QcPage - Reject (the-fool pre-mortem finding #3: no dead end)', () => 
     expect(await screen.findByText(/back to IN_PROGRESS/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Workshop screen/i })).toHaveAttribute(
       'href',
-      '/workshop-inventory/workshop?jobCardId=jc-9',
+      '/workshop?jobCardId=jc-9',
     );
     expect(qcReject).toHaveBeenCalledWith('jc-9', { reason: 'Drum still noisy' });
   });

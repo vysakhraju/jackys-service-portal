@@ -6,6 +6,7 @@ import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
+import { StockLookupPanel } from '../../components/StockLookupPanel';
 import { NamePicker } from '../../components/pickers/NamePicker';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useAuth } from '../../lib/auth';
@@ -159,6 +160,13 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
   const { jobCard, staleReservations, activeReservations } = state;
   const { user } = useAuth();
   const { has } = useMyCapabilities();
+  const [stockLookupOpen, setStockLookupOpen] = useState(false);
+  // Modification Request (2026-09-15): a quick "can I fulfil this?" stock check, without
+  // leaving the job card open here - opens the same StockLookupPanel the Inventory & Stock
+  // tab uses (see its own comment), in a Modal. Gated on INVENTORY_VIEW at the pill itself
+  // (not just inside the panel) so a caller who can't look up stock doesn't see a button
+  // that only opens a "you don't have access" notice.
+  const canViewStock = has('INVENTORY_VIEW');
   const isPrivileged = !!user && PRIVILEGED_ROLES.includes(user.role.name);
   // 2026-09-14: was ASSIGN_ROLES, a hardcoded mirror of WorkshopController's own
   // WORKSHOP_ASSIGN gate - now checks the real capability, so a Designation-access grant
@@ -195,6 +203,7 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
   });
 
   return (
+    <>
     <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between">
         <div>
@@ -205,6 +214,15 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {canViewStock && (
+            <button
+              type="button"
+              onClick={() => setStockLookupOpen(true)}
+              className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              Inventory
+            </button>
+          )}
           <Link
             to={`/job-cards/journey?jobCardId=${jobCard.id}`}
             className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
@@ -327,6 +345,12 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
         )}
       </div>
     </div>
+    {/* Outside the space-y-4 card on purpose - a fixed-position overlay inheriting a
+        Tailwind space-y margin-top would render offset from the viewport edge. */}
+    <Modal open={stockLookupOpen} onClose={() => setStockLookupOpen(false)} title="Stock lookup">
+      <StockLookupPanel />
+    </Modal>
+    </>
   );
 }
 

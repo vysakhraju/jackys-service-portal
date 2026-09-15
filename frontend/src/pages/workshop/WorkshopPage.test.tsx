@@ -1,9 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeJobCard, makeReservation, makeWorkshopState } from '../../test/fixtures';
-import { WorkshopInventoryLayout } from './WorkshopInventoryLayout';
 
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
@@ -18,6 +17,9 @@ vi.mock('../../lib/workshopApi', () => ({
 vi.mock('../../lib/inventoryApi', () => ({
   requestReturn: vi.fn(),
   reviewReservation: vi.fn(),
+  // Modification Request (2026-09-15): the pill-shaped "Inventory" button opens
+  // StockLookupPanel (shared with InventoryPage) in a Modal - it calls this directly.
+  getStock: vi.fn(),
 }));
 vi.mock('../../lib/masterDataApi', () => ({
   listSpareParts: vi.fn(),
@@ -35,7 +37,7 @@ vi.mock('../../lib/jobCardJourneyApi', () => ({
 import { useAuth } from '../../lib/auth';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { assignWorkshopTechnician, getWorkshopState, listReworkApprovers, requestSpare } from '../../lib/workshopApi';
-import { requestReturn, reviewReservation } from '../../lib/inventoryApi';
+import { requestReturn, reviewReservation, getStock } from '../../lib/inventoryApi';
 import { listSpareParts } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
@@ -45,7 +47,7 @@ function renderPage(jobCardId = 'jc-1') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/workshop-inventory/workshop?jobCardId=${jobCardId}`]}>
+      <MemoryRouter initialEntries={[`/workshop?jobCardId=${jobCardId}`]}>
         <WorkshopPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -136,7 +138,7 @@ describe('WorkshopPage - #218 name-based job card picker', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/workshop-inventory/workshop']}>
+        <MemoryRouter initialEntries={['/workshop']}>
           <WorkshopPage />
         </MemoryRouter>
       </QueryClientProvider>,
@@ -150,12 +152,13 @@ describe('WorkshopPage - #218 name-based job card picker', () => {
   });
 });
 
-// 2026-09-14 live-tested bug: switching to a sibling tab (Inventory & Stock / Need Spare
-// Requests) under WorkshopInventoryLayout's <Outlet /> fully unmounts this page, and the
-// loaded job card was silently lost on return because activeJobCardId was never written
-// back into the URL. These tests cover the fix - the URL now tracks the picked job card,
-// so a remount (which is exactly what a tab switch does) re-seeds from it.
-describe('WorkshopPage - job card survives a tab-switch remount (URL stays in sync)', () => {
+// 2026-09-14 live-tested bug (from when Workshop still shared a layout with Inventory &
+// Stock / Need Spare Requests as sibling tabs): switching tabs fully unmounted this page,
+// and the loaded job card was silently lost on return because activeJobCardId was never
+// written back into the URL. These tests cover that fix - the URL tracks the picked job
+// card, so a remount (a tab switch back then, a plain browser refresh now that Workshop
+// is a standalone route - see the block below) re-seeds from it.
+describe('WorkshopPage - job card survives a remount (URL stays in sync)', () => {
   it('writes the picked job card into the URL as soon as it is selected via search', async () => {
     mockUser({ roleName: 'TECHNICAL_TEAM_LEADER' });
     vi.mocked(searchJobCardJourney).mockResolvedValue([
@@ -176,7 +179,7 @@ describe('WorkshopPage - job card survives a tab-switch remount (URL stays in sy
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/workshop-inventory/workshop']}>
+        <MemoryRouter initialEntries={['/workshop']}>
           <WorkshopPage />
           <LocationProbe />
         </MemoryRouter>
@@ -203,7 +206,7 @@ describe('WorkshopPage - job card survives a tab-switch remount (URL stays in sy
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/workshop-inventory/workshop?jobCardId=jc-99']}>
+        <MemoryRouter initialEntries={['/workshop?jobCardId=jc-99']}>
           <WorkshopPage />
         </MemoryRouter>
       </QueryClientProvider>,
@@ -220,7 +223,7 @@ describe('WorkshopPage - job card survives a tab-switch remount (URL stays in sy
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/workshop-inventory/workshop?jobCardId=jc-1']}>
+        <MemoryRouter initialEntries={['/workshop?jobCardId=jc-1']}>
           <WorkshopPage />
           <LocationProbe />
         </MemoryRouter>
@@ -235,94 +238,12 @@ describe('WorkshopPage - job card survives a tab-switch remount (URL stays in sy
   });
 });
 
-// 2026-09-14 live-tested finding, ROUND 2: the URL-sync fix above (tested via rendering
-// WorkshopPage in isolation) did NOT actually fix the reported bug - you confirmed by
-// logging in as a workshop technician, loading a job, clicking "Inventory & Stock", then
-// clicking back to "Workshop" and finding the job gone again. The reason: the "Workshop"
-// tab's <NavLink> target is a bare path with no ?jobCardId= at all, so switching tabs via
-// the real nav (not a simulated same-url remount) drops the query string entirely - no
-// amount of THIS page echoing its own selection into ITS OWN url survives that. These tests
-// render the actual WorkshopInventoryLayout with its real <Outlet /> and click the real
-// tab links, which is what the isolated tests above could not catch.
-describe('WorkshopPage - job card survives switching tabs via the real WorkshopInventoryLayout (round 2 fix)', () => {
-  // "JC-0001" always matches both the AsyncSearchPicker's own selected-label span AND the
-  // job card detail header - findByText correctly refuses to guess between them, so every
-  // check in this block uses this instead of asserting a single match.
-  async function findJobCardShown() {
-    expect((await screen.findAllByText('JC-0001')).length).toBeGreaterThan(0);
-  }
-
-  function renderWithLayout(initialEntry: string) {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    return render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route path="/workshop-inventory" element={<WorkshopInventoryLayout />}>
-              <Route path="workshop" element={<WorkshopPage />} />
-              <Route path="inventory" element={<div>Inventory & Stock placeholder</div>} />
-              <Route path="need-spare" element={<div>Need Spare Requests placeholder</div>} />
-            </Route>
-          </Routes>
-          <LocationProbe />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-  }
-
-  it('keeps the job loaded after clicking to Inventory & Stock and back to Workshop', async () => {
-    mockUser({ roleName: 'TECHNICAL_TEAM_LEADER' });
-    vi.mocked(getWorkshopState).mockResolvedValue(
-      makeWorkshopState({ jobCard: makeJobCard({ id: 'jc-1', jobCardNumber: 'JC-0001', status: 'SECTION_ASSIGNED', section: 'WORKSHOP' }) }),
-    );
-    renderWithLayout('/workshop-inventory/workshop?jobCardId=jc-1');
-
-    await waitFor(() => expect(getWorkshopState).toHaveBeenCalledWith('jc-1'));
-    await findJobCardShown();
-    expect(getWorkshopState).toHaveBeenCalledTimes(1);
-
-    // Exactly what was reported: click the "Inventory & Stock" tab...
-    fireEvent.click(screen.getByRole('link', { name: 'Inventory & Stock' }));
-    expect(await screen.findByText('Inventory & Stock placeholder')).toBeInTheDocument();
-
-    // ...then click back to "Workshop".
-    fireEvent.click(screen.getByRole('link', { name: 'Workshop' }));
-
-    // The job must still be there - not a blank search box again.
-    await findJobCardShown();
-    expect(screen.queryByTestId('async-search-picker-input')).not.toBeInTheDocument();
-  });
-
-  it('also survives a trip through Need Spare Requests, not just Inventory & Stock', async () => {
-    mockUser({ roleName: 'TECHNICAL_TEAM_LEADER' });
-    vi.mocked(getWorkshopState).mockResolvedValue(
-      makeWorkshopState({ jobCard: makeJobCard({ id: 'jc-1', jobCardNumber: 'JC-0001', status: 'SECTION_ASSIGNED', section: 'WORKSHOP' }) }),
-    );
-    renderWithLayout('/workshop-inventory/workshop?jobCardId=jc-1');
-
-    await findJobCardShown();
-    fireEvent.click(screen.getByRole('link', { name: 'Need Spare Requests' }));
-    expect(await screen.findByText('Need Spare Requests placeholder')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('link', { name: 'Workshop' }));
-    await findJobCardShown();
-  });
-
-  it('restores ?jobCardId= into the url after switching back, so a refresh at that point still works', async () => {
-    mockUser({ roleName: 'TECHNICAL_TEAM_LEADER' });
-    vi.mocked(getWorkshopState).mockResolvedValue(
-      makeWorkshopState({ jobCard: makeJobCard({ id: 'jc-1', jobCardNumber: 'JC-0001', status: 'SECTION_ASSIGNED', section: 'WORKSHOP' }) }),
-    );
-    renderWithLayout('/workshop-inventory/workshop?jobCardId=jc-1');
-    await findJobCardShown();
-
-    fireEvent.click(screen.getByRole('link', { name: 'Inventory & Stock' }));
-    await screen.findByText('Inventory & Stock placeholder');
-    fireEvent.click(screen.getByRole('link', { name: 'Workshop' }));
-    await findJobCardShown();
-
-    expect(screen.getByTestId('location-search')).toHaveTextContent('?jobCardId=jc-1');
-  });
-});
+// Modification Request (2026-09-15): Workshop is now a standalone top-level route (no
+// sibling "Inventory & Stock"/"Need Spare Requests" tabs sharing a layout with it anymore
+// - see AppLayout.tsx/InventoryLayout.tsx's own comments), so the ROUND 2 real-layout
+// tab-switch scenario this block used to cover can no longer happen: there is no sibling
+// tab to switch to within Workshop's own section. The URL-sync coverage above (the job
+// card surviving a same-url remount, e.g. a browser refresh) still applies and is kept.
 
 describe('WorkshopPage - ownership gating (the-fool pre-mortem finding #4)', () => {
   it('hides action buttons and shows a warning for a technician not assigned to this job', async () => {
@@ -712,5 +633,73 @@ describe('WorkshopPage - capability gating (2026-09-14: converted from hardcoded
     fireEvent.click(await screen.findByRole('button', { name: 'Approve reallocation' }));
 
     expect(await screen.findByText(/An Inventory Clerk still needs to confirm it physically arrived back/i)).toBeInTheDocument();
+  });
+});
+
+// Modification Request (2026-09-15): the pill-shaped "Inventory" button next to "Journey
+// ->" opens a quick stock check without navigating away from the job card - see
+// WorkshopPage.tsx's own comment on WorkshopDetail.
+describe('WorkshopPage - inline Stock lookup pill (Modification Request 2026-09-15)', () => {
+  it('shows the pill to a caller holding INVENTORY_VIEW, and opens Stock lookup in a Modal without leaving the job card', async () => {
+    mockUser({ roleName: 'TECHNICIAN_WORKSHOP', id: 'tech-1' });
+    mockCapabilities(['INVENTORY_VIEW']);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState());
+    renderPage();
+
+    const pill = await screen.findByRole('button', { name: 'Inventory' });
+    fireEvent.click(pill);
+
+    // Scoped to the dialog's own heading - the Request Spare form on the page behind it
+    // renders its own "Spare part" select with the same option text, so an unscoped query
+    // matches both.
+    expect(await screen.findByRole('dialog', { name: 'Stock lookup' })).toBeInTheDocument();
+    // Still on the Workshop screen - the job card detail header is still there behind the
+    // modal (the page's own picker also echoes "JC-0001", hence the selector scoping it to
+    // the detail heading specifically).
+    expect(screen.getByText('JC-0001', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('hides the pill entirely from a caller with no INVENTORY_VIEW capability', async () => {
+    mockUser({ roleName: 'TECHNICIAN_WORKSHOP', id: 'tech-1' });
+    mockCapabilities([]);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState());
+    renderPage();
+
+    await screen.findByText('Request a spare part (FR-09: reserves, does not deduct)');
+    expect(screen.queryByRole('button', { name: 'Inventory' })).not.toBeInTheDocument();
+  });
+
+  it('closes the modal via its close control, returning to the plain job card view', async () => {
+    mockUser({ roleName: 'TECHNICIAN_WORKSHOP', id: 'tech-1' });
+    mockCapabilities(['INVENTORY_VIEW']);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState());
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Inventory' }));
+    await screen.findByRole('dialog', { name: 'Stock lookup' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('looks up stock from inside the modal using the same panel Inventory & Stock uses', async () => {
+    mockUser({ roleName: 'TECHNICIAN_WORKSHOP', id: 'tech-1' });
+    mockCapabilities(['INVENTORY_VIEW']);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState());
+    vi.mocked(listSpareParts).mockResolvedValue([{ id: 'sp-1', code: 'SP-001', name: 'Compressor', active: true } as any]);
+    vi.mocked(getStock).mockResolvedValue({ sparePartId: 'sp-1', location: 'MAIN_STORE', quantityOnHand: 4, quantityReserved: 1 });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Inventory' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stock lookup' });
+    // Scoped to the dialog - the page's own Request Spare form has a same-named "Spare
+    // part" select with the same option text rendered behind it.
+    await within(dialog).findByText('SP-001 — Compressor');
+
+    fireEvent.change(within(dialog).getByLabelText('Spare part', { selector: 'select' }), { target: { value: 'sp-1' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Look up' }));
+
+    await waitFor(() => expect(getStock).toHaveBeenCalledWith('sp-1', 'MAIN_STORE'));
+    expect(await within(dialog).findByText('4')).toBeInTheDocument();
   });
 });

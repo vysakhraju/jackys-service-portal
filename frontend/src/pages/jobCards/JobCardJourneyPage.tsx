@@ -165,7 +165,7 @@ function JourneyView({ journey }: { journey: JobCardJourney }) {
           </Link>
           {jobCard.section === 'WORKSHOP' && (
             <Link
-              to={`/workshop-inventory/workshop?jobCardId=${jobCard.id}`}
+              to={`/workshop?jobCardId=${jobCard.id}`}
               className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
             >
               Workshop screen →

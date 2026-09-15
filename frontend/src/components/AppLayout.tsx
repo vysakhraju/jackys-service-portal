@@ -9,25 +9,76 @@ import { NotificationPermissionBanner } from './NotificationPermissionBanner';
 // module's screens actually exist — until then it renders as a disabled
 // "coming soon" row instead of a link, so this file is also a visible,
 // always-up-to-date progress list as each frontend phase ships.
-const NAV_ITEMS: { label: string; path?: string }[] = [
+//
+// Modification Request (2026-09-15): every row used to render unconditionally, so a role
+// with zero reason to open a section (no capability in it, no fullAccess) still saw it in
+// the nav, clicked in, and hit a "you don't have access" notice or, worse, a raw backend
+// 403 (see InventoryPage/StockLookupPanel's own comment on that second case). `capabilities`
+// is that row's module from capability-catalog.ts on the backend (hasAny - holding ANY one
+// capability in the module is a real reason to open the section; each row's own layout/page
+// still gates the specific action/tab further, same as before - this only controls whether
+// the row appears at all). `adminOnly` rows (Users) aren't in the capability matrix at all -
+// Users/Permissions/Auth controllers deliberately stay on the hardcoded SUPER_ADMIN/
+// SERVICE_HEAD @Roles() forever (capability-catalog.ts's own comment: "the module that fixes
+// a bad matrix state can't depend on the system it administers") - fullAccess is that same
+// bypass, surfaced client-side. Rows with neither `capabilities` nor `adminOnly` (Dashboard,
+// Job Card Journey) are JwtAuthGuard-only server-side - every authenticated user has a real
+// reason to see them, so they always show.
+const NAV_ITEMS: { label: string; path?: string; capabilities?: string[]; adminOnly?: boolean }[] = [
   { label: 'Dashboard', path: '/' },
-  { label: 'Users', path: '/users' },
-  { label: 'Master Data', path: '/master-data' },
-  { label: 'Appointments', path: '/appointments' },
-  { label: 'Job Cards', path: '/job-cards' },
+  { label: 'Users', path: '/users', adminOnly: true },
+  {
+    label: 'Master Data',
+    path: '/master-data',
+    capabilities: [
+      'MASTER_DATA_VIEW',
+      'MASTER_DATA_SERVICE_CENTRE_CREATE',
+      'MASTER_DATA_SERVICE_CENTRE_UPDATE',
+      'MASTER_DATA_FAULT_SYMPTOM_MANAGE',
+      'MASTER_DATA_SPARE_PARTS_MANAGE',
+      'MASTER_DATA_PRICE_LIST_MANAGE',
+      'MASTER_DATA_KPI_RULE_MANAGE',
+      'MASTER_DATA_NOTIFICATION_TEMPLATE_MANAGE',
+      'MASTER_DATA_WARRANTY_MASTER_MANAGE',
+      'MASTER_DATA_COMPONENT_YIELD_MANAGE',
+      'MASTER_DATA_BULK_IMPORT',
+    ],
+  },
+  {
+    label: 'Appointments',
+    path: '/appointments',
+    capabilities: ['SCHEDULE_CCE_MANAGE', 'SCHEDULE_VIEW_UPDATE', 'SCHEDULE_ASSIGN_TECHNICIAN', 'SCHEDULE_FIELD_VISIT'],
+  },
+  { label: 'Job Cards', path: '/job-cards', capabilities: ['JOB_CARD_MANAGE', 'JOB_CARD_WARRANTY_OVERRIDE', 'JOB_CARD_TASK_PAUSE'] },
   { label: 'Job Card Journey', path: '/job-cards/journey' },
-  { label: 'Technician Schedule', path: '/technician-schedule' },
-  { label: 'Workshop Queue', path: '/technician-schedule/workshop-queue' },
-  { label: 'Field Technician Schedule', path: '/technician-schedule/field-schedule' },
-  { label: 'Estimates', path: '/estimates' },
-  { label: 'Workshop & Inventory', path: '/workshop-inventory' },
-  { label: 'QC & Permissions', path: '/qc-permissions' },
-  { label: 'Delivery & Invoicing', path: '/delivery' },
-  { label: 'Finance & Customer Portal', path: '/finance' },
-  { label: 'AMC Contracts', path: '/amc' },
-  { label: 'Dismantling', path: '/dismantling' },
-  { label: 'Warranty Claims', path: '/warranty-claims' },
-  { label: 'Reports & Dashboards', path: '/reports' },
+  { label: 'Technician Schedule', path: '/technician-schedule', capabilities: ['TECHNICIAN_SCHEDULE_GANTT'] },
+  { label: 'Workshop Queue', path: '/technician-schedule/workshop-queue', capabilities: ['WORKSHOP_QUEUE_VIEW'] },
+  { label: 'Field Technician Schedule', path: '/technician-schedule/field-schedule', capabilities: ['FIELD_SCHEDULE_REORDER'] },
+  { label: 'Estimates', path: '/estimates', capabilities: ['ESTIMATE_MANAGE', 'ESTIMATE_RECORD_RESPONSE'] },
+  { label: 'Workshop', path: '/workshop', capabilities: ['WORKSHOP_ASSIGN', 'WORKSHOP_ACTION', 'WORKSHOP_VIEW'] },
+  {
+    label: 'Inventory',
+    path: '/inventory',
+    capabilities: ['INVENTORY_STAFF', 'INVENTORY_REVIEW', 'INVENTORY_VIEW', 'INVENTORY_RETURN_REQUEST'],
+  },
+  // QC_GATE_ACCESS covers the QC tab; the Permissions tab is the same admin-only bypass as
+  // Users (PermissionsPage's own PERMISSION_ADMIN_ROLES) - either is a real reason to open
+  // this section, so it's capabilities-OR-adminOnly, not one or the other.
+  { label: 'QC & Permissions', path: '/qc-permissions', capabilities: ['QC_GATE_ACCESS'], adminOnly: true },
+  { label: 'Delivery & Invoicing', path: '/delivery', capabilities: ['DELIVERY_MANAGE', 'INVOICING_MANAGE', 'INVOICING_JOB_CARD_VIEW'] },
+  { label: 'Finance & Customer Portal', path: '/finance', capabilities: ['INVOICING_MANAGE', 'GL_LEDGER_VIEW'] },
+  { label: 'AMC Contracts', path: '/amc', capabilities: ['AMC_MANAGE', 'AMC_VIEW', 'AMC_TECHNICIAN_VISIT', 'AMC_BILLING'] },
+  {
+    label: 'Dismantling',
+    path: '/dismantling',
+    capabilities: ['DISMANTLING_HARVEST', 'DISMANTLING_VERIFY', 'DISMANTLING_MANAGE', 'DISMANTLING_VIEW'],
+  },
+  { label: 'Warranty Claims', path: '/warranty-claims', capabilities: ['WARRANTY_CLAIMS_CLERK', 'WARRANTY_CLAIMS_VIEW', 'CREDIT_NOTE_POST'] },
+  {
+    label: 'Reports & Dashboards',
+    path: '/reports',
+    capabilities: ['REPORTS_DASHBOARD_VIEW', 'REPORTS_OPERATIONAL_VIEW', 'REPORTS_QUALITY_VIEW', 'REPORTS_FINANCE_VIEW'],
+  },
 ];
 
 export function AppLayout() {
@@ -35,8 +86,20 @@ export function AppLayout() {
   // 2026-09-14 (Group C): same REVIEW_ROLES -> INVENTORY_REVIEW conversion as
   // NeedSpareNotifier's own gate (see its doc comment) - was a hardcoded array kept in
   // sync by hand.
-  const { has } = useMyCapabilities();
+  const { has, hasAny, fullAccess, loading: capabilitiesLoading } = useMyCapabilities();
   const canReviewNeedSpare = has('INVENTORY_REVIEW');
+
+  // Modification Request (2026-09-15): while the capability check itself is loading, show
+  // every row rather than none - a flash of "everything hidden" on every page load would be
+  // worse than a flash of "everything shown" for the ~1 request this query takes to settle
+  // (useMyCapabilities has its own 30s staleTime, so this is a true cold-start case only).
+  const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (capabilitiesLoading) return true;
+    if (!item.capabilities && !item.adminOnly) return true;
+    if (item.adminOnly && fullAccess) return true;
+    if (item.capabilities && hasAny(item.capabilities)) return true;
+    return false;
+  });
 
   return (
     <ToastProvider>
@@ -55,7 +118,7 @@ export function AppLayout() {
           </div>
 
           <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-            {NAV_ITEMS.map((item) =>
+            {visibleNavItems.map((item) =>
               item.path ? (
                 <NavLink
                   key={item.label}

@@ -41,7 +41,7 @@ export function NeedSpareNotifier() {
       description,
       action: {
         label: 'Review',
-        onClick: () => navigate('/workshop-inventory/need-spare'),
+        onClick: () => navigate('/inventory/need-spare'),
       },
     });
 
@@ -55,7 +55,7 @@ export function NeedSpareNotifier() {
       title: 'New Need Spare request',
       body: description,
       tag: `need-spare-${request.id}`,
-      onClick: () => navigate('/workshop-inventory/need-spare'),
+      onClick: () => navigate('/inventory/need-spare'),
     });
 
     queryClient.invalidateQueries({ queryKey: PENDING_NEED_SPARE_QUERY_KEY });

@@ -144,7 +144,7 @@ export function InvoiceDetail({ id }: { id: string }) {
           Due date {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : '—'}
         </p>
         <p className="text-slate-500">
-          <Link to={`/workshop-inventory/workshop?jobCardId=${invoice.jobCardId}`} className="text-slate-600 underline">
+          <Link to={`/workshop?jobCardId=${invoice.jobCardId}`} className="text-slate-600 underline">
             View Job Card →
           </Link>
         </p>

@@ -86,7 +86,9 @@ describe('InventoryPage - capability gating (2026-09-14: converted from a hardco
   });
 
   it('hides GRN and Confirm Return from a caller with no INVENTORY_STAFF capability', async () => {
-    mockCapabilities([]);
+    // Also holds INVENTORY_VIEW so Stock lookup still renders here - this test is
+    // specifically about GRN/Confirm Return/the returns dashboard, not the view gate below.
+    mockCapabilities(['INVENTORY_VIEW']);
     renderPage();
     await screen.findByText('Stock lookup');
     expect(screen.queryByText('Goods Received Note (GRN)')).not.toBeInTheDocument();
@@ -94,19 +96,48 @@ describe('InventoryPage - capability gating (2026-09-14: converted from a hardco
     expect(screen.queryByText(/Job cards with parts pending return/)).not.toBeInTheDocument();
   });
 
-  it('shows the review buttons on a stale reservation only with INVENTORY_REVIEW', async () => {
-    mockCapabilities(['INVENTORY_REVIEW']);
+  it('shows the review buttons on a stale reservation only with INVENTORY_REVIEW (also needs INVENTORY_VIEW to see the list at all - GET /reservations/stale is INVENTORY_VIEW-gated server-side)', async () => {
+    mockCapabilities(['INVENTORY_REVIEW', 'INVENTORY_VIEW']);
     vi.mocked(getStaleReservations).mockResolvedValue([makeReservation()]);
     renderPage();
     expect(await screen.findByRole('button', { name: 'Approve reallocation' })).toBeInTheDocument();
   });
 
   it('hides the review buttons on a stale reservation without INVENTORY_REVIEW', async () => {
-    mockCapabilities([]);
+    mockCapabilities(['INVENTORY_VIEW']);
     vi.mocked(getStaleReservations).mockResolvedValue([makeReservation()]);
     renderPage();
     await screen.findByText(/held 30h/i);
     expect(screen.queryByRole('button', { name: 'Approve reallocation' })).not.toBeInTheDocument();
+  });
+});
+
+// Modification Request (2026-09-15): Stock lookup and Stale Reservations used to fire
+// their queries unconditionally, so a caller with some other inventory capability but no
+// INVENTORY_VIEW hit a raw "Access denied. Missing capability: INVENTORY_VIEW" ErrorNotice
+// instead of a designed notice - see InventoryPage.tsx's own comment. These tests cover
+// the fix: both sections are now gated on INVENTORY_VIEW client-side too, hidden entirely
+// (same convention as GrnCard/ReturnPendingDashboardCard/ConfirmReturnCard) rather than
+// firing and erroring.
+describe('InventoryPage - INVENTORY_VIEW gating on Stock lookup / Stale reservations (raw-403 fix)', () => {
+  it('hides Stock lookup and Stale reservations from a caller with INVENTORY_STAFF but no INVENTORY_VIEW, and never fires either query', async () => {
+    mockCapabilities(['INVENTORY_STAFF']);
+    renderPage();
+
+    await screen.findByText('Goods Received Note (GRN)');
+    expect(screen.queryByText('Stock lookup')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Stale reservations, all jobs/)).not.toBeInTheDocument();
+    expect(getStaleReservations).not.toHaveBeenCalled();
+  });
+
+  it('shows an "Inventory" access-denied notice, not a raw backend error, when the caller holds none of GRN/View/Confirm-return', async () => {
+    // INVENTORY_RETURN_REQUEST alone - a real capability (used on the Workshop screen's
+    // "request return" button), just not one this page has anything to show for.
+    mockCapabilities(['INVENTORY_RETURN_REQUEST']);
+    renderPage();
+
+    expect(await screen.findByText("You don't have access to Inventory yet.")).toBeInTheDocument();
+    expect(screen.queryByText('Access denied')).not.toBeInTheDocument();
   });
 });
 
@@ -133,7 +164,7 @@ describe('InventoryPage - stock lookup "never received" is distinct from a real 
 
 describe('InventoryPage - review then confirm-return handoff (the-fool: RETURN_PENDING is otherwise a dead end)', () => {
   it('after Approve reallocation, tells the viewer the reservation is now RETURN_PENDING', async () => {
-    mockCapabilities(['INVENTORY_REVIEW']);
+    mockCapabilities(['INVENTORY_REVIEW', 'INVENTORY_VIEW']);
     vi.mocked(getStaleReservations).mockResolvedValue([makeReservation()]);
     vi.mocked(reviewReservation).mockResolvedValue(makeReservation({ status: 'RETURN_PENDING' }) as any);
     const user = userEvent.setup();
@@ -181,7 +212,7 @@ describe('InventoryPage - returns dashboard (2026-09-14: no reservation id requi
   });
 
   it('hides the dashboard from a caller with no INVENTORY_STAFF capability', async () => {
-    mockCapabilities([]);
+    mockCapabilities(['INVENTORY_VIEW']);
     vi.mocked(getReturnPendingByJobCard).mockResolvedValue([group]);
     renderPage();
 

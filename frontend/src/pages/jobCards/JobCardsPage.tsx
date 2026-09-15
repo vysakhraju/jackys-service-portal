@@ -458,7 +458,7 @@ function JobCardDetail({
       {showWorkshopLink && (
         <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
           This is a Workshop job -{' '}
-          <Link to={`/workshop-inventory/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
+          <Link to={`/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
             go to the Workshop screen →
           </Link>{' '}
           to assign a technician, track WIP, and request spares.

@@ -123,7 +123,7 @@ describe('NeedSpareNotifier - handling a newly-arrived request', () => {
 
     const toast = pushMock.mock.calls[0][0];
     toast.action.onClick();
-    expect(navigateMock).toHaveBeenCalledWith('/workshop-inventory/need-spare');
+    expect(navigateMock).toHaveBeenCalledWith('/inventory/need-spare');
   });
 
   it('also fires the OS-level browser notification alongside the toast, tagged by request id', () => {
@@ -142,6 +142,6 @@ describe('NeedSpareNotifier - handling a newly-arrived request', () => {
     getCallback()(makeNeedSpareRequest());
 
     showBrowserNotificationMock.mock.calls[0][0].onClick();
-    expect(navigateMock).toHaveBeenCalledWith('/workshop-inventory/need-spare');
+    expect(navigateMock).toHaveBeenCalledWith('/inventory/need-spare');
   });
 });

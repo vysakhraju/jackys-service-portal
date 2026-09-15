@@ -136,7 +136,7 @@ function QcDetail({ jobCard, onChanged }: { jobCard: JobCard; onChanged: () => v
       {notYetReady && (
         <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
           This job is {jobCard.status.replaceAll('_', ' ')} - not yet READY_FOR_QC. Go to the{' '}
-          <Link to={`/workshop-inventory/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
+          <Link to={`/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
             Workshop screen
           </Link>{' '}
           to move it forward.
@@ -198,7 +198,7 @@ function QcActions({ jobCard, onChanged }: { jobCard: JobCard; onChanged: () => 
                 </li>
               ))}
             </ul>
-            <Link to={`/workshop-inventory/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
+            <Link to={`/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
               Go to the Workshop screen to top up or resolve →
             </Link>
           </div>
@@ -221,7 +221,7 @@ function QcActions({ jobCard, onChanged }: { jobCard: JobCard; onChanged: () => 
         {justRejected ? (
           <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
             Rejected - the job is back to IN_PROGRESS. Go to the{' '}
-            <Link to={`/workshop-inventory/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
+            <Link to={`/workshop?jobCardId=${jobCard.id}`} className="font-medium underline">
               Workshop screen
             </Link>{' '}
             to act on it next.
