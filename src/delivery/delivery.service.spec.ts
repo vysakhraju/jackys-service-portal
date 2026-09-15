@@ -14,6 +14,7 @@ describe('DeliveryService', () => {
   let jobCardsService: any;
   let invoicingService: any;
   let queryBuilder: any;
+  let deliveryListQueryBuilder: any;
 
   const driverUser = (overrides: any = {}) =>
     ({ id: 'driver-1', firstName: 'Sanjay', lastName: 'Rao', fullName: 'Sanjay Rao', status: 'ACTIVE', role: { name: 'DRIVER' }, ...overrides } as any);
@@ -63,10 +64,17 @@ describe('DeliveryService', () => {
       createQueryBuilder: jest.fn(() => queryBuilder),
     };
     dataSource = { transaction: jest.fn((cb: any) => cb(manager)) };
+    deliveryListQueryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
     deliveryRepository = {
       findOne: jest.fn(),
       find: jest.fn(),
       save: jest.fn((entity: any) => Promise.resolve(entity)),
+      createQueryBuilder: jest.fn(() => deliveryListQueryBuilder),
     };
     userRepository = {
       findOne: jest.fn().mockResolvedValue(driverUser()),
@@ -76,6 +84,7 @@ describe('DeliveryService', () => {
       findById: jest.fn(),
       findReadyForDelivery: jest.fn(),
       findByDeliveryId: jest.fn(),
+      findByDeliveryIds: jest.fn().mockResolvedValue([]),
     };
     invoicingService = {
       findByJobCardId: jest.fn(),
@@ -151,6 +160,106 @@ describe('DeliveryService', () => {
 
       expect(result[0].invoiceStatus).toBeNull();
       expect(result[0].payable).toBe(false);
+    });
+
+    it('Modification Request (2026-09-15): passes dateFrom/dateTo/search straight through to JobCardsService', async () => {
+      jobCardsService.findReadyForDelivery.mockResolvedValue([]);
+
+      await service.findReady(WarrantyStatus.OUT_OF_WARRANTY, '2026-09-01', '2026-09-15', 'JC-0099');
+
+      expect(jobCardsService.findReadyForDelivery).toHaveBeenCalledWith(WarrantyStatus.OUT_OF_WARRANTY, '2026-09-01', '2026-09-15', 'JC-0099');
+    });
+  });
+
+  describe('findAll', () => {
+    it('returns [] immediately (no driver/job-card lookups) when nothing matches', async () => {
+      deliveryListQueryBuilder.getMany.mockResolvedValue([]);
+
+      const result = await service.findAll();
+
+      expect(result).toEqual([]);
+      expect(userRepository.find).not.toHaveBeenCalled();
+      expect(jobCardsService.findByDeliveryIds).not.toHaveBeenCalled();
+    });
+
+    it('resolves driverUserId to a real name instead of leaving the raw uuid', async () => {
+      deliveryListQueryBuilder.getMany.mockResolvedValue([delivery({ driverUserId: 'driver-1' })]);
+      userRepository.find.mockResolvedValue([driverUser()]);
+
+      const [row] = await service.findAll();
+
+      expect(userRepository.find).toHaveBeenCalledWith({ where: { id: expect.anything() } });
+      expect(row.driverName).toBe('Sanjay Rao');
+      expect(row.driverUserId).toBe('driver-1');
+    });
+
+    it('leaves driverName null when no driver is recorded yet, without querying users', async () => {
+      deliveryListQueryBuilder.getMany.mockResolvedValue([delivery({ driverUserId: null })]);
+
+      const [row] = await service.findAll();
+
+      expect(row.driverName).toBeNull();
+      expect(userRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('attaches member job cards and a single customerType when every member shares one', async () => {
+      deliveryListQueryBuilder.getMany.mockResolvedValue([delivery({ id: 'dlv-1' })]);
+      jobCardsService.findByDeliveryIds.mockResolvedValue([
+        { id: 'jc-1', jobCardNumber: 'JC-0001', deliveryId: 'dlv-1', appointment: { customerType: 'B2C' } },
+        { id: 'jc-2', jobCardNumber: 'JC-0002', deliveryId: 'dlv-1', appointment: { customerType: 'B2C' } },
+      ]);
+
+      const [row] = await service.findAll();
+
+      expect(row.jobCards).toEqual([
+        { id: 'jc-1', jobCardNumber: 'JC-0001' },
+        { id: 'jc-2', jobCardNumber: 'JC-0002' },
+      ]);
+      expect(row.customerType).toBe('B2C');
+    });
+
+    it('reports customerType as MIXED when a batch spans more than one customer type', async () => {
+      deliveryListQueryBuilder.getMany.mockResolvedValue([delivery({ id: 'dlv-1' })]);
+      jobCardsService.findByDeliveryIds.mockResolvedValue([
+        { id: 'jc-1', jobCardNumber: 'JC-0001', deliveryId: 'dlv-1', appointment: { customerType: 'B2C' } },
+        { id: 'jc-2', jobCardNumber: 'JC-0002', deliveryId: 'dlv-1', appointment: { customerType: 'B2B' } },
+      ]);
+
+      const [row] = await service.findAll();
+
+      expect(row.customerType).toBe('MIXED');
+    });
+
+    it('reports customerType as null when a delivery somehow has no member job cards on record', async () => {
+      deliveryListQueryBuilder.getMany.mockResolvedValue([delivery({ id: 'dlv-1' })]);
+      jobCardsService.findByDeliveryIds.mockResolvedValue([]);
+
+      const [row] = await service.findAll();
+
+      expect(row.jobCards).toEqual([]);
+      expect(row.customerType).toBeNull();
+    });
+
+    it('applies status/date-range/search as andWhere filters on the query builder', async () => {
+      deliveryListQueryBuilder.getMany.mockResolvedValue([]);
+
+      await service.findAll(DeliveryStatus.DISPATCHED, '2026-09-01', '2026-09-15', 'DLV-0099');
+
+      expect(deliveryListQueryBuilder.andWhere).toHaveBeenCalledWith('del.status = :status', { status: DeliveryStatus.DISPATCHED });
+      expect(deliveryListQueryBuilder.andWhere).toHaveBeenCalledWith('del.createdAt >= :dateFrom', { dateFrom: '2026-09-01 00:00:00' });
+      expect(deliveryListQueryBuilder.andWhere).toHaveBeenCalledWith('del.createdAt <= :dateTo', { dateTo: '2026-09-15 23:59:59.999' });
+      expect(deliveryListQueryBuilder.andWhere).toHaveBeenCalledWith(expect.stringContaining('del.deliveryNumber ILIKE :like'), {
+        like: '%DLV-0099%',
+      });
+    });
+
+    it('never leaks the POD signature/photo blobs (plain response object, not the raw entity)', async () => {
+      deliveryListQueryBuilder.getMany.mockResolvedValue([delivery({ podSignatureBase64: 'data:...', podPhotoBase64: 'data:...' })]);
+
+      const [row] = await service.findAll();
+
+      expect(row.podSignatureBase64).toBeUndefined();
+      expect(row.podPhotoBase64).toBeUndefined();
     });
   });
 

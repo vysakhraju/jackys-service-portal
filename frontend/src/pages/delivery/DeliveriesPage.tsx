@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AxiosError } from 'axios';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
+import { Modal } from '../../components/Modal';
 import { SignaturePad } from '../../components/SignaturePad';
 import { StatusBadge } from '../../components/StatusBadge';
 import { NamePicker } from '../../components/pickers/NamePicker';
@@ -18,7 +19,7 @@ import {
   listDeliveries,
   listDrivers,
 } from '../../lib/deliveryApi';
-import type { Delivery, DeliveryBlocker, DeliveryStatusValue } from '../../lib/deliveryTypes';
+import type { Delivery, DeliveryBlocker, DeliveryListRow, DeliveryStatusValue } from '../../lib/deliveryTypes';
 import { DeliveryBlockersNotice } from './DeliveryBlockersNotice';
 import { RecordPaymentModal } from './RecordPaymentModal';
 
@@ -35,38 +36,80 @@ export function DeliveriesPage() {
   const activeId = searchParams.get('deliveryId') ?? '';
   const [statusFilter, setStatusFilter] = useState<DeliveryStatusValue | ''>('');
 
+  // Modification Request (2026-09-15, Delivery & Invoicing screen): same date range +
+  // debounced 2-character search convention as ReadyForDeliveryPage.
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchInput.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  const effectiveSearch = debouncedSearch.length >= 2 ? debouncedSearch : undefined;
+
   const listQuery = useQuery({
-    queryKey: ['deliveries', statusFilter],
-    queryFn: () => listDeliveries(statusFilter || undefined),
+    queryKey: ['deliveries', statusFilter, dateFrom, dateTo, effectiveSearch],
+    queryFn: () => listDeliveries(statusFilter || undefined, { dateFrom: dateFrom || undefined, dateTo: dateTo || undefined, q: effectiveSearch }),
   });
 
   function select(id: string) {
     setSearchParams({ deliveryId: id });
   }
 
-  const columns: Column<Delivery>[] = [
+  // Modification Request: View now opens a popup instead of an inline section the user had
+  // to scroll down to - closing just clears the deliveryId param (statusFilter/date/search
+  // above are local state, not URL params, so this can't disturb them).
+  function closeDetail() {
+    setSearchParams({});
+  }
+
+  function setToday() {
+    const today = new Date().toISOString().slice(0, 10);
+    setDateFrom(today);
+    setDateTo(today);
+  }
+
+  const columns: Column<DeliveryListRow>[] = [
     { key: 'deliveryNumber', label: 'DLV #', render: (d) => <span className="font-medium text-slate-800">{d.deliveryNumber}</span> },
     { key: 'status', label: 'Status', render: (d) => <StatusBadge status={d.status} /> },
-    { key: 'dispatcher', label: 'Dispatcher', render: (d) => <span className="text-xs text-slate-400">{d.dispatcherUserId.slice(0, 8)}…</span> },
+    { key: 'dispatcher', label: 'Dispatcher', render: (d) => <span className="text-slate-400">{d.dispatcherUserId.slice(0, 8)}…</span> },
     {
       key: 'driver',
       label: 'Driver',
-      render: (d) => <span className="text-xs text-slate-400">{d.driverUserId ? `${d.driverUserId.slice(0, 8)}…` : '—'}</span>,
+      render: (d) => <span>{d.driverName ?? '—'}</span>,
     },
     {
-      key: 'timing',
-      label: 'Dispatched / Delivered',
-      render: (d) => (
-        <span className="text-xs text-slate-500">
-          {d.dispatchedAt ? new Date(d.dispatchedAt).toLocaleString() : '—'} /{' '}
-          {d.deliveredAt ? new Date(d.deliveredAt).toLocaleString() : '—'}
-        </span>
-      ),
+      key: 'dispatched',
+      label: 'Dispatched',
+      render: (d) => <span className="text-slate-500">{d.dispatchedAt ? new Date(d.dispatchedAt).toLocaleString() : '—'}</span>,
+    },
+    {
+      key: 'delivered',
+      label: 'Delivered',
+      render: (d) => <span className="text-slate-500">{d.deliveredAt ? new Date(d.deliveredAt).toLocaleString() : '—'}</span>,
+    },
+    {
+      key: 'jobCards',
+      label: 'Job Card',
+      render: (d) =>
+        d.jobCards.length === 0 ? (
+          <span className="text-slate-400">—</span>
+        ) : (
+          <span>{d.jobCards.map((jc) => jc.jobCardNumber).join(', ')}</span>
+        ),
+    },
+    {
+      key: 'customerType',
+      label: 'Customer Type',
+      render: (d) => <span>{d.customerType ?? '—'}</span>,
     },
   ];
 
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="max-w-6xl space-y-4">
       <div className="flex flex-wrap gap-1">
         {STATUS_FILTERS.map((f) => (
           <button
@@ -82,12 +125,49 @@ export function DeliveriesPage() {
         ))}
       </div>
 
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-3">
+        <Field label="From date">
+          <input type="date" className={`${inputClass} w-36`} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        </Field>
+        <Field label="To date">
+          <input type="date" className={`${inputClass} w-36`} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </Field>
+        <button type="button" onClick={setToday} className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+          Today
+        </button>
+        {(dateFrom || dateTo) && (
+          <button
+            type="button"
+            onClick={() => {
+              setDateFrom('');
+              setDateTo('');
+            }}
+            className="text-xs text-slate-400 underline hover:text-slate-600"
+          >
+            Clear dates
+          </button>
+        )}
+        <div className="min-w-[16rem] flex-1">
+          <Field label="Search" hint="DLV #, job #, customer name or phone - type 2+ characters">
+            <input
+              type="text"
+              className={inputClass}
+              placeholder="Search…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+          </Field>
+        </div>
+      </div>
+
       <DataTable
         columns={columns}
         rows={listQuery.data}
         isLoading={listQuery.isLoading}
         error={listQuery.error}
         emptyMessage="No deliveries yet."
+        maxHeightClassName="max-h-[28rem] overflow-y-auto"
+        dense
         rowActions={(d) => (
           <button onClick={() => select(d.id)} className="rounded border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
             View
@@ -95,7 +175,9 @@ export function DeliveriesPage() {
         )}
       />
 
-      {activeId && <DeliveryDetail id={activeId} />}
+      <Modal open={!!activeId} onClose={closeDetail} title="Delivery details" maxWidthClassName="max-w-2xl">
+        {activeId && <DeliveryDetail id={activeId} />}
+      </Modal>
     </div>
   );
 }

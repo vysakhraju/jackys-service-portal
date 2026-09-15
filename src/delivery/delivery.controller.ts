@@ -33,10 +33,18 @@ export class DeliveryController {
   @Get('ready')
   @RequiresCapability('DELIVERY_MANAGE')
   @ApiQuery({ name: 'warrantyStatus', required: false, enum: WarrantyStatus, description: 'Filter the IW/OOW tabs' })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'Modification Request: only job cards created on/after this date (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'Modification Request: only job cards created on/before this date (YYYY-MM-DD), inclusive' })
+  @ApiQuery({ name: 'q', required: false, description: 'Modification Request: free-text search across job card #, appointment #, customer name/phone' })
   @ApiOperation({ summary: 'List QC_PASSED Job Cards not yet attached to a delivery (the ready-for-delivery pool), with proactive OOW payment-status visibility' })
   @ApiResponse({ status: 200, description: 'Ready Job Cards, each with invoiceStatus/payable for OOW jobs' })
-  async findReady(@Query('warrantyStatus') warrantyStatus?: WarrantyStatus) {
-    return this.deliveryService.findReady(warrantyStatus);
+  async findReady(
+    @Query('warrantyStatus') warrantyStatus?: WarrantyStatus,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('q') q?: string,
+  ) {
+    return this.deliveryService.findReady(warrantyStatus, dateFrom, dateTo, q);
   }
 
   @Get('drivers')
@@ -75,10 +83,18 @@ export class DeliveryController {
   @Get()
   @RequiresCapability('DELIVERY_MANAGE')
   @ApiQuery({ name: 'status', required: false, enum: DeliveryStatus })
-  @ApiOperation({ summary: 'List deliveries, optionally filtered by status (POD blob columns excluded - see GET /delivery/:id for those)' })
-  @ApiResponse({ status: 200, description: 'Deliveries' })
-  async findAll(@Query('status') status?: DeliveryStatus) {
-    return this.deliveryService.findAll(status);
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'Modification Request: only deliveries created on/after this date (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'Modification Request: only deliveries created on/before this date (YYYY-MM-DD), inclusive' })
+  @ApiQuery({ name: 'q', required: false, description: 'Modification Request: free-text search across DLV#, member job card #s, customer name/phone' })
+  @ApiOperation({ summary: 'List deliveries, optionally filtered by status/date range/search (POD blob columns excluded - see GET /delivery/:id for those)' })
+  @ApiResponse({ status: 200, description: 'Deliveries, each with driverName/jobCards/customerType resolved for display' })
+  async findAll(
+    @Query('status') status?: DeliveryStatus,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('q') q?: string,
+  ) {
+    return this.deliveryService.findAll(status, dateFrom, dateTo, q);
   }
 
   @Get(':id')

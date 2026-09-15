@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { makeDelivery, makeJobCard } from '../../test/fixtures';
+import { makeDelivery, makeDeliveryListRow, makeJobCard } from '../../test/fixtures';
 
 vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/deliveryApi', () => ({
@@ -68,22 +68,24 @@ beforeEach(() => {
   vi.mocked(listDrivers).mockReset().mockResolvedValue([{ id: 'driver-7', name: 'Zayed Al Nahyan' }]);
 });
 
+const NO_FILTERS = { dateFrom: undefined, dateTo: undefined, q: undefined };
+
 describe('DeliveriesPage - list and status filter', () => {
   it('lists deliveries and re-queries with the selected status filter', async () => {
     mockCapabilities(['DELIVERY_MANAGE']);
-    vi.mocked(listDeliveries).mockResolvedValue([makeDelivery()]);
+    vi.mocked(listDeliveries).mockResolvedValue([makeDeliveryListRow()]);
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('DLV-0001');
-    expect(listDeliveries).toHaveBeenCalledWith(undefined);
+    expect(listDeliveries).toHaveBeenCalledWith(undefined, NO_FILTERS);
 
     await user.click(screen.getByRole('button', { name: 'Dispatched' }));
-    expect(listDeliveries).toHaveBeenCalledWith('DISPATCHED');
+    expect(listDeliveries).toHaveBeenCalledWith('DISPATCHED', NO_FILTERS);
   });
 
-  it('selecting a delivery sets ?deliveryId= and renders its detail', async () => {
+  it('selecting a delivery sets ?deliveryId= and opens its detail in a popup', async () => {
     mockCapabilities(['DELIVERY_MANAGE']);
-    vi.mocked(listDeliveries).mockResolvedValue([makeDelivery({ id: 'del-9', deliveryNumber: 'DLV-0009' })]);
+    vi.mocked(listDeliveries).mockResolvedValue([makeDeliveryListRow({ id: 'del-9', deliveryNumber: 'DLV-0009' })]);
     vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-9', deliveryNumber: 'DLV-0009' }));
     vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
     const user = userEvent.setup();
@@ -93,6 +95,77 @@ describe('DeliveriesPage - list and status filter', () => {
     expect(await screen.findByText(/Job cards in this delivery/i)).toBeInTheDocument();
     expect(getDelivery).toHaveBeenCalledWith('del-9');
     expect(getDeliveryJobCards).toHaveBeenCalledWith('del-9');
+  });
+
+  // Modification Request (2026-09-15): the View button used to reveal an inline section the
+  // user had to scroll the whole page down to see - it's a popup now, closable with its own
+  // X, without losing the underlying list.
+  it('the detail popup has its own close control and closing it clears ?deliveryId=', async () => {
+    mockCapabilities(['DELIVERY_MANAGE']);
+    vi.mocked(listDeliveries).mockResolvedValue([makeDeliveryListRow({ id: 'del-9', deliveryNumber: 'DLV-0009' })]);
+    vi.mocked(getDelivery).mockResolvedValue(makeDelivery({ id: 'del-9', deliveryNumber: 'DLV-0009' }));
+    vi.mocked(getDeliveryJobCards).mockResolvedValue([makeJobCard()]);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('DLV-0009');
+    await user.click(screen.getByRole('button', { name: 'View' }));
+    await screen.findByText(/Job cards in this delivery/i);
+
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByText(/Job cards in this delivery/i)).not.toBeInTheDocument();
+  });
+
+  it('Modification Request: shows the driver name, split Dispatched/Delivered columns, member job card #s and customer type', async () => {
+    mockCapabilities(['DELIVERY_MANAGE']);
+    vi.mocked(listDeliveries).mockResolvedValue([
+      makeDeliveryListRow({
+        driverName: 'Sanjay Rao',
+        dispatchedAt: '2026-09-10T08:00:00Z',
+        deliveredAt: null,
+        jobCards: [
+          { id: 'jc-1', jobCardNumber: 'JC-0001' },
+          { id: 'jc-2', jobCardNumber: 'JC-0002' },
+        ],
+        customerType: 'B2B',
+      }),
+    ]);
+    renderPage();
+
+    await screen.findByText('DLV-0001');
+    expect(screen.getByText('Sanjay Rao')).toBeInTheDocument();
+    expect(screen.getByText('JC-0001, JC-0002')).toBeInTheDocument();
+    expect(screen.getByText('B2B')).toBeInTheDocument();
+  });
+
+  it('"Today" sets both date fields and re-queries with them', async () => {
+    mockCapabilities(['DELIVERY_MANAGE']);
+    vi.mocked(listDeliveries).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Today' }));
+
+    const today = new Date().toISOString().slice(0, 10);
+    await waitFor(() => {
+      expect(listDeliveries).toHaveBeenLastCalledWith(undefined, { dateFrom: today, dateTo: today, q: undefined });
+    });
+  });
+
+  it('search only kicks in at 2+ characters', async () => {
+    mockCapabilities(['DELIVERY_MANAGE']);
+    vi.mocked(listDeliveries).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderPage();
+    vi.mocked(listDeliveries).mockClear();
+
+    await user.type(screen.getByPlaceholderText('Search…'), 'D');
+    await new Promise((r) => setTimeout(r, 350));
+    expect(listDeliveries).not.toHaveBeenCalledWith(undefined, expect.objectContaining({ q: 'D' }));
+
+    await user.type(screen.getByPlaceholderText('Search…'), 'L');
+    await waitFor(() => {
+      expect(listDeliveries).toHaveBeenCalledWith(undefined, { dateFrom: undefined, dateTo: undefined, q: 'DL' });
+    });
   });
 });
 

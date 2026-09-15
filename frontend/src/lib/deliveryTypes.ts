@@ -6,6 +6,7 @@
 // DeliveryController - the only other primitive was job-card -> delivery, not this
 // direction).
 import type { JobCard } from './jobCardsTypes';
+import type { CustomerTypeValue } from './appointmentsTypes';
 
 export const DELIVERY_STATUSES = ['PENDING', 'DISPATCHED', 'DELIVERED', 'CANCELLED'] as const;
 export type DeliveryStatusValue = (typeof DELIVERY_STATUSES)[number];
@@ -47,6 +48,17 @@ export interface ReadyForDeliveryRow {
   jobCard: JobCard;
   invoiceStatus: string | null;
   payable: boolean;
+}
+
+// Modification Request (2026-09-15, Delivery & Invoicing screen): GET /delivery's list-row
+// shape - the plain Delivery fields plus DeliveryService.findAll()'s resolved extras
+// (driverName instead of a raw uuid, the batch's member job cards, and a customerType
+// summary - 'MIXED' when a batch's job cards don't all share one). Never carries the POD
+// blob fields - those stay GET /delivery/:id-only, same as the plain Delivery shape.
+export interface DeliveryListRow extends Omit<Delivery, 'podSignatureBase64' | 'podPhotoBase64'> {
+  driverName: string | null;
+  jobCards: { id: string; jobCardNumber: string }[];
+  customerType: CustomerTypeValue | 'MIXED' | null;
 }
 
 // Matches CreateDeliveryDto exactly.

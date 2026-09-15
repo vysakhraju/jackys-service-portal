@@ -31,9 +31,11 @@ export type JobCardLaneValue = (typeof JOB_CARD_LANES)[number];
 export interface JobCard {
   id: string;
   jobCardNumber: string;
-  // Only present on GET /job-cards/:id (findById loads the appointment relation) - the
+  // Present on GET /job-cards/:id (findById loads the appointment relation) - the
   // by-appointment lookup does not. Estimates screens read customerPhone/customerEmail
-  // from here for the Record Response prefill (the-fool pre-mortem, Phase 5).
+  // from here for the Record Response prefill (the-fool pre-mortem, Phase 5). Modification
+  // Request (2026-09-15): also now present on GET /delivery/ready's rows (Customer
+  // type/Brand/Model/created-date columns) and on GET /delivery/:id/job-cards's rows.
   appointment?: Appointment;
   appointmentId: string;
   status: JobCardStatusValue;

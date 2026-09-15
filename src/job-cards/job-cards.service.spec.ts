@@ -64,6 +64,7 @@ describe('JobCardsService', () => {
 
   beforeEach(() => {
     queryBuilder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
@@ -992,27 +993,56 @@ describe('JobCardsService', () => {
 
   describe('Phase 7: Delivery lookups', () => {
     describe('findReadyForDelivery', () => {
-      it('queries for QC_PASSED job cards with no deliveryId yet, oldest first', async () => {
-        jobCardRepository.find.mockResolvedValue([jobCard({ status: JobCardStatus.QC_PASSED, deliveryId: null })]);
+      it('queries for QC_PASSED job cards with no deliveryId yet, oldest first, appointment eager-loaded', async () => {
+        queryBuilder.getMany.mockResolvedValue([jobCard({ status: JobCardStatus.QC_PASSED, deliveryId: null })]);
 
         const result = await service.findReadyForDelivery();
 
-        expect(jobCardRepository.find).toHaveBeenCalledWith({
-          where: { status: JobCardStatus.QC_PASSED, deliveryId: IsNull() },
-          order: { updatedAt: 'ASC' },
-        });
+        expect(jobCardRepository.createQueryBuilder).toHaveBeenCalledWith('jc');
+        expect(queryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('jc.appointment', 'apt');
+        expect(queryBuilder.where).toHaveBeenCalledWith('jc.status = :status', { status: JobCardStatus.QC_PASSED });
+        expect(queryBuilder.andWhere).toHaveBeenCalledWith('jc.deliveryId IS NULL');
+        expect(queryBuilder.orderBy).toHaveBeenCalledWith('jc.updatedAt', 'ASC');
         expect(result).toHaveLength(1);
       });
 
       it('adds a warrantyStatus filter when provided (the IW/OOW tabs)', async () => {
-        jobCardRepository.find.mockResolvedValue([]);
+        queryBuilder.getMany.mockResolvedValue([]);
 
         await service.findReadyForDelivery(WarrantyStatus.OUT_OF_WARRANTY);
 
-        expect(jobCardRepository.find).toHaveBeenCalledWith({
-          where: { status: JobCardStatus.QC_PASSED, deliveryId: IsNull(), warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY },
-          order: { updatedAt: 'ASC' },
+        expect(queryBuilder.andWhere).toHaveBeenCalledWith('jc.warrantyStatus = :warrantyStatus', {
+          warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY,
         });
+      });
+
+      it('Modification Request (2026-09-15): adds an inclusive date range filter on jc.createdAt', async () => {
+        queryBuilder.getMany.mockResolvedValue([]);
+
+        await service.findReadyForDelivery(undefined, '2026-09-01', '2026-09-15');
+
+        expect(queryBuilder.andWhere).toHaveBeenCalledWith('jc.createdAt >= :dateFrom', { dateFrom: '2026-09-01 00:00:00' });
+        expect(queryBuilder.andWhere).toHaveBeenCalledWith('jc.createdAt <= :dateTo', { dateTo: '2026-09-15 23:59:59.999' });
+      });
+
+      it('Modification Request: searches job card #/appointment #/customer name/phone, ILIKE-escaped', async () => {
+        queryBuilder.getMany.mockResolvedValue([]);
+
+        await service.findReadyForDelivery(undefined, undefined, undefined, '50% off_deal');
+
+        expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+          "(jc.jobCardNumber ILIKE :like ESCAPE '\\' OR apt.appointmentNumber ILIKE :like ESCAPE '\\' OR apt.customerName ILIKE :like ESCAPE '\\' OR apt.customerPhone ILIKE :like ESCAPE '\\')",
+          { like: '%50\\% off\\_deal%' },
+        );
+      });
+
+      it('ignores a blank/whitespace-only search string (no extra andWhere call)', async () => {
+        queryBuilder.getMany.mockResolvedValue([]);
+        queryBuilder.andWhere.mockClear();
+
+        await service.findReadyForDelivery(undefined, undefined, undefined, '   ');
+
+        expect(queryBuilder.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('ILIKE'), expect.anything());
       });
     });
 
@@ -1024,6 +1054,28 @@ describe('JobCardsService', () => {
         const result = await service.findByDeliveryId('dlv-1');
 
         expect(jobCardRepository.find).toHaveBeenCalledWith({ where: { deliveryId: 'dlv-1' } });
+        expect(result).toBe(members);
+      });
+    });
+
+    describe('findByDeliveryIds', () => {
+      it('returns [] for an empty id list without querying', async () => {
+        const result = await service.findByDeliveryIds([]);
+
+        expect(result).toEqual([]);
+        expect(jobCardRepository.find).not.toHaveBeenCalled();
+      });
+
+      it('queries every member of every listed delivery, appointment relation loaded', async () => {
+        const members = [jobCard({ id: 'jc-1', deliveryId: 'dlv-1' }), jobCard({ id: 'jc-2', deliveryId: 'dlv-2' })];
+        jobCardRepository.find.mockResolvedValue(members);
+
+        const result = await service.findByDeliveryIds(['dlv-1', 'dlv-2']);
+
+        expect(jobCardRepository.find).toHaveBeenCalledWith({
+          where: { deliveryId: In(['dlv-1', 'dlv-2']) },
+          relations: { appointment: true },
+        });
         expect(result).toBe(members);
       });
     });

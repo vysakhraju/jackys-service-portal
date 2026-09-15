@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, EntityManager } from 'typeorm';
+import { Repository, DataSource, EntityManager, In } from 'typeorm';
 import { Delivery, DeliveryStatus } from './entities/delivery.entity';
 // Cross-module entity-class import for typing/transaction use only (not a @Module import,
 // so this does not create a Nest DI circular-module dependency) - the same established
@@ -74,24 +74,100 @@ export class DeliveryService {
     return delivery;
   }
 
-  /** List view - deliberately excludes the POD blob columns, see the entity's doc comment. */
-  async findAll(status?: DeliveryStatus): Promise<Partial<Delivery>[]> {
-    return this.deliveryRepository.find({
-      where: status ? { status } : {},
-      select: {
-        id: true,
-        deliveryNumber: true,
-        status: true,
-        dispatcherUserId: true,
-        driverUserId: true,
-        dispatchedAt: true,
-        deliveredAt: true,
-        podRecipientName: true,
-        cancellationReason: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      order: { createdAt: 'DESC' },
+  /**
+   * List view - deliberately excludes the POD blob columns, see the entity's doc comment.
+   *
+   * Modification Request (2026-09-15, Delivery & Invoicing screen): added dateFrom/dateTo
+   * (on delivery.createdAt, date-only, dateTo inclusive of that whole day) and a free-text
+   * search across the DLV#, member job card #s, and customer name/phone. Also now resolves
+   * driverUserId -> a real name (same reasoning as listActiveDrivers's own doc comment:
+   * don't make the frontend show a raw UUID) and attaches each delivery's member job cards
+   * (id/jobCardNumber) plus a customerType summary, so the list can show "Job card" and
+   * "Customer type" columns without a second request per row. Returns plain objects, not
+   * raw entities - same "compute the derived field into a plain field, don't rely on
+   * default JSON serialization of a relation/getter" discipline as listActiveDrivers.
+   */
+  async findAll(status?: DeliveryStatus, dateFrom?: string, dateTo?: string, search?: string): Promise<Record<string, unknown>[]> {
+    const qb = this.deliveryRepository
+      .createQueryBuilder('del')
+      .select([
+        'del.id',
+        'del.deliveryNumber',
+        'del.status',
+        'del.dispatcherUserId',
+        'del.driverUserId',
+        'del.dispatchedAt',
+        'del.deliveredAt',
+        'del.podRecipientName',
+        'del.cancellationReason',
+        'del.createdAt',
+        'del.updatedAt',
+      ]);
+
+    if (status) {
+      qb.andWhere('del.status = :status', { status });
+    }
+    if (dateFrom) {
+      qb.andWhere('del.createdAt >= :dateFrom', { dateFrom: `${dateFrom} 00:00:00` });
+    }
+    if (dateTo) {
+      qb.andWhere('del.createdAt <= :dateTo', { dateTo: `${dateTo} 23:59:59.999` });
+    }
+
+    const trimmed = search?.trim();
+    if (trimmed) {
+      const escaped = trimmed.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const like = `%${escaped}%`;
+      // Job-card/customer fields live on a related table, not this one - a subquery keeps
+      // this a plain filter on `del` instead of pulling in a join that would duplicate rows
+      // (one delivery can have many member job cards).
+      qb.andWhere(
+        `(del.deliveryNumber ILIKE :like ESCAPE '\\' OR del.id IN (
+          SELECT jc."deliveryId" FROM job_cards jc
+          INNER JOIN appointments apt ON apt.id = jc."appointmentId"
+          WHERE jc."deliveryId" IS NOT NULL
+            AND (jc."jobCardNumber" ILIKE :like ESCAPE '\\' OR apt."customerName" ILIKE :like ESCAPE '\\' OR apt."customerPhone" ILIKE :like ESCAPE '\\')
+        ))`,
+        { like },
+      );
+    }
+
+    const deliveries = await qb.orderBy('del.createdAt', 'DESC').getMany();
+    if (deliveries.length === 0) return [];
+
+    const driverIds = [...new Set(deliveries.map((d) => d.driverUserId).filter((id): id is string => !!id))];
+    const drivers = driverIds.length
+      ? await this.userRepository.find({ where: { id: In(driverIds) } })
+      : [];
+    const driverNameById = new Map(drivers.map((u) => [u.id, u.fullName]));
+
+    const jobCards = await this.jobCardsService.findByDeliveryIds(deliveries.map((d) => d.id));
+    const jobCardsByDeliveryId = new Map<string, { id: string; jobCardNumber: string; customerType: string | null }[]>();
+    for (const jc of jobCards) {
+      const list = jobCardsByDeliveryId.get(jc.deliveryId!) ?? [];
+      list.push({ id: jc.id, jobCardNumber: jc.jobCardNumber, customerType: jc.appointment?.customerType ?? null });
+      jobCardsByDeliveryId.set(jc.deliveryId!, list);
+    }
+
+    return deliveries.map((d) => {
+      const members = jobCardsByDeliveryId.get(d.id) ?? [];
+      const distinctCustomerTypes = [...new Set(members.map((m) => m.customerType).filter((t): t is string => !!t))];
+      return {
+        id: d.id,
+        deliveryNumber: d.deliveryNumber,
+        status: d.status,
+        dispatcherUserId: d.dispatcherUserId,
+        driverUserId: d.driverUserId,
+        driverName: d.driverUserId ? (driverNameById.get(d.driverUserId) ?? null) : null,
+        dispatchedAt: d.dispatchedAt,
+        deliveredAt: d.deliveredAt,
+        podRecipientName: d.podRecipientName,
+        cancellationReason: d.cancellationReason,
+        createdAt: d.createdAt,
+        updatedAt: d.updatedAt,
+        jobCards: members.map((m) => ({ id: m.id, jobCardNumber: m.jobCardNumber })),
+        customerType: distinctCustomerTypes.length === 1 ? distinctCustomerTypes[0] : distinctCustomerTypes.length > 1 ? 'MIXED' : null,
+      };
     });
   }
 
@@ -122,8 +198,13 @@ export class DeliveryService {
    * stays reserved for an actual delivery-creation attempt (create() below), and for
    * GET /invoicing/job-card/:id, which is explicitly its own lazy-create-on-read endpoint.
    */
-  async findReady(warrantyStatus?: WarrantyStatus): Promise<Array<{ jobCard: JobCard; invoiceStatus: string | null; payable: boolean }>> {
-    const jobCards = await this.jobCardsService.findReadyForDelivery(warrantyStatus);
+  async findReady(
+    warrantyStatus?: WarrantyStatus,
+    dateFrom?: string,
+    dateTo?: string,
+    search?: string,
+  ): Promise<Array<{ jobCard: JobCard; invoiceStatus: string | null; payable: boolean }>> {
+    const jobCards = await this.jobCardsService.findReadyForDelivery(warrantyStatus, dateFrom, dateTo, search);
 
     return Promise.all(
       jobCards.map(async (jobCard) => {

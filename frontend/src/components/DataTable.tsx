@@ -11,6 +11,13 @@ export interface Column<T> {
 // A plain HTML table shared by every Master Data screen. It only knows how to
 // render rows/columns/loading/error/empty states — each page decides what the
 // columns are and where the data comes from.
+//
+// Modification Request (2026-09-15, Delivery & Invoicing screen): two purely-additive,
+// opt-in props for lists that can grow large - `maxHeightClassName` wraps the table body in
+// its own scroll container (a Tailwind max-h-* class, e.g. "max-h-[28rem]") with a sticky
+// header, so a long list scrolls internally instead of pushing the whole page down; `dense`
+// switches the default text-sm to text-xs for a tighter, more "operational list" read.
+// Neither prop is set by any of the ~40 existing callers, so this changes nothing for them.
 export function DataTable<T extends { id: string }>({
   columns,
   rows,
@@ -18,6 +25,8 @@ export function DataTable<T extends { id: string }>({
   error,
   emptyMessage = 'Nothing here yet.',
   rowActions,
+  maxHeightClassName,
+  dense = false,
 }: {
   columns: Column<T>[];
   rows: T[] | undefined;
@@ -25,6 +34,8 @@ export function DataTable<T extends { id: string }>({
   error: unknown;
   emptyMessage?: string;
   rowActions?: (row: T) => ReactNode;
+  maxHeightClassName?: string;
+  dense?: boolean;
 }) {
   if (isLoading) {
     return <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-400">Loading…</div>;
@@ -46,28 +57,31 @@ export function DataTable<T extends { id: string }>({
     return <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-400">{emptyMessage}</div>;
   }
 
+  const textSizeClass = dense ? 'text-xs' : 'text-sm';
+  const cellPadding = dense ? 'px-3 py-1.5' : 'px-4 py-2';
+
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-      <table className="min-w-full divide-y divide-slate-200 text-sm">
-        <thead className="bg-slate-50">
+    <div className={`overflow-x-auto rounded-lg border border-slate-200 bg-white ${maxHeightClassName ?? ''}`}>
+      <table className={`min-w-full divide-y divide-slate-200 ${textSizeClass}`}>
+        <thead className={`bg-slate-50 ${maxHeightClassName ? 'sticky top-0 z-10' : ''}`}>
           <tr>
             {columns.map((col) => (
-              <th key={col.key} className="px-4 py-2 text-left font-medium text-slate-500">
+              <th key={col.key} className={`${cellPadding} text-left font-medium text-slate-500`}>
                 {col.label}
               </th>
             ))}
-            {rowActions && <th className="px-4 py-2" />}
+            {rowActions && <th className={cellPadding} />}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
           {rows.map((row) => (
             <tr key={row.id} className="hover:bg-slate-50">
               {columns.map((col) => (
-                <td key={col.key} className={`px-4 py-2 text-slate-700 ${col.className ?? ''}`}>
+                <td key={col.key} className={`${cellPadding} text-slate-700 ${col.className ?? ''}`}>
                   {col.render(row)}
                 </td>
               ))}
-              {rowActions && <td className="px-4 py-2 text-right">{rowActions(row)}</td>}
+              {rowActions && <td className={`${cellPadding} text-right`}>{rowActions(row)}</td>}
             </tr>
           ))}
         </tbody>

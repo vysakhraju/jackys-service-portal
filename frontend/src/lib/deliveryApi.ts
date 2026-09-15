@@ -10,6 +10,7 @@ import type {
   CreateDeliveryInput,
   CreateDeliveryResult,
   Delivery,
+  DeliveryListRow,
   DeliveryStatusValue,
   DispatchDeliveryInput,
   ReadyForDeliveryRow,
@@ -23,8 +24,19 @@ const BASE = '/delivery';
 // as everything else here, so unlike some other #218 pickers this one needs no fallback.
 export const listDrivers = () => api.get<{ id: string; name: string }[]>(`${BASE}/drivers`).then((r) => r.data);
 
-export const getReadyForDelivery = (warrantyStatus?: WarrantyStatusValue) =>
-  api.get<ReadyForDeliveryRow[]>(`${BASE}/ready`, { params: warrantyStatus ? { warrantyStatus } : undefined }).then((r) => r.data);
+// Modification Request (2026-09-15): dateFrom/dateTo (YYYY-MM-DD) and q (2+ chars, caller's
+// responsibility same as every other search box in this app) are all optional filters -
+// omitted params are left out of the request entirely rather than sent empty.
+export interface ReadyForDeliveryFilters {
+  dateFrom?: string;
+  dateTo?: string;
+  q?: string;
+}
+
+export const getReadyForDelivery = (warrantyStatus?: WarrantyStatusValue, filters?: ReadyForDeliveryFilters) =>
+  api
+    .get<ReadyForDeliveryRow[]>(`${BASE}/ready`, { params: { warrantyStatus, ...filters } })
+    .then((r) => r.data);
 
 export const getDeliveryByJobCard = (jobCardId: string) =>
   api.get<Delivery | null>(`${BASE}/job-card/${jobCardId}`).then((r) => r.data);
@@ -32,8 +44,16 @@ export const getDeliveryByJobCard = (jobCardId: string) =>
 export const createDelivery = (data: CreateDeliveryInput) =>
   api.post<CreateDeliveryResult>(BASE, data).then((r) => r.data);
 
-export const listDeliveries = (status?: DeliveryStatusValue) =>
-  api.get<Delivery[]>(BASE, { params: status ? { status } : undefined }).then((r) => r.data);
+// Modification Request (2026-09-15): same optional dateFrom/dateTo/q filters as
+// getReadyForDelivery above.
+export interface DeliveryListFilters {
+  dateFrom?: string;
+  dateTo?: string;
+  q?: string;
+}
+
+export const listDeliveries = (status?: DeliveryStatusValue, filters?: DeliveryListFilters) =>
+  api.get<DeliveryListRow[]>(BASE, { params: { status, ...filters } }).then((r) => r.data);
 
 export const getDelivery = (id: string) => api.get<Delivery>(`${BASE}/${id}`).then((r) => r.data);
 

@@ -150,20 +150,69 @@ export class JobCardsService {
   // claim/release mutations (same "one shared transaction, not delegated service calls"
   // discipline InventoryService.consumeReservationsOnQcApproval() established in Phase 6).
 
-  /** QC_PASSED jobs not yet attached to a Delivery - the ready-for-delivery pool. */
-  async findReadyForDelivery(warrantyStatus?: WarrantyStatus): Promise<JobCard[]> {
-    return this.jobCardRepository.find({
-      where: {
-        status: JobCardStatus.QC_PASSED,
-        deliveryId: IsNull(),
-        ...(warrantyStatus ? { warrantyStatus } : {}),
-      },
-      order: { updatedAt: 'ASC' },
-    });
+  /**
+   * QC_PASSED jobs not yet attached to a Delivery - the ready-for-delivery pool.
+   *
+   * Modification Request (2026-09-15, Delivery & Invoicing screen): added dateFrom/dateTo
+   * (on jc.createdAt, date-only - dateTo is treated as inclusive of that whole day) and a
+   * free-text search across job card #, appointment #, customer name/phone - the ready pool
+   * is meant to stay small, but batches that sit uncollected for a while can make it grow,
+   * and a dispatcher searching for one specific job needs the same "type 2 characters"
+   * search the rest of the app already has (see JobCardJourneyService.search's own ILIKE
+   * wildcard-escaping comment - same reasoning applies here). Now also eager-loads the
+   * appointment relation so the frontend can show Customer type/Brand/Model without a
+   * second round trip per row (findById already does this for the same reason).
+   */
+  async findReadyForDelivery(
+    warrantyStatus?: WarrantyStatus,
+    dateFrom?: string,
+    dateTo?: string,
+    search?: string,
+  ): Promise<JobCard[]> {
+    const qb = this.jobCardRepository
+      .createQueryBuilder('jc')
+      .leftJoinAndSelect('jc.appointment', 'apt')
+      .where('jc.status = :status', { status: JobCardStatus.QC_PASSED })
+      .andWhere('jc.deliveryId IS NULL');
+
+    if (warrantyStatus) {
+      qb.andWhere('jc.warrantyStatus = :warrantyStatus', { warrantyStatus });
+    }
+    if (dateFrom) {
+      qb.andWhere('jc.createdAt >= :dateFrom', { dateFrom: `${dateFrom} 00:00:00` });
+    }
+    if (dateTo) {
+      qb.andWhere('jc.createdAt <= :dateTo', { dateTo: `${dateTo} 23:59:59.999` });
+    }
+
+    const trimmed = search?.trim();
+    if (trimmed) {
+      const escaped = trimmed.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const like = `%${escaped}%`;
+      qb.andWhere(
+        "(jc.jobCardNumber ILIKE :like ESCAPE '\\' OR apt.appointmentNumber ILIKE :like ESCAPE '\\' OR apt.customerName ILIKE :like ESCAPE '\\' OR apt.customerPhone ILIKE :like ESCAPE '\\')",
+        { like },
+      );
+    }
+
+    return qb.orderBy('jc.updatedAt', 'ASC').getMany();
   }
 
   async findByDeliveryId(deliveryId: string): Promise<JobCard[]> {
     return this.jobCardRepository.find({ where: { deliveryId } });
+  }
+
+  /**
+   * Modification Request (2026-09-15): batch version of findByDeliveryId for the
+   * Deliveries list's new "Job card"/"Customer type" columns - one query for every
+   * delivery on the page instead of N. Loads the appointment relation (customerType).
+   */
+  async findByDeliveryIds(deliveryIds: string[]): Promise<JobCard[]> {
+    if (deliveryIds.length === 0) return [];
+    return this.jobCardRepository.find({
+      where: { deliveryId: In(deliveryIds) },
+      relations: { appointment: true },
+    });
   }
 
   /**

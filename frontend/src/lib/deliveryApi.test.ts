@@ -29,10 +29,18 @@ describe('deliveryApi', () => {
     expect(api.get).toHaveBeenCalledWith('/delivery/ready', { params: { warrantyStatus: 'OOW' } });
   });
 
-  it('getReadyForDelivery omits params entirely when no warrantyStatus given', async () => {
+  it('getReadyForDelivery sends an empty params object when nothing is given (axios itself drops the undefined keys)', async () => {
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
     await getReadyForDelivery();
-    expect(api.get).toHaveBeenCalledWith('/delivery/ready', { params: undefined });
+    expect(api.get).toHaveBeenCalledWith('/delivery/ready', { params: { warrantyStatus: undefined } });
+  });
+
+  it('Modification Request (2026-09-15): getReadyForDelivery passes dateFrom/dateTo/q straight through', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await getReadyForDelivery('IW', { dateFrom: '2026-09-01', dateTo: '2026-09-15', q: 'JC-0099' });
+    expect(api.get).toHaveBeenCalledWith('/delivery/ready', {
+      params: { warrantyStatus: 'IW', dateFrom: '2026-09-01', dateTo: '2026-09-15', q: 'JC-0099' },
+    });
   });
 
   it('getDeliveryByJobCard fetches GET /delivery/job-card/:jobCardId', async () => {
@@ -54,10 +62,18 @@ describe('deliveryApi', () => {
     expect(api.get).toHaveBeenCalledWith('/delivery', { params: { status: 'DISPATCHED' } });
   });
 
-  it('listDeliveries omits params entirely when no status given', async () => {
+  it('listDeliveries sends an empty params object when nothing is given (axios itself drops the undefined keys)', async () => {
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
     await listDeliveries();
-    expect(api.get).toHaveBeenCalledWith('/delivery', { params: undefined });
+    expect(api.get).toHaveBeenCalledWith('/delivery', { params: { status: undefined } });
+  });
+
+  it('Modification Request (2026-09-15): listDeliveries passes dateFrom/dateTo/q straight through', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await listDeliveries('DELIVERED', { dateFrom: '2026-09-01', dateTo: '2026-09-15', q: 'DLV-0099' });
+    expect(api.get).toHaveBeenCalledWith('/delivery', {
+      params: { status: 'DELIVERED', dateFrom: '2026-09-01', dateTo: '2026-09-15', q: 'DLV-0099' },
+    });
   });
 
   it('getDelivery fetches GET /delivery/:id', async () => {

@@ -5,11 +5,16 @@ export function Modal({
   onClose,
   title,
   children,
+  maxWidthClassName = 'max-w-lg',
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  // Modification Request (2026-09-15): optional escape hatch for a modal whose content
+  // needs more room than the default (e.g. the Deliveries "View" popup, which holds a job
+  // card list plus a two-column dispatch/POD form) - every existing caller keeps max-w-lg.
+  maxWidthClassName?: string;
 }) {
   if (!open) return null;
 
@@ -21,7 +26,7 @@ export function Modal({
     // backdrop and silently discard everything typed so far. Closing now requires the
     // explicit X or a Cancel button, same as most business apps do for anything with a form.
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 py-10">
-      <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
+      <div className={`w-full ${maxWidthClassName} rounded-lg bg-white p-6 shadow-xl`}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           <button

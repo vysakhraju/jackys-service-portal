@@ -1,6 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { ErrorNotice } from './DataTable';
+import { DataTable, ErrorNotice, type Column } from './DataTable';
+
+type Row = { id: string; name: string };
+const ROWS: Row[] = [{ id: 'r1', name: 'Alpha' }];
+const COLUMNS: Column<Row>[] = [{ key: 'name', label: 'Name', render: (r) => r.name }];
+
+// Modification Request (2026-09-15, Delivery & Invoicing screen): maxHeightClassName/dense
+// are purely-additive opt-in props (the ~40 existing DataTable callers pass neither) - these
+// pin that the defaults are unchanged and that each opt-in prop actually reaches the DOM.
+describe('DataTable', () => {
+  it('defaults to text-sm cells and no scroll wrapper when maxHeightClassName/dense are omitted', () => {
+    const { container } = render(<DataTable columns={COLUMNS} rows={ROWS} isLoading={false} error={null} />);
+    expect(container.querySelector('table')).toHaveClass('text-sm');
+    expect(container.querySelector('td')).toHaveClass('px-4', 'py-2');
+    expect(container.querySelector('thead')).not.toHaveClass('sticky');
+  });
+
+  it('dense switches cells to text-xs with tighter padding', () => {
+    const { container } = render(<DataTable columns={COLUMNS} rows={ROWS} isLoading={false} error={null} dense />);
+    expect(container.querySelector('table')).toHaveClass('text-xs');
+    expect(container.querySelector('td')).toHaveClass('px-3', 'py-1.5');
+  });
+
+  it('maxHeightClassName wraps the table and makes the header sticky, for an internally-scrolling list', () => {
+    const { container } = render(
+      <DataTable columns={COLUMNS} rows={ROWS} isLoading={false} error={null} maxHeightClassName="max-h-[28rem] overflow-y-auto" />,
+    );
+    expect(container.querySelector('.overflow-x-auto')).toHaveClass('max-h-[28rem]', 'overflow-y-auto');
+    expect(container.querySelector('thead')).toHaveClass('sticky', 'top-0');
+  });
+});
 
 // Live-tested finding (2026-09-14): a designation-matrix 403 ("Access denied. Missing
 // capability: X.") used to render as bare backend text, which read as "this feature

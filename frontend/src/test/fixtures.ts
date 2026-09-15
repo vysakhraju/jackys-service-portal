@@ -7,7 +7,7 @@ import type { Estimate } from '../lib/estimatesTypes';
 import type { InventoryReservation, InventoryReservationWithAge } from '../lib/inventoryTypes';
 import type { WorkshopState } from '../lib/workshopTypes';
 import type { UserPermissionGrant } from '../lib/permissionsTypes';
-import type { Delivery, ReadyForDeliveryRow } from '../lib/deliveryTypes';
+import type { Delivery, DeliveryListRow, ReadyForDeliveryRow } from '../lib/deliveryTypes';
 import type { AgingBucket, Invoice, Payment } from '../lib/invoicingTypes';
 import type { PortalInvoiceView, PortalSummaryView, PortalTrackView } from '../lib/customerPortalTypes';
 import type { AmcBillingInvoice, AmcContract, AmcScheduleVisit, AmcVisitCompletion, UpsellCandidate } from '../lib/amcTypes';
@@ -243,6 +243,19 @@ export function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
     cancellationReason: null,
     createdAt: '2026-08-01T08:00:00Z',
     updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+// Modification Request (2026-09-15): GET /delivery's list-row shape - makeDelivery() plus
+// DeliveryService.findAll()'s resolved driverName/jobCards/customerType extras.
+export function makeDeliveryListRow(overrides: Partial<DeliveryListRow> = {}): DeliveryListRow {
+  const { podSignatureBase64: _sig, podPhotoBase64: _photo, ...delivery } = makeDelivery();
+  return {
+    ...delivery,
+    driverName: null,
+    jobCards: [{ id: 'jc-1', jobCardNumber: 'JC-0001' }],
+    customerType: 'B2C',
     ...overrides,
   };
 }
