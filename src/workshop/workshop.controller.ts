@@ -12,24 +12,38 @@ import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
+import { RolePermissionsService } from '../auth/role-permissions.service';
+import { bypassesWorkshopOwnership } from './workshop-ownership.util';
 
 // ASSIGN_ROLES/ACTION_ROLES/the ACTION_ROLES+CCE view combo all migrated onto the
 // designation permission matrix (2026-09-10) as WORKSHOP_ASSIGN/WORKSHOP_ACTION/
 // WORKSHOP_VIEW respectively - see capability-catalog.ts's "Workshop" section, each the
 // exact same membership these arrays used to have.
 //
-// PRIVILEGED_ROLES stays a plain business-logic array (not a @Roles()/@RequiresCapability()
-// gate) - it decides who bypasses per-technician ownership once already inside a WORKSHOP_
-// ACTION-gated handler, same "checked in code, not admin-editable" reasoning as Job Cards'
-// TASK_PAUSE_PRIVILEGED_ROLES.
-const PRIVILEGED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
+// Ownership-bypass decision (who skips per-technician ownership once already inside a
+// WORKSHOP_ACTION-gated handler) now lives in workshop-ownership.util.ts's
+// bypassesWorkshopOwnership() - TL+ roles always bypass, plus (Modification Request
+// 2026-09-16) anyone holding the admin-grantable WORKSHOP_ACTION_ANY_JOB capability, e.g.
+// a CCE handed end-to-end job access via Designation Access.
+const WORKSHOP_ACTION_ANY_JOB_CAPABILITY = 'WORKSHOP_ACTION_ANY_JOB';
 
 @ApiTags('workshop')
 @Controller('workshop')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth('JWT-auth')
 export class WorkshopController {
-  constructor(private workshopService: WorkshopService) {}
+  constructor(
+    private workshopService: WorkshopService,
+    private rolePermissionsService: RolePermissionsService,
+  ) {}
+
+  private async resolveIsPrivileged(user: User): Promise<boolean> {
+    const hasAnyJobCapability = await this.rolePermissionsService.userHasCapability(
+      user as any,
+      WORKSHOP_ACTION_ANY_JOB_CAPABILITY,
+    );
+    return bypassesWorkshopOwnership(user.role?.name, hasAnyJobCapability);
+  }
 
   @Post(':jobCardId/assign')
   @RequiresCapability('WORKSHOP_ASSIGN')
@@ -77,8 +91,8 @@ export class WorkshopController {
   @ApiOperation({ summary: 'Start work-in-progress on a WORKSHOP_ASSIGNED Job Card' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 403, description: 'Not the assigned workshop technician' })
-  async startWip(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @CurrentUser() user: User, @Request() req: any) {
-    const isPrivileged = PRIVILEGED_ROLES.includes(req.user.role?.name);
+  async startWip(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @CurrentUser() user: User) {
+    const isPrivileged = await this.resolveIsPrivileged(user);
     return this.workshopService.startWip(jobCardId, user.id, isPrivileged);
   }
 
@@ -94,8 +108,8 @@ export class WorkshopController {
   @ApiResponse({ status: 201 })
   @ApiResponse({ status: 400, description: 'Wrong status, a stale reservation on this job needs TL review first, or a rework re-request is missing approval/verbal-override' })
   @ApiResponse({ status: 403, description: 'The named rework approver does not hold an active REWORK_APPROVAL grant' })
-  async requestSpare(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @Body() dto: RequestSpareDto, @CurrentUser() user: User, @Request() req: any) {
-    const isPrivileged = PRIVILEGED_ROLES.includes(req.user.role?.name);
+  async requestSpare(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @Body() dto: RequestSpareDto, @CurrentUser() user: User) {
+    const isPrivileged = await this.resolveIsPrivileged(user);
     return this.workshopService.requestSpare(
       jobCardId,
       dto.sparePartId,
@@ -113,8 +127,8 @@ export class WorkshopController {
   @RequiresCapability('WORKSHOP_ACTION')
   @ApiOperation({ summary: "Mark workshop work done - moves to READY_FOR_QC (Phase 6). Blocked while SPARE_PENDING." })
   @ApiResponse({ status: 200 })
-  async complete(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @CurrentUser() user: User, @Request() req: any) {
-    const isPrivileged = PRIVILEGED_ROLES.includes(req.user.role?.name);
+  async complete(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @CurrentUser() user: User) {
+    const isPrivileged = await this.resolveIsPrivileged(user);
     return this.workshopService.complete(jobCardId, user.id, isPrivileged);
   }
 

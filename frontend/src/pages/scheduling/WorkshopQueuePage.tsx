@@ -13,15 +13,37 @@
 // and isn't duplicated here. A "Assign on the Assignment Board →" link covers that,
 // consistent with the-fool's migration-risk finding: don't break the CCE/TL's existing
 // day-one workflow while this new view beds in.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { ErrorNotice } from '../../components/DataTable';
 import { inputClass } from '../../components/Field';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useToast } from '../../lib/toast';
 import { getWorkshopQueue, setWorkshopCapacity } from '../../lib/technicianScheduleApi';
 import type { WorkshopQueueJob, WorkshopQueueTechnicianRow } from '../../lib/technicianScheduleTypes';
+import { elapsedHours, formatElapsedLabel } from '../../lib/elapsed-time.util';
+
+// Modification Request 2026-09-16: "the card that shows number of jobs are now not
+// clickable, make the same clickable and load like what we do for the report and
+// dashboard section" - mirrors OperationalReportsPage.tsx's own clickedInsideLink() exactly,
+// so a click on the row navigates to the Job Card Journey, but a click on the inner
+// job-card-number Link isn't double-navigated by the row's own handler.
+function clickedInsideLink(e: MouseEvent): boolean {
+  return (e.target as HTMLElement).closest('a') !== null;
+}
+
+// Ticks once a minute (not every second - TAT is measured in hours, so second-level
+// precision would just churn re-renders for no visible benefit) so QueueJobRow's TAT badge
+// stays live without a page refresh.
+function useNowTick(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
 
 export function WorkshopQueuePage() {
   // Live-tested finding (2026-09-14): this used to be a hardcoded CAPACITY_EDIT_ROLES role
@@ -42,6 +64,7 @@ export function WorkshopQueuePage() {
   const canView = has('WORKSHOP_QUEUE_VIEW');
   const queryClient = useQueryClient();
   const { push } = useToast();
+  const now = useNowTick(60_000);
 
   const boardQuery = useQuery({
     queryKey: ['technician-schedule', 'workshop-queue'],
@@ -110,6 +133,7 @@ export function WorkshopQueuePage() {
                   canEditCapacity={canEditCapacity}
                   onSaveCapacity={(capacity) => capacityMutation.mutate({ technicianId: t.id, capacity })}
                   saving={capacityMutation.isPending && capacityMutation.variables?.technicianId === t.id}
+                  now={now}
                 />
               ))}
             </div>
@@ -165,11 +189,13 @@ function TechnicianQueueCard({
   canEditCapacity,
   onSaveCapacity,
   saving,
+  now,
 }: {
   technician: WorkshopQueueTechnicianRow;
   canEditCapacity: boolean;
   onSaveCapacity: (capacity: number) => void;
   saving: boolean;
+  now: number;
 }) {
   const [editing, setEditing] = useState(false);
   const [draftCapacity, setDraftCapacity] = useState(String(technician.capacity));
@@ -238,23 +264,45 @@ function TechnicianQueueCard({
       <ul className="mt-3 space-y-1.5">
         {technician.jobs.length === 0 && <li className="text-xs text-slate-300">No jobs queued</li>}
         {technician.jobs.map((job, i) => (
-          <QueueJobRow key={job.id} job={job} position={i + 1} />
+          <QueueJobRow key={job.id} job={job} position={i + 1} now={now} />
         ))}
       </ul>
     </div>
   );
 }
 
-function QueueJobRow({ job, position }: { job: WorkshopQueueJob; position: number }) {
+// Modification Request 2026-09-16: clickable (navigates to the Job Card Journey, same
+// pattern as OperationalReportsPage's SLA Breach rows) + a live "hours pending" TAT badge
+// computed client-side from workshopAssignedAt - no backend change needed, that field was
+// already returned by GET /workshop-queue.
+function QueueJobRow({ job, position, now }: { job: WorkshopQueueJob; position: number; now: number }) {
+  const navigate = useNavigate();
+  const journeyUrl = `/job-cards/journey?jobCardId=${job.id}`;
+  const hoursPending = elapsedHours(job.workshopAssignedAt, now);
+  const tatBadgeClass =
+    hoursPending >= 48
+      ? 'bg-red-100 text-red-700'
+      : hoursPending >= 24
+        ? 'bg-amber-100 text-amber-700'
+        : 'bg-slate-200 text-slate-600';
+
   return (
-    <li className="flex items-center gap-2 rounded-md border border-slate-100 bg-slate-50 px-2.5 py-1.5 text-xs">
+    <li
+      onClick={(e) => !clickedInsideLink(e.nativeEvent) && navigate(journeyUrl)}
+      className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-100 bg-slate-50 px-2.5 py-1.5 text-xs hover:border-blue-300 hover:bg-blue-50"
+    >
       <span className="shrink-0 rounded-full bg-slate-200 px-1.5 py-0.5 font-medium text-slate-600">#{position}</span>
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-slate-900">{job.jobCardNumber}</p>
+        <Link to={journeyUrl} className="block truncate font-medium text-slate-900 hover:underline">
+          {job.jobCardNumber}
+        </Link>
         <p className="truncate text-slate-400">
           {job.faultCode}/{job.symptomCode} · {job.warrantyStatus.replaceAll('_', ' ')} · {job.status.replaceAll('_', ' ')}
         </p>
       </div>
+      <span className={`shrink-0 rounded-full px-1.5 py-0.5 font-medium ${tatBadgeClass}`} title="Hours pending in workshop">
+        {formatElapsedLabel(job.workshopAssignedAt, now)}
+      </span>
     </li>
   );
 }

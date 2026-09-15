@@ -8,6 +8,7 @@ describe('WorkshopService', () => {
   let jobCardsService: any;
   let inventoryService: any;
   let permissionsService: any;
+  let usersRepo: any;
 
   const jobCard = (overrides: any = {}) =>
     ({
@@ -45,7 +46,10 @@ describe('WorkshopService', () => {
       requireActiveGrant: jest.fn().mockResolvedValue(undefined),
       listGrantsByType: jest.fn().mockResolvedValue([]),
     };
-    service = new WorkshopService(jobCardsService, inventoryService, permissionsService);
+    usersRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'tech-1', fullName: 'Ravi Kumar' }),
+    };
+    service = new WorkshopService(jobCardsService, inventoryService, permissionsService, usersRepo);
   });
 
   describe('assign', () => {
@@ -360,6 +364,36 @@ describe('WorkshopService', () => {
       expect(inventoryService.getActiveReservationsForJobCard).toHaveBeenCalledWith('jc-1');
       expect(result.staleReservations).toEqual([]);
       expect(result.activeReservations).toEqual([{ id: 'res-fresh', jobCardId: 'jc-1', status: 'HELD' }]);
+    });
+
+    // Modification Request 2026-09-16: the "not your job" banner used to show the raw
+    // assignedWorkshopTechnicianId UUID - this is the backend half of the fix.
+    it('resolves assignedWorkshopTechnicianName from the assigned technician\'s id', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ assignedWorkshopTechnicianId: 'tech-1' }));
+      usersRepo.findOne.mockResolvedValue({ id: 'tech-1', fullName: 'Ravi Kumar' });
+
+      const result = await service.getWorkshopState('jc-1');
+
+      expect(usersRepo.findOne).toHaveBeenCalledWith({ where: { id: 'tech-1' } });
+      expect(result.assignedWorkshopTechnicianName).toBe('Ravi Kumar');
+    });
+
+    it('assignedWorkshopTechnicianName is null when the job has no assigned technician', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ assignedWorkshopTechnicianId: null }));
+
+      const result = await service.getWorkshopState('jc-1');
+
+      expect(usersRepo.findOne).not.toHaveBeenCalled();
+      expect(result.assignedWorkshopTechnicianName).toBeNull();
+    });
+
+    it('assignedWorkshopTechnicianName is null if the assigned id somehow no longer resolves to a user', async () => {
+      jobCardsService.findById.mockResolvedValue(jobCard({ assignedWorkshopTechnicianId: 'tech-ghost' }));
+      usersRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.getWorkshopState('jc-1');
+
+      expect(result.assignedWorkshopTechnicianName).toBeNull();
     });
   });
 

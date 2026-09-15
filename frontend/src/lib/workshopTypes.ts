@@ -19,6 +19,9 @@ export interface WorkshopState {
   jobCard: JobCard;
   staleReservations: InventoryReservationWithAge[];
   activeReservations: InventoryReservation[];
+  // Modification Request 2026-09-16: real name for the "not your job" banner, instead of a
+  // raw assignedWorkshopTechnicianId UUID. Null when unassigned.
+  assignedWorkshopTechnicianName: string | null;
 }
 
 export interface AssignWorkshopInput {

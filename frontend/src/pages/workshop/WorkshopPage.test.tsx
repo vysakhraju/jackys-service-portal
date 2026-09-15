@@ -246,14 +246,31 @@ describe('WorkshopPage - job card survives a remount (URL stays in sync)', () =>
 // card surviving a same-url remount, e.g. a browser refresh) still applies and is kept.
 
 describe('WorkshopPage - ownership gating (the-fool pre-mortem finding #4)', () => {
-  it('hides action buttons and shows a warning for a technician not assigned to this job', async () => {
+  it('hides action buttons and shows a warning (by technician NAME, not raw UUID - Modification Request 2026-09-16) for a technician not assigned to this job', async () => {
     mockUser({ id: 'someone-else', roleName: 'TECHNICIAN_WORKSHOP' });
+    mockCapabilities([], false);
     vi.mocked(getWorkshopState).mockResolvedValue(
-      makeWorkshopState({ jobCard: makeWorkshopState().jobCard }),
+      makeWorkshopState({ jobCard: makeWorkshopState().jobCard, assignedWorkshopTechnicianName: 'Ravi Kumar' }),
     );
     renderPage();
-    expect(await screen.findByText(/You're not the technician assigned to this job/i)).toBeInTheDocument();
+    const banner = await screen.findByText(/You're not the technician assigned to this job/i);
+    expect(banner).toHaveTextContent('(Ravi Kumar)');
+    expect(banner).not.toHaveTextContent('tech-1');
     expect(screen.queryByRole('button', { name: /Complete → Ready for QC/i })).not.toBeInTheDocument();
+  });
+
+  it('shows "unassigned" in the warning when the job has no assigned technician name', async () => {
+    mockUser({ id: 'someone-else', roleName: 'TECHNICIAN_WORKSHOP' });
+    mockCapabilities([], false);
+    vi.mocked(getWorkshopState).mockResolvedValue(
+      makeWorkshopState({
+        jobCard: { ...makeWorkshopState().jobCard, status: 'WORKSHOP_ASSIGNED', assignedWorkshopTechnicianId: null },
+        assignedWorkshopTechnicianName: null,
+      }),
+    );
+    renderPage();
+    const banner = await screen.findByText(/You're not the technician assigned to this job/i);
+    expect(banner).toHaveTextContent('(unassigned)');
   });
 
   it('shows the action buttons for the assigned technician themselves', async () => {
@@ -269,6 +286,25 @@ describe('WorkshopPage - ownership gating (the-fool pre-mortem finding #4)', () 
     vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState());
     renderPage();
     expect(await screen.findByText('Request a spare part (FR-09: reserves, does not deduct)')).toBeInTheDocument();
+  });
+
+  // Modification Request 2026-09-16: "customer care should be able to handle any workshop
+  // job even if assigned to another technician" - granted via WORKSHOP_ACTION_ANY_JOB.
+  it('shows the action buttons for a non-privileged role (CCE) holding WORKSHOP_ACTION_ANY_JOB, regardless of assignment', async () => {
+    mockUser({ id: 'cce-1', roleName: 'CCE' });
+    mockCapabilities(['WORKSHOP_ACTION_ANY_JOB']);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState());
+    renderPage();
+    expect(await screen.findByText('Request a spare part (FR-09: reserves, does not deduct)')).toBeInTheDocument();
+    expect(screen.queryByText(/You're not the technician assigned/i)).not.toBeInTheDocument();
+  });
+
+  it('still hides action buttons for a non-privileged role without WORKSHOP_ACTION_ANY_JOB, not assigned to the job', async () => {
+    mockUser({ id: 'cce-1', roleName: 'CCE' });
+    mockCapabilities([]);
+    vi.mocked(getWorkshopState).mockResolvedValue(makeWorkshopState());
+    renderPage();
+    expect(await screen.findByText(/You're not the technician assigned to this job/i)).toBeInTheDocument();
   });
 });
 
@@ -392,6 +428,7 @@ describe('WorkshopPage - Active reservations on this job (persists across a remo
 
   it('does not let a different, non-privileged technician request a return on a reservation they are not the custodian of', async () => {
     mockUser({ id: 'tech-2', roleName: 'TECHNICIAN_WORKSHOP' });
+    mockCapabilities([], false);
     vi.mocked(getWorkshopState).mockResolvedValue(
       makeWorkshopState({
         jobCard: { ...makeWorkshopState().jobCard, assignedWorkshopTechnicianId: 'tech-2' },

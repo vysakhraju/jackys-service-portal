@@ -1,4 +1,6 @@
 import { Injectable, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { JobCardsService } from '../job-cards/job-cards.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -6,6 +8,7 @@ import { ReservationStatus } from '../inventory/entities/inventory-reservation.e
 import { PermissionsService } from '../permissions/permissions.service';
 import { PermissionType } from '../permissions/entities/user-permission-grant.entity';
 import { canEditLateStageJobCard } from '../job-cards/job-card-edit-lock.util';
+import { User } from '../auth/entities/user.entity';
 
 @Injectable()
 export class WorkshopService {
@@ -15,6 +18,10 @@ export class WorkshopService {
     private jobCardsService: JobCardsService,
     private inventoryService: InventoryService,
     private permissionsService: PermissionsService,
+    // Modification Request 2026-09-16: getWorkshopState() needs the assigned technician's
+    // name. JobCardsService.findById() does not eager-load assignedWorkshopTechnician
+    // (deliberately, for its other callers), so this is a small, scoped second lookup.
+    @InjectRepository(User) private usersRepo: Repository<User>,
   ) {}
 
   private async findEntityById(id: string) {
@@ -226,12 +233,25 @@ export class WorkshopService {
    */
   async getWorkshopState(jobCardId: string) {
     const jobCard = await this.findEntityById(jobCardId);
-    const [stale, activeReservations] = await Promise.all([
+    const [stale, activeReservations, assignedWorkshopTechnicianName] = await Promise.all([
       this.inventoryService.getStaleReservations(),
       this.inventoryService.getActiveReservationsForJobCard(jobCardId),
+      this.getAssignedWorkshopTechnicianName(jobCard.assignedWorkshopTechnicianId),
     ]);
     const relevantStale = stale.filter((r) => r.jobCardId === jobCardId);
-    return { jobCard, staleReservations: relevantStale, activeReservations };
+    return { jobCard, staleReservations: relevantStale, activeReservations, assignedWorkshopTechnicianName };
+  }
+
+  // Modification Request 2026-09-16: the "not your job" banner used to show the raw
+  // assignedWorkshopTechnicianId UUID - this backs a real name instead. Returns null when
+  // the job has no assigned technician (JobCard.assignedWorkshopTechnicianId nullable) or,
+  // defensively, if the id somehow no longer resolves to a user.
+  private async getAssignedWorkshopTechnicianName(technicianId: string | null): Promise<string | null> {
+    if (!technicianId) {
+      return null;
+    }
+    const technician = await this.usersRepo.findOne({ where: { id: technicianId } });
+    return technician?.fullName ?? null;
   }
 
   // Thin passthroughs, same "every mutation goes through JobCardsService" convention as

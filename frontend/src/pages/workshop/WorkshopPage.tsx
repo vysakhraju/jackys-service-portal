@@ -40,16 +40,19 @@ function renderJobCardOption(item: JourneySearchResult) {
 }
 
 // TL+ roles that can act on ANY workshop job, mirroring WorkshopController's own
-// PRIVILEGED_ROLES exactly (start-wip/request-spare/complete/request-return's ownership
-// bypass). This one deliberately STAYS a hardcoded role array, not a capability check -
-// per that controller's own comment, it's a plain business-logic ownership bypass, never
-// migrated onto the designation permission matrix (same reasoning as Job Cards'
-// TASK_PAUSE_PRIVILEGED_ROLES). Granting WORKSHOP_ACTION to some other role via
-// Designation access lets them use these actions on their OWN assigned job, same as a
-// plain TECHNICIAN_WORKSHOP always could - it does NOT let them act on every job the way
-// this bypass does, and there's currently no capability that grants that; flagging as a
-// backend limitation, not a frontend gating gap, if that's ever wanted.
+// ownership-bypass roles. Still a hardcoded role array for the TL+ part (same "checked in
+// code, not admin-editable" reasoning as Job Cards' TASK_PAUSE_PRIVILEGED_ROLES) - but
+// Modification Request 2026-09-16 closed the gap this comment used to flag: a caller who
+// holds the WORKSHOP_ACTION_ANY_JOB capability (e.g. a CCE granted it via Designation
+// access) now also bypasses ownership, mirroring workshop-ownership.util.ts exactly. This
+// is a UI hint only - the backend (bypassesWorkshopOwnership()) is what actually enforces it.
 const PRIVILEGED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'TECHNICAL_TEAM_LEADER'];
+
+function useIsPrivilegedWorkshopCaller(): boolean {
+  const { user } = useAuth();
+  const { has } = useMyCapabilities();
+  return (!!user && PRIVILEGED_ROLES.includes(user.role.name)) || has('WORKSHOP_ACTION_ANY_JOB');
+}
 
 export function WorkshopPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -116,7 +119,7 @@ export function WorkshopPage() {
   const selectedLabel = activeJobCardId ? (selection.label ?? stateQuery.data?.jobCard.jobCardNumber ?? activeJobCardId) : null;
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6 px-8 py-8">
       <p className="max-w-2xl text-sm text-slate-500">
         Same "no list-all queue" pattern as Job Cards and Estimates. Search by job card #,
         appointment #, customer name or phone (or use "Go to Workshop →" from its Job Cards
@@ -157,7 +160,7 @@ export function WorkshopPage() {
 }
 
 function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged: () => void }) {
-  const { jobCard, staleReservations, activeReservations } = state;
+  const { jobCard, staleReservations, activeReservations, assignedWorkshopTechnicianName } = state;
   const { user } = useAuth();
   const { has } = useMyCapabilities();
   const [stockLookupOpen, setStockLookupOpen] = useState(false);
@@ -167,7 +170,7 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
   // (not just inside the panel) so a caller who can't look up stock doesn't see a button
   // that only opens a "you don't have access" notice.
   const canViewStock = has('INVENTORY_VIEW');
-  const isPrivileged = !!user && PRIVILEGED_ROLES.includes(user.role.name);
+  const isPrivileged = useIsPrivilegedWorkshopCaller();
   // 2026-09-14: was ASSIGN_ROLES, a hardcoded mirror of WorkshopController's own
   // WORKSHOP_ASSIGN gate - now checks the real capability, so a Designation-access grant
   // actually shows this form instead of only ever working for the 3 hardcoded roles.
@@ -218,7 +221,7 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
             <button
               type="button"
               onClick={() => setStockLookupOpen(true)}
-              className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
             >
               Inventory
             </button>
@@ -265,7 +268,7 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
 
       {!canAct && !notWorkshopSection && inWorkshopScope && jobCard.status !== 'SECTION_ASSIGNED' && (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          You're not the technician assigned to this job ({jobCard.assignedWorkshopTechnicianId ?? 'unassigned'})
+          You're not the technician assigned to this job ({assignedWorkshopTechnicianName ?? 'unassigned'})
           and don't hold a Team Leader+ role - the backend will reject any action below.
         </p>
       )}
@@ -432,7 +435,7 @@ function RequestSpareCard({
   const reworkApproverOptions = reworkApproversQuery.data ?? [];
   const [justReserved, setJustReserved] = useState<InventoryReservation | null>(null);
   const { user } = useAuth();
-  const isPrivileged = !!user && PRIVILEGED_ROLES.includes(user.role.name);
+  const isPrivileged = useIsPrivilegedWorkshopCaller();
   const canRequestReturnOnJustReserved = !!justReserved && (isPrivileged || user?.id === justReserved.custodianUserId);
 
   const returnMutation = useMutation({

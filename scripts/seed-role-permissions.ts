@@ -46,6 +46,10 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'WORKSHOP_ASSIGN', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
   { key: 'WORKSHOP_ACTION', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'TECHNICIAN_WORKSHOP'] },
   { key: 'WORKSHOP_VIEW', defaultRoles: ['TECHNICAL_TEAM_LEADER', 'TECHNICIAN_WORKSHOP', 'CCE'] },
+  // Modification Request 2026-09-16: opt-in only, admin-grantable via Designation Access -
+  // lets a caller (e.g. CCE) act on ANY workshop job end-to-end, bypassing per-technician
+  // ownership. See capability-catalog.ts's own comment on this key for the full history.
+  { key: 'WORKSHOP_ACTION_ANY_JOB', defaultRoles: [] },
   { key: 'AMC_MANAGE', defaultRoles: ['CCE'] },
   { key: 'AMC_VIEW', defaultRoles: ['CCE', 'TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP', 'ACCOUNTANT', 'FINANCE_MANAGER'] },
   { key: 'AMC_TECHNICIAN_VISIT', defaultRoles: ['TECHNICIAN_FIELD', 'TECHNICIAN_WORKSHOP'] },

@@ -135,6 +135,27 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER, RoleName.TECHNICIAN_WORKSHOP, RoleName.CCE],
     migrated: true,
   },
+  {
+    key: 'WORKSHOP_ACTION_ANY_JOB',
+    label:
+      "Act on ANY Job Card's workshop work (start WIP, request a spare, complete) - not just ones assigned to you. Grant this for genuine end-to-end handling by a non-technician designation (e.g. Customer Care Executive)",
+    module: 'Workshop',
+    // Modification Request (2026-09-16): "the customer care should be able to handle any
+    // workshop job even if it's assigned to another workshop technician... check if super
+    // admin can give access." Deliberately opt-in only (no defaultRoles) - see
+    // workshop-ownership.util.ts, which is where this actually gets checked.
+    //
+    // Before this capability existed, granting WORKSHOP_ACTION to CCE via Designation
+    // access unlocked the Request Spare/Start WIP/Complete forms in the UI, but every
+    // submit still 403'd from WorkshopService.assertOwnership() unless the caller happened
+    // to BE the job's assigned technician - CCE never is, so it was a real but unreachable
+    // grant (flagged in WorkshopPage.tsx's old PRIVILEGED_ROLES comment). This is the
+    // actual per-technician-ownership bypass, kept as its own separate grant rather than
+    // folded into WORKSHOP_ACTION itself, so an admin can hand out "can use the Workshop
+    // forms on your own job" and "can act on literally any job" independently.
+    defaultRoles: [],
+    migrated: true,
+  },
 
   // --- AMC --- replaces AMC_MANAGEMENT_ROLES/AMC_VIEW_ROLES/AMC_TECHNICIAN_ROLES/
   // FINANCE_ROLES on amc.controller.ts (2026-09-10). Named AMC_BILLING rather than a bare
