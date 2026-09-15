@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, type MouseEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
@@ -22,9 +22,17 @@ const DEFAULT_SLA_HOURS = 48;
 // it, and the BRD's own "(if captured)" already hedges it), and SLA Breach shows the
 // actual hoursOverThreshold rather than a fabricated reason code (nothing records why a
 // job ran long).
+// #220 follow-up: see ReportsPage.tsx's own comment - the whole SLA Breach row is now a
+// click target too, not just the small job-card-number link inside it. A click starting
+// on the link itself is left to its own default navigation rather than double-navigated.
+function clickedInsideLink(e: MouseEvent): boolean {
+  return (e.target as HTMLElement).closest('a') !== null;
+}
+
 export function OperationalReportsPage() {
   const { has } = useMyCapabilities();
   const canView = has('REPORTS_OPERATIONAL_VIEW');
+  const navigate = useNavigate();
 
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
@@ -169,19 +177,26 @@ export function OperationalReportsPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {slaQuery.data.items.map((item) => (
-                          <tr key={item.jobCardId} className="hover:bg-slate-50">
-                            <td className="px-3 py-2 text-slate-700">
-                              <Link to={`/job-cards/journey?jobCardId=${item.jobCardId}`} className="font-medium hover:underline">
-                                {item.jobCardNumber}
-                              </Link>
-                            </td>
-                            <td className="px-3 py-2 text-slate-500">{new Date(item.createdAt).toLocaleDateString()}</td>
-                            <td className="px-3 py-2 text-slate-500">{new Date(item.qcApprovedAt).toLocaleDateString()}</td>
-                            <td className="px-3 py-2 tabular-nums text-slate-700">{item.hoursElapsed.toFixed(1)}</td>
-                            <td className="px-3 py-2 tabular-nums text-red-600">{item.hoursOverThreshold.toFixed(1)}</td>
-                          </tr>
-                        ))}
+                        {slaQuery.data.items.map((item) => {
+                          const journeyUrl = `/job-cards/journey?jobCardId=${item.jobCardId}`;
+                          return (
+                            <tr
+                              key={item.jobCardId}
+                              onClick={(e) => !clickedInsideLink(e) && navigate(journeyUrl)}
+                              className="cursor-pointer hover:bg-blue-50"
+                            >
+                              <td className="px-3 py-2 text-slate-700">
+                                <Link to={journeyUrl} className="font-medium hover:underline">
+                                  {item.jobCardNumber}
+                                </Link>
+                              </td>
+                              <td className="px-3 py-2 text-slate-500">{new Date(item.createdAt).toLocaleDateString()}</td>
+                              <td className="px-3 py-2 text-slate-500">{new Date(item.qcApprovedAt).toLocaleDateString()}</td>
+                              <td className="px-3 py-2 tabular-nums text-slate-700">{item.hoursElapsed.toFixed(1)}</td>
+                              <td className="px-3 py-2 tabular-nums text-red-600">{item.hoursOverThreshold.toFixed(1)}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

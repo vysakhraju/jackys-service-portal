@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import type { MouseEvent, ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AccessDeniedNotice } from '../../components/AccessDeniedNotice';
 import { ErrorNotice } from '../../components/DataTable';
@@ -17,6 +17,16 @@ import {
   type ServiceEfficiencyReport,
 } from '../../lib/reportsTypes';
 import { useReportsSocket } from '../../lib/useReportsSocket';
+
+// #220 follow-up: the job-card number alone was a real but easy-to-miss click target -
+// the whole card/row now navigates too, so the cursor and hover state tell the user what
+// they're about to open before they aim for the small text link. The inner <Link> stays
+// (keyboard tab-focus, right-click "open in new tab", and a real href to hover over) - a
+// click starting inside it is left alone rather than double-navigated, since the anchor's
+// own default handling already does the job.
+function clickedInsideLink(e: MouseEvent): boolean {
+  return (e.target as HTMLElement).closest('a') !== null;
+}
 
 // BRD 18.1 "Service Manager Dashboard" / FR-20 / NFR-02. The last frontend phase, and the
 // first purely read-only one in the app - there's no create/update/delete anywhere on this
@@ -184,13 +194,16 @@ function KanbanColumn({ column }: { column: KanbanColumnData }) {
 }
 
 function KanbanCardTile({ card }: { card: KanbanCard }) {
+  const navigate = useNavigate();
+  const journeyUrl = `/job-cards/journey?jobCardId=${card.jobCardId}`;
+
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs">
+    <div
+      onClick={(e) => !clickedInsideLink(e) && navigate(journeyUrl)}
+      className="cursor-pointer rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs transition-colors hover:border-blue-300 hover:bg-blue-50"
+    >
       <div className="flex items-center justify-between gap-2">
-        <Link
-          to={`/job-cards/journey?jobCardId=${card.jobCardId}`}
-          className="font-semibold text-slate-800 hover:underline"
-        >
+        <Link to={journeyUrl} className="font-semibold text-slate-800 hover:underline">
           {card.jobCardNumber}
         </Link>
         <StatusBadge status={card.warrantyStatus} />
@@ -216,6 +229,8 @@ function ApprovalAgingCard({
   asOf: string | undefined;
   report: ApprovalAgingReport | null;
 }) {
+  const navigate = useNavigate();
+
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between">
@@ -236,22 +251,23 @@ function ApprovalAgingCard({
         <p className="mt-4 text-sm text-slate-500">Nothing awaiting a response.</p>
       ) : (
         <ul className="mt-3 max-h-60 space-y-1.5 overflow-y-auto">
-          {report.items.map((item) => (
-            <li
-              key={item.estimateId}
-              className={`flex items-center justify-between rounded-md px-2 py-1.5 text-xs ${
-                item.breached ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-600'
-              }`}
-            >
-              <Link
-                to={`/job-cards/journey?jobCardId=${item.jobCardId}`}
-                className="font-medium hover:underline"
+          {report.items.map((item) => {
+            const journeyUrl = `/job-cards/journey?jobCardId=${item.jobCardId}`;
+            return (
+              <li
+                key={item.estimateId}
+                onClick={(e) => !clickedInsideLink(e) && navigate(journeyUrl)}
+                className={`flex cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-xs transition-colors ${
+                  item.breached ? 'bg-red-50 text-red-700 hover:bg-red-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
               >
-                {item.jobCardNumber}
-              </Link>
-              <span>{item.ageHours.toFixed(1)}h</span>
-            </li>
-          ))}
+                <Link to={journeyUrl} className="font-medium hover:underline">
+                  {item.jobCardNumber}
+                </Link>
+                <span>{item.ageHours.toFixed(1)}h</span>
+              </li>
+            );
+          })}
         </ul>
       )}
       {report && report.breachedCount > 0 && (

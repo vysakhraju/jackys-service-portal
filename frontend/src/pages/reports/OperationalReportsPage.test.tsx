@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { makeSlaBreachReport, makeSpareConsumptionReport, makeTechnicianProductivityReport } from '../../test/fixtures';
 
@@ -36,6 +36,22 @@ function renderPage() {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
         <OperationalReportsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+// #220 follow-up: same reasoning as ReportsPage.test.tsx's own helper of the same shape -
+// a real destination route is needed to prove a whole-row click actually navigates.
+function renderPageWithJourneyRoute() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<OperationalReportsPage />} />
+          <Route path="/job-cards/journey" element={<div>Journey destination reached</div>} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -105,6 +121,18 @@ describe('OperationalReportsPage - widgets', () => {
 
     const link = await screen.findByRole('link', { name: 'JC-0001' });
     expect(link).toHaveAttribute('href', expect.stringContaining('/job-cards/journey?jobCardId='));
+  });
+
+  it('#220: clicking anywhere on an SLA Breach row (not just the job number) navigates to its Journey view', async () => {
+    mockCapabilities(['REPORTS_OPERATIONAL_VIEW']);
+    renderPageWithJourneyRoute();
+
+    const user = userEvent.setup();
+    // A cell that is NOT the job-card-number link - "Hours Elapsed" (fixture: 96 -> "96.0").
+    const hoursElapsedCell = await screen.findByText('96.0');
+    await user.click(hoursElapsedCell);
+
+    expect(await screen.findByText('Journey destination reached')).toBeInTheDocument();
   });
 
   it('renders Spare Parts Consumption top-by-quantity and top-by-value lists', async () => {

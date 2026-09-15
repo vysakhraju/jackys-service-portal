@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   makeApprovalAgingReport,
@@ -55,6 +55,24 @@ function renderPage() {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
         <ReportsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+// #220 follow-up: proving a whole-card/row click actually routes (not just that a Link
+// with the right href exists) needs a real destination to land on, so this renders with an
+// actual <Routes> instead of a bare <ReportsPage /> - findByText('Journey destination
+// reached') only appears once react-router has actually navigated there.
+function renderPageWithJourneyRoute() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<ReportsPage />} />
+          <Route path="/job-cards/journey" element={<div>Journey destination reached</div>} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -154,6 +172,19 @@ describe('ReportsPage - Kanban board', () => {
     const link = await screen.findByRole('link', { name: 'JC-0001' });
     expect(link).toHaveAttribute('href', expect.stringContaining('/job-cards/journey?jobCardId='));
   });
+
+  it('#220: clicking anywhere on a Kanban card (not just the job number) navigates to its Journey view', async () => {
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
+    mockSocket({ status: 'live', kanban: makeKanbanBoard() });
+    renderPageWithJourneyRoute();
+
+    const user = userEvent.setup();
+    // The fixture's serial number text, not the "JC-0001" link itself.
+    const serial = await screen.findByText(/SN-000123/);
+    await user.click(serial);
+
+    expect(await screen.findByText('Journey destination reached')).toBeInTheDocument();
+  });
 });
 
 describe('ReportsPage - Approval Aging', () => {
@@ -180,6 +211,20 @@ describe('ReportsPage - Approval Aging', () => {
 
     const link = await screen.findByRole('link', { name: 'JC-0001' });
     expect(link).toHaveAttribute('href', expect.stringContaining('/job-cards/journey?jobCardId='));
+  });
+
+  it('#220: clicking anywhere on an Approval Aging item (not just the job number) navigates to its Journey view', async () => {
+    mockCapabilities(['REPORTS_DASHBOARD_VIEW']);
+    mockSocket({ status: 'live', approvalAging: makeApprovalAgingReport() });
+    renderPageWithJourneyRoute();
+
+    const user = userEvent.setup();
+    // The fixture has exactly one item, so its <li> is unambiguous - clicking the row
+    // itself (not its "JC-0001" link) is the actual behavior under test.
+    const row = await screen.findByRole('listitem');
+    await user.click(row);
+
+    expect(await screen.findByText('Journey destination reached')).toBeInTheDocument();
   });
 });
 
