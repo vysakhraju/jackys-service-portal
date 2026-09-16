@@ -1,7 +1,7 @@
 // Read-only master-data lookups this app needs. Mirrors the web app's
 // src/lib/masterDataApi.ts naming for the one endpoint both apps share so far.
 import { api } from './api';
-import type { ApplianceCategoryValue, FaultSymptom, SparePart } from './types';
+import type { ApplianceCategoryValue, CancellationReason, FaultSymptom, SparePart } from './types';
 
 const BASE = '/master-data';
 
@@ -16,3 +16,9 @@ export const listFaultSymptoms = (category?: ApplianceCategoryValue) =>
 // client-side, same pattern as FaultSymptomPicker.
 export const listSpareParts = () =>
   api.get<SparePart[]>(`${BASE}/spare-parts`, { params: { active: true } }).then((r) => r.data);
+
+// Mobile Phase 3 (req. 3f). Same no-@Roles() shape as fault-symptoms/spare-parts above -
+// server already filters to isActive:true, ordered by label ASC, so nothing further to
+// pass or filter client-side.
+export const listCancellationReasons = () =>
+  api.get<CancellationReason[]>(`${BASE}/cancellation-reasons`).then((r) => r.data);

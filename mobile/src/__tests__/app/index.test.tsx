@@ -1,22 +1,38 @@
+// Mobile Phase 3: the new multi-day Dashboard - replaces the old single-day
+// ScheduleScreen tests (that screen's own content/tests moved to day/[date].tsx +
+// day-detail.test.tsx). Covers the 4-day window fetch, per-day sections (including
+// "Overdue" only appearing when yesterday has something left on it), section-header
+// navigation to day/[date], appointment-card navigation to appointment/[id], and the
+// urgency color-coding pill.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { useAuth } from '../../context/AuthContext';
 import { getMySchedule } from '../../lib/technicianApi';
-import ScheduleScreen from '../../app/index';
+import DashboardScreen from '../../app/index';
 import type { ScheduledAppointment } from '../../lib/types';
+
+function toIso(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function addDays(d: Date, delta: number): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + delta);
+}
+
+const TODAY = new Date();
+const YESTERDAY_ISO = toIso(addDays(TODAY, -1));
+const TODAY_ISO = toIso(TODAY);
+const TOMORROW_ISO = toIso(addDays(TODAY, 1));
+const DAY_AFTER_ISO = toIso(addDays(TODAY, 2));
 
 jest.mock('../../context/AuthContext', () => ({ useAuth: jest.fn() }));
 jest.mock('../../lib/technicianApi', () => ({ getMySchedule: jest.fn() }));
-// Phase 2: tapping an appointment card now navigates via expo-router's useRouter() -
-// stub it out since these tests render ScheduleScreen without a real router present.
-jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
-// Phase 4: ScheduleScreen renders <OfflineBanner /> which reads useOfflineQueue() - this
-// screen's own tests aren't about offline-queue behavior (that's covered in
-// offline-queue.test.ts and appointment-detail.test.tsx), so stub a quiet "online, empty
-// queue" default here rather than wrapping every render in a real OfflineQueueProvider.
 jest.mock('../../context/OfflineQueueContext', () => ({
   useOfflineQueue: () => ({ isOnline: true, pendingItems: [], failedItems: [], enqueue: jest.fn(), retry: jest.fn(), dismiss: jest.fn() }),
 }));
+
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush }) }));
 
 const mockedUseAuth = useAuth as jest.Mock;
 const mockedGetMySchedule = getMySchedule as jest.Mock;
@@ -41,25 +57,28 @@ function appt(overrides: Partial<ScheduledAppointment> = {}): ScheduledAppointme
     brand: 'Samsung',
     modelNumber: 'RT38',
     problemDescription: 'Fridge not cooling',
-    scheduledAt: '2026-09-03T10:00:00.000Z',
+    scheduledAt: new Date().toISOString(),
     estimatedDurationMinutes: 60,
     ...overrides,
   };
 }
 
-// QueryClient sets up internal GC/focus/online subscriptions on construction that
-// otherwise keep the Jest process alive after the test finishes (a well-known
-// react-query + non-browser-environment gotcha) - tracking and unmounting each one in
-// afterEach is what lets `jest` exit cleanly instead of hanging.
 let activeQueryClient: QueryClient | undefined;
 
 async function renderScreen() {
   activeQueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await render(
     <QueryClientProvider client={activeQueryClient}>
-      <ScheduleScreen />
+      <DashboardScreen />
     </QueryClientProvider>,
   );
+}
+
+// Routes getMySchedule(date) to whichever fixture map the test supplies, defaulting to
+// an empty list for any date not explicitly stubbed - keeps each test's setup focused on
+// only the day(s) it actually cares about.
+function stubSchedule(byDate: Partial<Record<string, ScheduledAppointment[]>>) {
+  mockedGetMySchedule.mockImplementation((date: string) => Promise.resolve(byDate[date] ?? []));
 }
 
 beforeEach(() => {
@@ -73,65 +92,108 @@ afterEach(() => {
   activeQueryClient = undefined;
 });
 
-describe('ScheduleScreen', () => {
-  it("shows the technician's appointments for the selected date, sorted by time", async () => {
-    mockedGetMySchedule.mockResolvedValue([
-      appt({ id: 'a', customerName: 'Later Visit', scheduledAt: '2026-09-03T14:00:00.000Z' }),
-      appt({ id: 'b', customerName: 'Earlier Visit', scheduledAt: '2026-09-03T09:00:00.000Z' }),
-    ]);
+describe('DashboardScreen', () => {
+  it('fetches all 4 days in the window (yesterday, today, tomorrow, day+2)', async () => {
+    stubSchedule({});
     await renderScreen();
 
-    await waitFor(() => expect(screen.getByText('Earlier Visit')).toBeOnTheScreen());
-    const earlier = screen.getByText('Earlier Visit');
-    const later = screen.getByText('Later Visit');
-    // React Native FlatList renders items in data order - Earlier Visit (09:00) sorted
-    // ahead of Later Visit (14:00) proves the component re-sorts by scheduledAt itself
-    // rather than trusting the API's response order.
-    expect(earlier).toBeOnTheScreen();
-    expect(later).toBeOnTheScreen();
+    await waitFor(() => expect(mockedGetMySchedule).toHaveBeenCalledWith(YESTERDAY_ISO));
+    expect(mockedGetMySchedule).toHaveBeenCalledWith(TODAY_ISO);
+    expect(mockedGetMySchedule).toHaveBeenCalledWith(TOMORROW_ISO);
+    expect(mockedGetMySchedule).toHaveBeenCalledWith(DAY_AFTER_ISO);
   });
 
-  it('shows an empty-state message when there is nothing scheduled', async () => {
-    mockedGetMySchedule.mockResolvedValue([]);
+  it('hides the Overdue section entirely when yesterday has nothing left pending', async () => {
+    stubSchedule({});
     await renderScreen();
 
-    await waitFor(() => expect(screen.getByText('Nothing on your schedule for this date.')).toBeOnTheScreen());
+    // Every section shows "Loading…" until its own query settles (including Overdue's,
+    // which only decides whether to render itself at all once loaded) - wait for all 4 to
+    // finish before asserting Overdue never rendered, so this doesn't race the load.
+    await waitFor(() => expect(screen.queryAllByText('Loading…')).toHaveLength(0));
+    expect(screen.queryByText('Overdue')).not.toBeOnTheScreen();
   });
 
-  it('shows an error message and lets the user pull to refresh when the schedule fails to load', async () => {
-    mockedGetMySchedule.mockRejectedValue(new Error('network down'));
+  it('shows the Overdue section when yesterday still has an active appointment', async () => {
+    stubSchedule({ [YESTERDAY_ISO]: [appt({ id: 'overdue-1', customerName: 'Left Over Visit' })] });
     await renderScreen();
 
-    await waitFor(() => expect(screen.getByTestId('schedule-error')).toBeOnTheScreen());
+    await waitFor(() => expect(screen.getByText('Left Over Visit')).toBeOnTheScreen());
+    expect(screen.getByText('Overdue')).toBeOnTheScreen();
   });
 
-  it('moving to the next/previous day re-fetches the schedule for that date', async () => {
-    // Computed from the real clock rather than a hardcoded date, so this test doesn't
-    // depend on which day it happens to run - only that stepping the date nav forward/
-    // back changes what date getMySchedule is called with, by exactly one day each time.
-    const toIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const addDays = (d: Date, delta: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + delta);
-    const today = new Date();
-
-    mockedGetMySchedule.mockResolvedValue([]);
+  it('always shows Today, Tomorrow, and the day-after-tomorrow sections even when empty', async () => {
+    stubSchedule({});
     await renderScreen();
 
-    await waitFor(() => expect(mockedGetMySchedule).toHaveBeenCalledWith(toIso(today)));
+    await waitFor(() => expect(screen.getByText('Today')).toBeOnTheScreen());
+    expect(screen.getByText('Tomorrow')).toBeOnTheScreen();
+  });
 
-    await fireEvent.press(screen.getByTestId('date-next'));
-    await waitFor(() => expect(mockedGetMySchedule).toHaveBeenCalledWith(toIso(addDays(today, 1))));
+  it('tapping a day section header navigates to that day view', async () => {
+    stubSchedule({});
+    await renderScreen();
 
-    await fireEvent.press(screen.getByTestId('date-prev'));
-    await fireEvent.press(screen.getByTestId('date-prev'));
-    await waitFor(() => expect(mockedGetMySchedule).toHaveBeenCalledWith(toIso(addDays(today, -1))));
+    await waitFor(() => expect(screen.getByTestId(`day-section-header-${TODAY_ISO}`)).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId(`day-section-header-${TODAY_ISO}`));
+
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/day/[date]', params: { date: TODAY_ISO } });
+  });
+
+  it('tapping an appointment card navigates straight to the appointment detail screen', async () => {
+    const appointment = appt({ id: 'appt-today', customerName: 'Direct Tap Customer' });
+    stubSchedule({ [TODAY_ISO]: [appointment] });
+    await renderScreen();
+
+    await waitFor(() => expect(screen.getByText('Direct Tap Customer')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('appointment-appt-today'));
+
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/appointment/[id]',
+      params: { id: 'appt-today', appt: JSON.stringify(appointment) },
+    });
+  });
+
+  it('color-codes an appointment green when scheduled under 24 hours ago', async () => {
+    const fiveHoursAgo = new Date(Date.now() - 5 * 3600 * 1000).toISOString();
+    stubSchedule({ [YESTERDAY_ISO]: [appt({ id: 'green-1', scheduledAt: fiveHoursAgo })] });
+    await renderScreen();
+
+    await waitFor(() => expect(screen.getByTestId('urgency-green-1-green')).toBeOnTheScreen());
+  });
+
+  it('color-codes an appointment amber between 24 and 72 hours old', async () => {
+    const thirtyHoursAgo = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+    stubSchedule({ [YESTERDAY_ISO]: [appt({ id: 'amber-1', scheduledAt: thirtyHoursAgo })] });
+    await renderScreen();
+
+    await waitFor(() => expect(screen.getByTestId('urgency-amber-1-amber')).toBeOnTheScreen());
+  });
+
+  it('color-codes an appointment red at 72+ hours old', async () => {
+    const oneHundredHoursAgo = new Date(Date.now() - 100 * 3600 * 1000).toISOString();
+    stubSchedule({ [YESTERDAY_ISO]: [appt({ id: 'red-1', scheduledAt: oneHundredHoursAgo })] });
+    await renderScreen();
+
+    await waitFor(() => expect(screen.getByTestId('urgency-red-1-red')).toBeOnTheScreen());
+  });
+
+  it('shows a per-section error message without breaking the rest of the dashboard', async () => {
+    mockedGetMySchedule.mockImplementation((date: string) =>
+      date === TODAY_ISO ? Promise.reject(new Error('network down')) : Promise.resolve([]),
+    );
+    await renderScreen();
+
+    await waitFor(() => expect(screen.getByTestId(`day-section-error-${TODAY_ISO}`)).toBeOnTheScreen());
+    expect(screen.getByText('Tomorrow')).toBeOnTheScreen();
   });
 
   it('signs out when "Sign out" is pressed', async () => {
     const logout = jest.fn();
     mockedUseAuth.mockReturnValue({ user: FAKE_USER, logout });
-    mockedGetMySchedule.mockResolvedValue([]);
+    stubSchedule({});
     await renderScreen();
-    await waitFor(() => expect(screen.getByText('Nothing on your schedule for this date.')).toBeOnTheScreen());
+    await waitFor(() => expect(screen.getByText('Today')).toBeOnTheScreen());
 
     await fireEvent.press(screen.getByTestId('logout-button'));
 

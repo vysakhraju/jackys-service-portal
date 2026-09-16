@@ -13,6 +13,8 @@ const ACTION_LABELS: Record<QueuedActionType, string> = {
   CAPTURE_FAULT_SYMPTOM: 'Fault/symptom capture',
   NEED_SPARE: 'Spare part request',
   COMPLETE_VISIT: 'Complete visit',
+  COLLECTED_TO_WS: 'Collection to WS',
+  CANCEL_APPOINTMENT: 'Cancellation',
 };
 
 export function OfflineBanner() {

@@ -528,6 +528,31 @@ describe('AppointmentsService', () => {
         expect.objectContaining({ status: AppointmentStatus.CANCELLED }),
       );
     });
+
+    // Phase 3, req. 3f: the mobile Cancellation reason dropdown's DB-backed reason -
+    // set only when the caller passes one (CCE's web free-text cancel never does).
+    it('sets cancellationReasonId when passed by the mobile reason-dropdown flow', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+
+      await service.cancel('apt-1', 'Customer not available', 'user-1', undefined, 'reason-id-1');
+
+      expect(appointmentRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: AppointmentStatus.CANCELLED,
+          cancellationReason: 'Customer not available',
+          cancellationReasonId: 'reason-id-1',
+        }),
+      );
+    });
+
+    it('leaves cancellationReasonId unset when not passed (CCE web free-text cancel)', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+
+      await service.cancel('apt-1', 'Customer changed mind', 'user-1');
+
+      const saved = appointmentRepository.save.mock.calls[0][0];
+      expect(saved.cancellationReasonId).toBeFalsy();
+    });
   });
 
   describe('assignTechnician', () => {

@@ -2,8 +2,10 @@
 // src/lib/appointmentsApi.ts one-function-per-route pattern.
 import { api } from './api';
 import type {
+  CancelAppointmentInput,
   CaptureFaultSymptomInput,
   CaptureSerialNumberInput,
+  CollectedToWorkshopInput,
   CompleteVisitInput,
   JobCardSummary,
   JobCardTaskPause,
@@ -22,6 +24,14 @@ const TECH_BASE = '/technician';
 // server-side (the caller must be the appointment's assigned field technician, or a
 // JOB_CARD_ROLES office role), same as every other job-cards.controller.ts endpoint.
 const JOB_CARDS_BASE = '/job-cards';
+// Mobile Phase 3 (req. 3d/3f): Collection-to-WS and Cancellation hit the general
+// Appointments controller directly (same as the web app), not /technician - mirrors how
+// Onsite's own underlying transition already works (TechnicianService#startVisit calls
+// AppointmentsService#markOnSite internally; these two mobile actions call the
+// equivalent appointment-level endpoints directly since there's no /technician wrapper
+// for them). Both are gated server-side by the same SCHEDULE_FIELD_VISIT capability
+// TECHNICIAN_FIELD already holds - no new capability grant needed.
+const APPOINTMENTS_BASE = '/appointments';
 
 export const getMySchedule = (date?: string) =>
   api.get<ScheduledAppointment[]>(`${TECH_BASE}/schedule`, { params: date ? { date } : {} }).then((r) => r.data);
@@ -78,3 +88,15 @@ export const resumeTask = (jobCardId: string) =>
 
 export const getTaskPauses = (jobCardId: string) =>
   api.get<JobCardTaskPause[]>(`${JOB_CARDS_BASE}/${jobCardId}/pauses`).then((r) => r.data);
+
+// --- Mobile Phase 3: Collection to WS + Cancellation appointment detail actions -------
+
+// The response body is the full backend Appointment entity - callers don't need its
+// shape (they just refetch the schedule/detail after this resolves), so it's left
+// untyped here rather than importing/duplicating the web app's much larger
+// appointmentsTypes.ts#Appointment for a value nothing here reads.
+export const markCollectedToWorkshop = (appointmentId: string, data: CollectedToWorkshopInput = {}) =>
+  api.put(`${APPOINTMENTS_BASE}/${appointmentId}/collected-to-ws`, data).then((r) => r.data);
+
+export const cancelAppointment = (appointmentId: string, data: CancelAppointmentInput) =>
+  api.put(`${APPOINTMENTS_BASE}/${appointmentId}/field-cancel`, data).then((r) => r.data);

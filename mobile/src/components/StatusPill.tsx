@@ -7,6 +7,10 @@ const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
   CONFIRMED: { bg: '#dbeafe', fg: '#1d4ed8' },
   TECHNICIAN_ASSIGNED: { bg: '#e0e7ff', fg: '#4338ca' },
   ON_SITE: { bg: '#fef9c3', fg: '#854d0e' },
+  // Mobile Phase 3 (req. 3d) - mirrors the web app's own StatusBadge.tsx choice
+  // (bg-violet-50/text-violet-700) so a COLLECTED_TO_WS appointment reads the same
+  // "its own distinct state, not finished yet" way on both apps.
+  COLLECTED_TO_WS: { bg: '#f5f3ff', fg: '#6d28d9' },
   COMPLETED: { bg: '#dcfce7', fg: '#166534' },
   CANCELLED: { bg: '#fee2e2', fg: '#991b1b' },
   NO_SHOW: { bg: '#fee2e2', fg: '#991b1b' },

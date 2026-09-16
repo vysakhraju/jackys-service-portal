@@ -214,7 +214,34 @@ export class AppointmentsController {
     @CurrentUser() user: User,
     @Request() req: any,
   ) {
-    return this.appointmentsService.cancel(id, body.reason, user.id, req);
+    return this.appointmentsService.cancel(id, body.reason, user.id, req, body.cancellationReasonId);
+  }
+
+  // Appointment/Mobile/Job Card overhaul Phase 3, req. 3f: field technicians don't hold
+  // SCHEDULE_CCE_MANAGE (that capability also covers create/confirm/scheduling-grid, far
+  // more than a technician self-service cancel should ever grant), so the mobile
+  // Cancellation action gets its own endpoint under the same SCHEDULE_FIELD_VISIT
+  // capability the on-site/collected-to-ws self-service actions already use above -
+  // same reasoning, same no-ownership-check shape, calling the identical service method.
+  @Put(':id/field-cancel')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.CANCEL,
+    entityType: 'Appointment',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Cancel appointment (mobile "Cancellation" action, reason-dropdown driven)' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200, type: Appointment })
+  @ApiResponse({ status: 400, description: 'Cannot cancel completed appointment' })
+  async fieldCancel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CancelAppointmentDto,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.appointmentsService.cancel(id, body.reason, user.id, req, body.cancellationReasonId);
   }
 
   @Put(':id/assign-technician')

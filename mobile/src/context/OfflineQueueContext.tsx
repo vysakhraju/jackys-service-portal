@@ -15,8 +15,10 @@ import {
   type QueuedActionType,
 } from '../lib/offlineQueue';
 import type {
+  CancelAppointmentInput,
   CaptureFaultSymptomInput,
   CaptureSerialNumberInput,
+  CollectedToWorkshopInput,
   CompleteVisitInput,
   NeedSpareInput,
   StartVisitInput,
@@ -26,7 +28,14 @@ interface EnqueueInput {
   type: QueuedActionType;
   appointmentId: string;
   label: string;
-  payload: StartVisitInput | CaptureSerialNumberInput | CaptureFaultSymptomInput | NeedSpareInput | CompleteVisitInput;
+  payload:
+    | StartVisitInput
+    | CaptureSerialNumberInput
+    | CaptureFaultSymptomInput
+    | NeedSpareInput
+    | CompleteVisitInput
+    | CollectedToWorkshopInput
+    | CancelAppointmentInput;
 }
 
 interface OfflineQueueContextValue {

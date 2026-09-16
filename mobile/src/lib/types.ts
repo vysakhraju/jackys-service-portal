@@ -38,6 +38,11 @@ export const APPOINTMENT_STATUSES = [
   'CONFIRMED',
   'TECHNICIAN_ASSIGNED',
   'ON_SITE',
+  // Mobile Phase 3 (req. 3d/3e): the "Collection to WS" action's destination status -
+  // deliberately NOT COMPLETED (see backend AppointmentsService#markCollectedToWorkshop's
+  // own doc comment) - stays active until the workshop's own "Mark Received" step
+  // (Phase 4) creates a Job Card and completes it from there.
+  'COLLECTED_TO_WS',
   'COMPLETED',
   'CANCELLED',
   'NO_SHOW',
@@ -96,6 +101,25 @@ export interface StartVisitInput {
   gpsLng: number;
 }
 
+// Mobile Phase 3 (req. 3d): PUT /appointments/:id/collected-to-ws takes no request body
+// at all (see backend AppointmentsController#markCollectedToWorkshop) - this empty shape
+// exists only so the offline queue's PayloadFor<T> mapped type has something concrete to
+// bind 'COLLECTED_TO_WS' to, matching every other QueuedActionType's own input type.
+export type CollectedToWorkshopInput = Record<string, never>;
+
+// Mobile Phase 3 (req. 3f): PUT /appointments/:id/field-cancel. `cancellationReasonId` is
+// required here (unlike the backend's shared CancelAppointmentDto, which keeps it optional
+// so CCE's web free-text cancel can omit it) - the mobile Cancel screen only ever offers a
+// reason picked from the CancellationReason dropdown, never free text, so a selection is
+// mandatory before the Confirm button enables. `reason` is sent alongside it as the
+// picked reason's own label text, so the appointment's existing free-text
+// cancellationReason column stays human-readable without the backend needing to look the
+// label up itself (see appointments.service.ts's cancel() doc comment on why it doesn't).
+export interface CancelAppointmentInput {
+  reason: string;
+  cancellationReasonId: string;
+}
+
 export interface CaptureSerialNumberInput {
   serialNumber: string;
   brand?: string;
@@ -133,6 +157,17 @@ export interface FaultSymptom {
   category: ApplianceCategoryValue;
   requiresWorkshop: boolean;
   isActive: boolean;
+}
+
+// GET /master-data/cancellation-reasons (mobile Phase 3, req. 3f) - deliberately open,
+// no @Roles()/@RequiresCapability() server-side (see master-data.controller.ts's own
+// comment: "the mobile Cancellation screen needs it for every field technician").
+// Server already filters to isActive:true and orders by label ASC, so this type doesn't
+// even need an isActive field - unlike FaultSymptom/SparePart above, which are read by
+// screens that filter/search a full list themselves.
+export interface CancellationReason {
+  id: string;
+  label: string;
 }
 
 // --- Mobile Phase 5: Need Spare + Complete/QC-handoff --------------------------------

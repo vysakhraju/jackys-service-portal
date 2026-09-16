@@ -28,10 +28,20 @@
 //   before the item ever reaches the server.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isAxiosError } from 'axios';
-import { captureFaultSymptom, captureSerialNumber, completeVisit, requestNeedSpare, startVisit } from './technicianApi';
+import {
+  cancelAppointment,
+  captureFaultSymptom,
+  captureSerialNumber,
+  completeVisit,
+  markCollectedToWorkshop,
+  requestNeedSpare,
+  startVisit,
+} from './technicianApi';
 import type {
+  CancelAppointmentInput,
   CaptureFaultSymptomInput,
   CaptureSerialNumberInput,
+  CollectedToWorkshopInput,
   CompleteVisitInput,
   NeedSpareInput,
   StartVisitInput,
@@ -50,12 +60,18 @@ const STORAGE_KEY = '@jackys/offline-queue';
 // below) replaces whatever NEED_SPARE item was already queued for this appointment -
 // exactly one open Need Spare request queued per appointment at a time, matching how the
 // other three action types already work.
+// Mobile Phase 3 adds COLLECTED_TO_WS and CANCEL_APPOINTMENT to the same queue engine -
+// same storage, same replay/dedup rules as every earlier phase. Both are idempotent
+// server-side (see appointments.service.ts#markCollectedToWorkshop/#cancel), so a queued
+// retry racing a CCE's manual web override is always safe to replay as a no-op.
 export type QueuedActionType =
   | 'START_VISIT'
   | 'CAPTURE_SERIAL_NUMBER'
   | 'CAPTURE_FAULT_SYMPTOM'
   | 'NEED_SPARE'
-  | 'COMPLETE_VISIT';
+  | 'COMPLETE_VISIT'
+  | 'COLLECTED_TO_WS'
+  | 'CANCEL_APPOINTMENT';
 
 type PayloadFor<T extends QueuedActionType> = T extends 'START_VISIT'
   ? StartVisitInput
@@ -65,7 +81,11 @@ type PayloadFor<T extends QueuedActionType> = T extends 'START_VISIT'
       ? CaptureFaultSymptomInput
       : T extends 'NEED_SPARE'
         ? NeedSpareInput
-        : CompleteVisitInput;
+        : T extends 'COMPLETE_VISIT'
+          ? CompleteVisitInput
+          : T extends 'COLLECTED_TO_WS'
+            ? CollectedToWorkshopInput
+            : CancelAppointmentInput;
 
 export interface QueuedAction {
   id: string;
@@ -75,7 +95,14 @@ export interface QueuedAction {
   // enqueued this action, since the queue engine itself only knows the appointmentId.
   // Not sent to the backend.
   label: string;
-  payload: StartVisitInput | CaptureSerialNumberInput | CaptureFaultSymptomInput | NeedSpareInput | CompleteVisitInput;
+  payload:
+    | StartVisitInput
+    | CaptureSerialNumberInput
+    | CaptureFaultSymptomInput
+    | NeedSpareInput
+    | CompleteVisitInput
+    | CollectedToWorkshopInput
+    | CancelAppointmentInput;
   clientTimestamp: string;
   status: 'pending' | 'failed';
   errorMessage: string | null;
@@ -185,6 +212,12 @@ async function executeAction(action: QueuedAction): Promise<void> {
       return;
     case 'COMPLETE_VISIT':
       await completeVisit(action.appointmentId, action.payload as CompleteVisitInput);
+      return;
+    case 'COLLECTED_TO_WS':
+      await markCollectedToWorkshop(action.appointmentId, action.payload as CollectedToWorkshopInput);
+      return;
+    case 'CANCEL_APPOINTMENT':
+      await cancelAppointment(action.appointmentId, action.payload as CancelAppointmentInput);
       return;
   }
 }

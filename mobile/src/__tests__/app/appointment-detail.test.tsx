@@ -2,20 +2,23 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import AppointmentDetailScreen from '../../app/appointment/[id]';
 import { useOfflineQueue } from '../../context/OfflineQueueContext';
-import { listFaultSymptoms, listSpareParts } from '../../lib/masterDataApi';
+import { listCancellationReasons, listFaultSymptoms, listSpareParts } from '../../lib/masterDataApi';
 import {
+  cancelAppointment,
   captureFaultSymptom,
   captureSerialNumber,
   completeVisit,
   getOwnJobCard,
   getTaskPauses,
   getVisit,
+  markCollectedToWorkshop,
   pauseTask,
   requestNeedSpare,
   resumeTask,
   startVisit,
 } from '../../lib/technicianApi';
 import type {
+  CancellationReason,
   FaultSymptom,
   JobCardSummary,
   JobCardTaskPause,
@@ -43,8 +46,14 @@ jest.mock('../../lib/technicianApi', () => ({
   getTaskPauses: jest.fn(),
   pauseTask: jest.fn(),
   resumeTask: jest.fn(),
+  markCollectedToWorkshop: jest.fn(),
+  cancelAppointment: jest.fn(),
 }));
-jest.mock('../../lib/masterDataApi', () => ({ listFaultSymptoms: jest.fn(), listSpareParts: jest.fn() }));
+jest.mock('../../lib/masterDataApi', () => ({
+  listFaultSymptoms: jest.fn(),
+  listSpareParts: jest.fn(),
+  listCancellationReasons: jest.fn(),
+}));
 
 // Phase 4: this screen reads useOfflineQueue() directly (to branch Start Visit/S-N/
 // Fault-Symptom between "send now" and "enqueue"), so - unlike index.test.tsx, which
@@ -72,8 +81,15 @@ const mockedPauseTask = pauseTask as jest.Mock;
 const mockedResumeTask = resumeTask as jest.Mock;
 const mockedListFaultSymptoms = listFaultSymptoms as jest.Mock;
 const mockedListSpareParts = listSpareParts as jest.Mock;
+const mockedListCancellationReasons = listCancellationReasons as jest.Mock;
+const mockedMarkCollectedToWorkshop = markCollectedToWorkshop as jest.Mock;
+const mockedCancelAppointment = cancelAppointment as jest.Mock;
 const mockedUseOfflineQueue = useOfflineQueue as jest.Mock;
 const mockEnqueue = jest.fn();
+
+function cancellationReasonFixture(overrides: Partial<CancellationReason> = {}): CancellationReason {
+  return { id: 'reason-1', label: 'Customer not available', ...overrides };
+}
 
 function appt(overrides: Partial<ScheduledAppointment> = {}): ScheduledAppointment {
   return {
@@ -237,6 +253,7 @@ beforeEach(() => {
   // an unhandled rejection from an un-mocked getOwnJobCard() call.
   mockedGetOwnJobCard.mockResolvedValue(ownJobCardFixture(null));
   mockedListSpareParts.mockResolvedValue([]);
+  mockedListCancellationReasons.mockResolvedValue([cancellationReasonFixture()]);
   // Sane default for the task-pause poll (no pause history) so every pre-existing test -
   // none of which know about task pauses - doesn't hit an un-mocked getTaskPauses() call.
   mockedGetTaskPauses.mockResolvedValue([]);
@@ -478,6 +495,146 @@ describe('AppointmentDetailScreen', () => {
 
     await waitFor(() => expect(screen.getByTestId('fault-symptom-list-error')).toBeOnTheScreen());
     expect(screen.queryByTestId('fault-symptom-option-fs-1')).toBeNull();
+  });
+});
+
+// Phase 3: the 2 new appointment-detail actions - Collection to WS (single direct-tap)
+// and Cancellation (reason-chip picker then a separate Confirm button). Online behavior
+// only - the offline branches are covered alongside Phase 4's three in the offline-queue
+// describe block below.
+describe('AppointmentDetailScreen - Collection to WS & Cancellation', () => {
+  it('shows both actions for an appointment that is still active', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt({ status: 'TECHNICIAN_ASSIGNED' }));
+
+    await waitFor(() => expect(screen.getByTestId('mark-collected-to-ws-button')).toBeOnTheScreen());
+    expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen();
+  });
+
+  it('hides both actions once the appointment is already completed or cancelled', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt({ status: 'COMPLETED' }));
+
+    await waitFor(() => expect(screen.getByText('Fatima Al Sayed')).toBeOnTheScreen());
+    expect(screen.queryByTestId('mobile-actions-card')).toBeNull();
+  });
+
+  it('hides only Collection to WS (not Cancel) once already collected to workshop', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt({ status: 'COLLECTED_TO_WS' }));
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    expect(screen.queryByTestId('mark-collected-to-ws-button')).toBeNull();
+  });
+
+  it('marks the appointment collected to workshop on a single tap, no confirm step', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedMarkCollectedToWorkshop.mockResolvedValue({ id: 'appt-1', status: 'COLLECTED_TO_WS' });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('mark-collected-to-ws-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('mark-collected-to-ws-button'));
+
+    await waitFor(() => expect(mockedMarkCollectedToWorkshop).toHaveBeenCalledWith('appt-1'));
+  });
+
+  it('shows the backend error message when marking collected to workshop fails', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedMarkCollectedToWorkshop.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 400, data: { message: 'Can only mark collected-to-workshop for confirmed/assigned/on-site appointments' } },
+    });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('mark-collected-to-ws-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('mark-collected-to-ws-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('collected-to-ws-error')).toHaveTextContent(
+        'Can only mark collected-to-workshop for confirmed/assigned/on-site appointments',
+      ),
+    );
+  });
+
+  it('does not load cancellation reasons until the Cancel section is opened', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    expect(mockedListCancellationReasons).not.toHaveBeenCalled();
+  });
+
+  it('opens the reason-chip row, requires a reason before Confirm enables, and cancels on confirm', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedListCancellationReasons.mockResolvedValue([
+      cancellationReasonFixture(),
+      cancellationReasonFixture({ id: 'reason-2', label: 'BER' }),
+    ]);
+    mockedCancelAppointment.mockResolvedValue({ id: 'appt-1', status: 'CANCELLED' });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-cancel-section'));
+
+    await waitFor(() => expect(screen.getByTestId('cancel-reason-reason-1')).toBeOnTheScreen());
+    expect(screen.getByTestId('cancel-reason-reason-2')).toBeOnTheScreen();
+    // Confirm is disabled with no reason selected yet.
+    await fireEvent.press(screen.getByTestId('confirm-cancel-button'));
+    expect(mockedCancelAppointment).not.toHaveBeenCalled();
+
+    await fireEvent.press(screen.getByTestId('cancel-reason-reason-2'));
+    await fireEvent.press(screen.getByTestId('confirm-cancel-button'));
+
+    await waitFor(() =>
+      expect(mockedCancelAppointment).toHaveBeenCalledWith('appt-1', { reason: 'BER', cancellationReasonId: 'reason-2' }),
+    );
+  });
+
+  it('closes the reason section without cancelling when "Never mind" is pressed', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-cancel-section'));
+    await waitFor(() => expect(screen.getByTestId('cancel-reason-reason-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('cancel-reason-reason-1'));
+
+    await fireEvent.press(screen.getByTestId('dismiss-cancel-section'));
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    expect(mockedCancelAppointment).not.toHaveBeenCalled();
+  });
+
+  it('shows the backend error message when cancelling fails', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedCancelAppointment.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 409, data: { message: 'Cannot cancel this appointment: Job Card JC-0001 already exists for it.' } },
+    });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-cancel-section'));
+    await waitFor(() => expect(screen.getByTestId('cancel-reason-reason-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('cancel-reason-reason-1'));
+    await fireEvent.press(screen.getByTestId('confirm-cancel-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('cancel-error')).toHaveTextContent(
+        'Cannot cancel this appointment: Job Card JC-0001 already exists for it.',
+      ),
+    );
+  });
+
+  it('shows an error in the reason row when the cancellation reasons list fails to load', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedListCancellationReasons.mockRejectedValue(new Error('network down'));
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-cancel-section'));
+
+    await waitFor(() => expect(screen.getByTestId('cancellation-reasons-error')).toBeOnTheScreen());
   });
 });
 
@@ -1076,6 +1233,117 @@ describe('AppointmentDetailScreen - offline queue', () => {
     await waitFor(() =>
       expect(screen.getByTestId('complete-visit-queued')).toHaveTextContent(
         'Could not sync completing this visit - see the sync status above to retry or discard.',
+      ),
+    );
+  });
+
+  // Phase 3's own 2 new write actions, same offline-queue engine and same
+  // if-offline-enqueue-else-mutate branch every action above already follows.
+  it('enqueues Collection to WS instead of calling the mutation when offline', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('mark-collected-to-ws-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('mark-collected-to-ws-button'));
+
+    await waitFor(() =>
+      expect(mockEnqueue).toHaveBeenCalledWith({
+        type: 'COLLECTED_TO_WS',
+        appointmentId: 'appt-1',
+        label: 'Fatima Al Sayed (APT-0001)',
+        payload: {},
+      }),
+    );
+    expect(mockedMarkCollectedToWorkshop).not.toHaveBeenCalled();
+  });
+
+  it('shows a queued message instead of the Collection to WS button when an item is pending', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({ pendingItems: [queuedAction({ type: 'COLLECTED_TO_WS', appointmentId: 'appt-1' })] }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('collected-to-ws-queued')).toHaveTextContent(
+        'Queued - will mark this collected to workshop as soon as you’re back online.',
+      ),
+    );
+    expect(screen.queryByTestId('mark-collected-to-ws-button')).toBeNull();
+  });
+
+  it('shows a sync-failed message instead of the Collection to WS button when an item failed', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({
+        isOnline: true,
+        failedItems: [
+          queuedAction({ type: 'COLLECTED_TO_WS', appointmentId: 'appt-1', status: 'failed', errorMessage: 'nope' }),
+        ],
+      }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('collected-to-ws-queued')).toHaveTextContent(
+        'Could not sync marking this collected to workshop - see the sync status above to retry or discard.',
+      ),
+    );
+  });
+
+  it('enqueues Cancellation instead of calling the mutation when offline', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-cancel-section'));
+    await waitFor(() => expect(screen.getByTestId('cancel-reason-reason-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('cancel-reason-reason-1'));
+    await fireEvent.press(screen.getByTestId('confirm-cancel-button'));
+
+    await waitFor(() =>
+      expect(mockEnqueue).toHaveBeenCalledWith({
+        type: 'CANCEL_APPOINTMENT',
+        appointmentId: 'appt-1',
+        label: 'Fatima Al Sayed (APT-0001)',
+        payload: { reason: 'Customer not available', cancellationReasonId: 'reason-1' },
+      }),
+    );
+    expect(mockedCancelAppointment).not.toHaveBeenCalled();
+  });
+
+  it('shows a queued message instead of the Cancel button when an item is pending', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({ pendingItems: [queuedAction({ type: 'CANCEL_APPOINTMENT', appointmentId: 'appt-1' })] }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('cancel-queued')).toHaveTextContent(
+        'Queued - will cancel this appointment as soon as you’re back online.',
+      ),
+    );
+    expect(screen.queryByTestId('open-cancel-section')).toBeNull();
+  });
+
+  it('shows a sync-failed message instead of the Cancel button when an item failed', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({
+        isOnline: true,
+        failedItems: [
+          queuedAction({ type: 'CANCEL_APPOINTMENT', appointmentId: 'appt-1', status: 'failed', errorMessage: 'nope' }),
+        ],
+      }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('cancel-queued')).toHaveTextContent(
+        'Could not sync cancelling this appointment - see the sync status above to retry or discard.',
       ),
     );
   });

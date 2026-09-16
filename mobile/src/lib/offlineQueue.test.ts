@@ -14,7 +14,15 @@ import {
   removeAction,
   retryAction,
 } from './offlineQueue';
-import { captureFaultSymptom, captureSerialNumber, completeVisit, requestNeedSpare, startVisit } from './technicianApi';
+import {
+  cancelAppointment,
+  captureFaultSymptom,
+  captureSerialNumber,
+  completeVisit,
+  markCollectedToWorkshop,
+  requestNeedSpare,
+  startVisit,
+} from './technicianApi';
 
 jest.mock('./technicianApi', () => ({
   startVisit: jest.fn(),
@@ -22,6 +30,8 @@ jest.mock('./technicianApi', () => ({
   captureFaultSymptom: jest.fn(),
   requestNeedSpare: jest.fn(),
   completeVisit: jest.fn(),
+  markCollectedToWorkshop: jest.fn(),
+  cancelAppointment: jest.fn(),
   getOwnJobCard: jest.fn(),
   getVisit: jest.fn(),
   getMySchedule: jest.fn(),
@@ -32,6 +42,8 @@ const mockedCaptureSerialNumber = captureSerialNumber as jest.Mock;
 const mockedCaptureFaultSymptom = captureFaultSymptom as jest.Mock;
 const mockedRequestNeedSpare = requestNeedSpare as jest.Mock;
 const mockedCompleteVisit = completeVisit as jest.Mock;
+const mockedMarkCollectedToWorkshop = markCollectedToWorkshop as jest.Mock;
+const mockedCancelAppointment = cancelAppointment as jest.Mock;
 
 function networkError() {
   // Axios's shape for "request went out, nothing came back" - no `.response` at all.
@@ -250,6 +262,37 @@ describe('processQueue', () => {
     await processQueue();
 
     expect(mockedCompleteVisit).toHaveBeenCalledWith('appt-1', { notes: 'Fixed loose connector on-site' });
+  });
+
+  it('dispatches COLLECTED_TO_WS actions to markCollectedToWorkshop', async () => {
+    mockedMarkCollectedToWorkshop.mockResolvedValue({ id: 'appt-1', status: 'COLLECTED_TO_WS' });
+    await enqueueAction({
+      type: 'COLLECTED_TO_WS',
+      appointmentId: 'appt-1',
+      label: 'A',
+      payload: {},
+    });
+
+    await processQueue();
+
+    expect(mockedMarkCollectedToWorkshop).toHaveBeenCalledWith('appt-1', {});
+  });
+
+  it('dispatches CANCEL_APPOINTMENT actions to cancelAppointment with the reason and cancellationReasonId', async () => {
+    mockedCancelAppointment.mockResolvedValue({ id: 'appt-1', status: 'CANCELLED' });
+    await enqueueAction({
+      type: 'CANCEL_APPOINTMENT',
+      appointmentId: 'appt-1',
+      label: 'A',
+      payload: { reason: 'Customer not available', cancellationReasonId: 'reason-1' },
+    });
+
+    await processQueue();
+
+    expect(mockedCancelAppointment).toHaveBeenCalledWith('appt-1', {
+      reason: 'Customer not available',
+      cancellationReasonId: 'reason-1',
+    });
   });
 
   it('a rejected NEED_SPARE retry keeps the queued item pending on a network failure rather than dropping the idempotencyKey', async () => {

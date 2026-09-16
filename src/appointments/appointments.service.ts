@@ -421,7 +421,7 @@ export class AppointmentsService {
     return this.findById(id);
   }
 
-  async cancel(id: string, reason: string, userId: string, req?: any): Promise<Appointment> {
+  async cancel(id: string, reason: string, userId: string, req?: any, cancellationReasonId?: string): Promise<Appointment> {
     const appointment = await this.findById(id);
 
     // Idempotent (Appointment/Mobile/Job Card overhaul, 2026-09-16 Phase 1, decision #2):
@@ -457,6 +457,12 @@ export class AppointmentsService {
 
     appointment.status = AppointmentStatus.CANCELLED;
     appointment.cancellationReason = reason;
+    // Phase 3, req. 3f: only ever set by the mobile Cancellation reason dropdown - CCE's
+    // web free-text cancel never sends this, so it stays null on that path (no FK lookup
+    // here, see this service's own precedent for cityId/applianceModelId above).
+    if (cancellationReasonId) {
+      appointment.cancellationReasonId = cancellationReasonId;
+    }
     const saved = await this.appointmentRepository.save(appointment);
 
     await this.logAudit(
@@ -465,7 +471,7 @@ export class AppointmentsService {
       'Appointment',
       id,
       { status: appointment.status },
-      { status: AppointmentStatus.CANCELLED, cancellationReason: reason },
+      { status: AppointmentStatus.CANCELLED, cancellationReason: reason, cancellationReasonId: appointment.cancellationReasonId ?? null },
       req,
     );
 

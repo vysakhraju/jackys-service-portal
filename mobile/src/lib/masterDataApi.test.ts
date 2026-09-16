@@ -5,7 +5,7 @@
 // with no test catching it. These thin wrappers have no other behavior to verify, so
 // this asserts exactly the call each one makes against a mocked `api`.
 import { api } from './api';
-import { listFaultSymptoms, listSpareParts } from './masterDataApi';
+import { listCancellationReasons, listFaultSymptoms, listSpareParts } from './masterDataApi';
 
 jest.mock('./api', () => ({ api: { get: jest.fn() } }));
 
@@ -42,5 +42,17 @@ describe('listSpareParts', () => {
   it('resolves with the response body, not the full axios response', async () => {
     mockedGet.mockResolvedValue({ data: [{ id: 'part-1' }] });
     await expect(listSpareParts()).resolves.toEqual([{ id: 'part-1' }]);
+  });
+});
+
+describe('listCancellationReasons', () => {
+  it('calls GET /master-data/cancellation-reasons with no params', async () => {
+    await listCancellationReasons();
+    expect(mockedGet).toHaveBeenCalledWith('/master-data/cancellation-reasons');
+  });
+
+  it('resolves with the response body, not the full axios response', async () => {
+    mockedGet.mockResolvedValue({ data: [{ id: 'reason-1', label: 'BER' }] });
+    await expect(listCancellationReasons()).resolves.toEqual([{ id: 'reason-1', label: 'BER' }]);
   });
 });

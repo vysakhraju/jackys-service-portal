@@ -10,22 +10,24 @@ import { SparePartPicker } from '../../components/SparePartPicker';
 import { StatusPill } from '../../components/StatusPill';
 import { useOfflineQueue } from '../../context/OfflineQueueContext';
 import { getCurrentLocationOrBlock } from '../../lib/location';
-import { listFaultSymptoms, listSpareParts } from '../../lib/masterDataApi';
+import { listCancellationReasons, listFaultSymptoms, listSpareParts } from '../../lib/masterDataApi';
 import { generateIdempotencyKey, type QueuedAction, type QueuedActionType } from '../../lib/offlineQueue';
 import {
+  cancelAppointment,
   captureFaultSymptom,
   captureSerialNumber,
   completeVisit,
   getOwnJobCard,
   getTaskPauses,
   getVisit,
+  markCollectedToWorkshop,
   pauseTask,
   requestNeedSpare,
   resumeTask,
   startVisit,
 } from '../../lib/technicianApi';
 import { TASK_PAUSE_REASONS } from '../../lib/types';
-import type { FaultSymptom, ScheduledAppointment, SparePart, TaskPauseReasonValue } from '../../lib/types';
+import type { CancellationReason, FaultSymptom, ScheduledAppointment, SparePart, TaskPauseReasonValue } from '../../lib/types';
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -37,6 +39,13 @@ function formatDateTime(iso: string): string {
 // it surfaces the backend's real "not confirmed/assigned yet" error instead of silently
 // looking like there's nothing to do on this appointment.
 const STARTABLE_STATUSES = new Set(['SCHEDULED', 'CONFIRMED', 'TECHNICIAN_ASSIGNED']);
+
+// Mobile Phase 3 (req. 3d/3f), same "offer rather than hide" philosophy as
+// STARTABLE_STATUSES above: hidden only for the two truly terminal-for-mobile states, so
+// a tap on anything else surfaces the backend's own real rejection (e.g. markCollectedTo
+// Workshop's "not confirmed/assigned/on-site yet") instead of the button just vanishing.
+const NOT_COLLECTIBLE_TO_WS_STATUSES = new Set(['COLLECTED_TO_WS', 'COMPLETED', 'CANCELLED']);
+const NOT_CANCELLABLE_STATUSES = new Set(['COMPLETED', 'CANCELLED']);
 
 const WARRANTY_LABELS: Record<string, string> = { IW: 'In Warranty', OOW: 'Out of Warranty' };
 
@@ -91,6 +100,8 @@ export default function AppointmentDetailScreen() {
   const queuedFaultSymptom = findQueued(queuedItems, 'CAPTURE_FAULT_SYMPTOM', params.id);
   const queuedNeedSpare = findQueued(queuedItems, 'NEED_SPARE', params.id);
   const queuedComplete = findQueued(queuedItems, 'COMPLETE_VISIT', params.id);
+  const queuedCollectedToWs = findQueued(queuedItems, 'COLLECTED_TO_WS', params.id);
+  const queuedCancel = findQueued(queuedItems, 'CANCEL_APPOINTMENT', params.id);
 
   const {
     data: visit,
@@ -322,6 +333,73 @@ export default function AppointmentDetailScreen() {
     completeMutation.mutate();
   }
 
+  // --- Collection to WS (Phase 3, req. 3d) ---
+  // Single direct-tap, no confirm step - same precedent as Start Visit/Complete Visit
+  // above (both fire immediately on tap), safe here because markCollectedToWorkshop is
+  // idempotent server-side.
+  const collectedToWsMutation = useMutation({
+    mutationFn: () => markCollectedToWorkshop(params.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['technician-schedule'] });
+    },
+  });
+
+  async function handleMarkCollectedToWorkshop() {
+    if (!isOnline) {
+      await enqueue({ type: 'COLLECTED_TO_WS', appointmentId: params.id, label: queueLabel, payload: {} });
+      return;
+    }
+    collectedToWsMutation.mutate();
+  }
+
+  // --- Cancellation (Phase 3, req. 3f) ---
+  // Tapping "Cancel" reveals a reason-chip row (mirrors the Fault/Symptom and Spare Part
+  // pickers' own select-then-separate-confirm-button pattern above - this app has no
+  // precedent anywhere for a blocking native Alert/confirm dialog, so this reuses the
+  // pattern that's already proven here instead of introducing one).
+  const [cancelSectionOpen, setCancelSectionOpen] = useState(false);
+  const [selectedCancellationReason, setSelectedCancellationReason] = useState<CancellationReason | null>(null);
+
+  const {
+    data: cancellationReasons,
+    error: cancellationReasonsError,
+    isLoading: cancellationReasonsLoading,
+  } = useQuery({
+    queryKey: ['cancellation-reasons'],
+    queryFn: () => listCancellationReasons(),
+    enabled: cancelSectionOpen,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: () =>
+      cancelAppointment(params.id, {
+        reason: selectedCancellationReason!.label,
+        cancellationReasonId: selectedCancellationReason!.id,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['technician-schedule'] });
+      setCancelSectionOpen(false);
+      setSelectedCancellationReason(null);
+    },
+  });
+
+  function closeCancelSection() {
+    setCancelSectionOpen(false);
+    setSelectedCancellationReason(null);
+  }
+
+  async function handleConfirmCancel() {
+    if (!selectedCancellationReason) return;
+    const payload = { reason: selectedCancellationReason.label, cancellationReasonId: selectedCancellationReason.id };
+    if (!isOnline) {
+      await enqueue({ type: 'CANCEL_APPOINTMENT', appointmentId: params.id, label: queueLabel, payload });
+      closeCancelSection();
+      return;
+    }
+    cancelMutation.mutate();
+  }
+
   // --- Task timer pause/resume (SLA-safe pausing) ---
   // Only reachable while the on-site job is actually being worked (jobCardReady below) -
   // this app never shows a workshop job's own pause state (its auto-opened
@@ -373,6 +451,8 @@ export default function AppointmentDetailScreen() {
   const canStart = STARTABLE_STATUSES.has(appointment.status) && visitNotFound && !queuedStartVisit;
   const busy = locating || startMutation.isPending;
   const canCaptureFaultSymptom = Boolean(visit?.serialNumber);
+  const canMarkCollectedToWorkshop = !NOT_COLLECTIBLE_TO_WS_STATUSES.has(appointment.status) && !queuedCollectedToWs;
+  const canCancel = !NOT_CANCELLABLE_STATUSES.has(appointment.status) && !queuedCancel;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -403,6 +483,115 @@ export default function AppointmentDetailScreen() {
           )}
           {appointment.problemDescription && <Text style={styles.problem}>{appointment.problemDescription}</Text>}
         </View>
+
+        {(canMarkCollectedToWorkshop || queuedCollectedToWs || canCancel || queuedCancel) && (
+          <View style={styles.card} testID="mobile-actions-card">
+            <Text style={styles.sectionTitle}>Actions</Text>
+
+            {queuedCollectedToWs ? (
+              <Text style={styles.meta} testID="collected-to-ws-queued">
+                {queuedCollectedToWs.status === 'failed'
+                  ? 'Could not sync marking this collected to workshop - see the sync status above to retry or discard.'
+                  : 'Queued - will mark this collected to workshop as soon as you’re back online.'}
+              </Text>
+            ) : (
+              canMarkCollectedToWorkshop && (
+                <View style={styles.actionBlock}>
+                  {collectedToWsMutation.isError && (
+                    <Text style={styles.errorBoxText} testID="collected-to-ws-error">
+                      {extractErrorMessage(collectedToWsMutation.error, 'Could not mark this collected to workshop. Try again.')}
+                    </Text>
+                  )}
+                  <Pressable
+                    style={[styles.collectedToWsButton, collectedToWsMutation.isPending && styles.buttonDisabled]}
+                    onPress={handleMarkCollectedToWorkshop}
+                    disabled={collectedToWsMutation.isPending}
+                    testID="mark-collected-to-ws-button"
+                  >
+                    {collectedToWsMutation.isPending ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.buttonText}>Collection to WS</Text>
+                    )}
+                  </Pressable>
+                </View>
+              )
+            )}
+
+            {queuedCancel ? (
+              <Text style={styles.meta} testID="cancel-queued">
+                {queuedCancel.status === 'failed'
+                  ? 'Could not sync cancelling this appointment - see the sync status above to retry or discard.'
+                  : 'Queued - will cancel this appointment as soon as you’re back online.'}
+              </Text>
+            ) : (
+              canCancel && (
+                <View style={styles.actionBlock}>
+                  {!cancelSectionOpen ? (
+                    <Pressable style={styles.cancelButton} onPress={() => setCancelSectionOpen(true)} testID="open-cancel-section">
+                      <Text style={styles.buttonText}>Cancel</Text>
+                    </Pressable>
+                  ) : (
+                    <View testID="cancel-section">
+                      {cancelMutation.isError && (
+                        <Text style={styles.errorBoxText} testID="cancel-error">
+                          {extractErrorMessage(cancelMutation.error, 'Could not cancel this appointment. Try again.')}
+                        </Text>
+                      )}
+
+                      {cancellationReasonsLoading && <ActivityIndicator style={styles.spinner} />}
+                      {cancellationReasonsError && (
+                        <Text style={styles.errorBoxText} testID="cancellation-reasons-error">
+                          {extractErrorMessage(cancellationReasonsError, 'Could not load cancellation reasons.')}
+                        </Text>
+                      )}
+
+                      <View style={styles.reasonRow}>
+                        {(cancellationReasons ?? []).map((reason) => (
+                          <Pressable
+                            key={reason.id}
+                            style={[styles.reasonChip, selectedCancellationReason?.id === reason.id && styles.reasonChipSelected]}
+                            onPress={() => setSelectedCancellationReason(reason)}
+                            testID={`cancel-reason-${reason.id}`}
+                          >
+                            <Text
+                              style={[
+                                styles.reasonChipText,
+                                selectedCancellationReason?.id === reason.id && styles.reasonChipTextSelected,
+                              ]}
+                            >
+                              {reason.label}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      <Pressable
+                        style={[
+                          styles.cancelButton,
+                          (!selectedCancellationReason || cancelMutation.isPending) && styles.buttonDisabled,
+                        ]}
+                        onPress={handleConfirmCancel}
+                        disabled={!selectedCancellationReason || cancelMutation.isPending}
+                        testID="confirm-cancel-button"
+                      >
+                        {cancelMutation.isPending ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : (
+                          <Text style={styles.buttonText}>Confirm cancellation</Text>
+                        )}
+                      </Pressable>
+
+                      <Pressable onPress={closeCancelSection} testID="dismiss-cancel-section">
+                        <Text style={styles.linkText}>Never mind</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              )
+            )}
+          </View>
+        )}
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Visit</Text>
@@ -922,6 +1111,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   secondaryButtonText: { color: '#334155', fontWeight: '600', fontSize: 15 },
+  actionBlock: { marginBottom: 10 },
+  // Violet - matches StatusPill's own COLLECTED_TO_WS color (and the web app's
+  // StatusBadge.tsx choice), so the button and the status it produces read as the same
+  // color language.
+  collectedToWsButton: { backgroundColor: '#6d28d9', borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
+  // Red - matches StatusPill's own CANCELLED color.
+  cancelButton: { backgroundColor: '#b91c1c', borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginBottom: 8 },
   hint: { fontSize: 12, color: '#94a3b8', marginTop: 8, textAlign: 'center' },
   input: {
     borderWidth: 1,

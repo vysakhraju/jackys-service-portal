@@ -4,6 +4,7 @@
 // including the two newest (Phase 5's getOwnJobCard/requestNeedSpare/completeVisit).
 import { api } from './api';
 import {
+  cancelAppointment,
   captureFaultSymptom,
   captureSerialNumber,
   completeVisit,
@@ -11,21 +12,24 @@ import {
   getOwnJobCard,
   getTaskPauses,
   getVisit,
+  markCollectedToWorkshop,
   pauseTask,
   requestNeedSpare,
   resumeTask,
   startVisit,
 } from './technicianApi';
 
-jest.mock('./api', () => ({ api: { get: jest.fn(), post: jest.fn() } }));
+jest.mock('./api', () => ({ api: { get: jest.fn(), post: jest.fn(), put: jest.fn() } }));
 
 const mockedGet = api.get as jest.Mock;
 const mockedPost = api.post as jest.Mock;
+const mockedPut = api.put as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockedGet.mockResolvedValue({ data: null });
   mockedPost.mockResolvedValue({ data: null });
+  mockedPut.mockResolvedValue({ data: null });
 });
 
 describe('getMySchedule', () => {
@@ -139,5 +143,22 @@ describe('task timer pause/resume - lives on /job-cards, not /technician (job-ca
   it('getTaskPauses calls GET /job-cards/:id/pauses', async () => {
     await getTaskPauses('jc-1');
     expect(mockedGet).toHaveBeenCalledWith('/job-cards/jc-1/pauses');
+  });
+});
+
+describe('markCollectedToWorkshop', () => {
+  it('calls PUT /appointments/:id/collected-to-ws with an empty body by default', async () => {
+    await markCollectedToWorkshop('appt-1');
+    expect(mockedPut).toHaveBeenCalledWith('/appointments/appt-1/collected-to-ws', {});
+  });
+});
+
+describe('cancelAppointment', () => {
+  it('calls PUT /appointments/:id/field-cancel with the reason and cancellationReasonId', async () => {
+    await cancelAppointment('appt-1', { reason: 'Customer not available', cancellationReasonId: 'reason-1' });
+    expect(mockedPut).toHaveBeenCalledWith('/appointments/appt-1/field-cancel', {
+      reason: 'Customer not available',
+      cancellationReasonId: 'reason-1',
+    });
   });
 });
