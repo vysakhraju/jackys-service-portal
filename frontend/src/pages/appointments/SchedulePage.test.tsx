@@ -16,21 +16,38 @@ vi.mock('../../lib/appointmentsApi', () => ({
   getSchedulingGrid: vi.fn(),
   getVisit: vi.fn(),
   listAppointments: vi.fn(),
+  markAppointmentCollectedToWorkshop: vi.fn(),
   markAppointmentOnSite: vi.fn(),
   resolveMapLink: vi.fn(),
+  searchAppointments: vi.fn(),
   updateAppointment: vi.fn(),
 }));
 // #218: Service centre/Technician filter+form fields are now NamePickers backed by these.
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2): cities/appliance models added
+// for the New Appointment popup's City and Brand+Model pickers.
 vi.mock('../../lib/masterDataApi', () => ({
   listServiceCentres: vi.fn(),
+  listCities: vi.fn(),
+  listApplianceModels: vi.fn(),
 }));
 vi.mock('../../lib/technicianScheduleApi', () => ({
   getGanttBoard: vi.fn(),
 }));
 
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
-import { assignTechnician, createAppointment, getAppointmentDashboardStats, getSchedulingGrid, getVisit, listAppointments, resolveMapLink, updateAppointment } from '../../lib/appointmentsApi';
-import { listServiceCentres } from '../../lib/masterDataApi';
+import {
+  assignTechnician,
+  createAppointment,
+  getAppointmentDashboardStats,
+  getSchedulingGrid,
+  getVisit,
+  listAppointments,
+  markAppointmentCollectedToWorkshop,
+  resolveMapLink,
+  searchAppointments,
+  updateAppointment,
+} from '../../lib/appointmentsApi';
+import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { SchedulePage } from './SchedulePage';
 
@@ -99,8 +116,12 @@ beforeEach(() => {
   vi.mocked(resolveMapLink).mockReset();
   vi.mocked(getVisit).mockReset().mockRejectedValue({ response: { status: 404 } });
   vi.mocked(updateAppointment).mockReset();
+  vi.mocked(markAppointmentCollectedToWorkshop).mockReset();
+  vi.mocked(searchAppointments).mockReset().mockResolvedValue([]);
   vi.mocked(getSchedulingGrid).mockReset().mockResolvedValue(schedulingGridFixture());
   vi.mocked(listServiceCentres).mockReset().mockResolvedValue([{ id: 'sc-1', name: 'Dubai Service Centre' }] as any);
+  vi.mocked(listCities).mockReset().mockResolvedValue([{ id: 'city-1', name: 'Dubai' }] as any);
+  vi.mocked(listApplianceModels).mockReset().mockResolvedValue([{ id: 'model-1', brand: 'Samsung', model: 'WA80J5710' }] as any);
   vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
     date: '2026-09-09',
     rows: [],
@@ -134,7 +155,12 @@ async function openCreateModal() {
 async function fillRequiredCreateFields(form: ReturnType<typeof within>) {
   fireEvent.change(form.getByLabelText('Customer name', { exact: false }), { target: { value: 'Jane Doe' } });
   fireEvent.change(form.getByLabelText('Customer phone', { exact: false }), { target: { value: '+971500000000' } });
-  fireEvent.focus(form.getByTestId('name-picker-input'));
+  // Phase 2 (2026-09-16) added two more NamePickers (City, Brand/Model) ahead of Service
+  // centre in the form - scoped by label so this helper doesn't care about DOM order.
+  // Exact match (not { exact: false }) here: the Country field's own hint text ("...VAT
+  // stays Service Centre-driven") contains the substring "Service centre" too, so a
+  // substring match against this particular label would resolve to two elements.
+  fireEvent.focus(form.getByLabelText('Service centre'));
   fireEvent.click(await form.findByText('Dubai Service Centre'));
   fireEvent.click(await form.findByTestId('chip-tech-1-08:00'));
 }
@@ -411,6 +437,96 @@ describe('SchedulePage - Google Maps link resolve', () => {
   });
 });
 
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 1) - Job Type, City,
+// Country, and the Appliance Model picker replacing the old free-text brand/model inputs.
+describe('SchedulePage - Phase 2 New Appointment popup fields', () => {
+  it('defaults Job type to REPAIR and Country to UAE, and submits a picked City/Appliance Model by id', async () => {
+    vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
+    const form = await openCreateModal();
+    await fillRequiredCreateFields(form);
+
+    expect(form.getByLabelText('Job type', { exact: false })).toHaveValue('REPAIR');
+    expect(form.getByLabelText('Country', { exact: false })).toHaveValue('UAE');
+
+    fireEvent.change(form.getByLabelText('Job type', { exact: false }), { target: { value: 'INSTALLATION' } });
+
+    // Label-scoped (not positional) - City/Appliance Model/Service centre are all
+    // NamePickers on this form, so a getAllByTestId index is fragile to reordering.
+    fireEvent.focus(form.getByLabelText('City (optional)', { exact: false }));
+    fireEvent.click(await form.findByText('Dubai'));
+
+    fireEvent.focus(form.getByLabelText('Brand / Model (optional)', { exact: false }));
+    fireEvent.click(await form.findByText('Samsung — WA80J5710'));
+
+    fireEvent.click(form.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(createAppointment)).toHaveBeenCalledWith(
+        expect.objectContaining({ jobType: 'INSTALLATION', cityId: 'city-1', applianceModelId: 'model-1' }),
+      );
+    });
+  });
+
+  it('lets Country be changed to KSA and submits it, purely informational (not sent as any VAT field)', async () => {
+    vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
+    const form = await openCreateModal();
+    await fillRequiredCreateFields(form);
+
+    fireEvent.change(form.getByLabelText('Country', { exact: false }), { target: { value: 'KSA' } });
+    fireEvent.click(form.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(createAppointment)).toHaveBeenCalledWith(expect.objectContaining({ country: 'KSA' }));
+    });
+  });
+
+  // req. 1b - reuses GET /appointments?q= (searchAppointments) rather than a new endpoint.
+  it('customer lookup autofills name/phone/city/model/serial from a picked past appointment', async () => {
+    vi.mocked(searchAppointments).mockResolvedValue([
+      makeAppointment({
+        id: 'past-1',
+        appointmentNumber: 'APT-0009',
+        customerName: 'Ahmed Khan',
+        customerPhone: '+971509998888',
+        cityId: 'city-1',
+        applianceModelId: 'model-1',
+        serialNumber: 'SN-OLD-1',
+        jobCard: null,
+      }),
+    ]);
+    const form = await openCreateModal();
+
+    fireEvent.change(form.getByPlaceholderText('Start typing a name, phone, or serial number…'), {
+      target: { value: 'Ahmed' },
+    });
+    fireEvent.click(await form.findByText('Ahmed Khan'));
+
+    await waitFor(() => {
+      expect(form.getByLabelText('Customer name', { exact: false })).toHaveValue('Ahmed Khan');
+    });
+    expect(form.getByLabelText('Customer phone', { exact: false })).toHaveValue('+971509998888');
+    expect(form.getByLabelText('Serial number', { exact: false })).toHaveValue('SN-OLD-1');
+    expect(form.getByText(/Filled in from APT-0009/)).toBeInTheDocument();
+  });
+
+  it('does not show the customer-lookup search box when editing an existing appointment', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0010', status: 'SCHEDULED' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0010');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const heading = await screen.findByRole('heading', { name: /Edit — APT-0010/ });
+    const modal = within(heading.closest('.max-w-lg') as HTMLElement);
+
+    expect(modal.queryByPlaceholderText('Start typing a name, phone, or serial number…')).not.toBeInTheDocument();
+  });
+});
+
 // #218: the Service centre/Technician filters and the Assign Technician modal are now
 // name-based NamePickers instead of raw-uuid text inputs.
 describe('SchedulePage - #218 name-based pickers', () => {
@@ -431,14 +547,14 @@ describe('SchedulePage - #218 name-based pickers', () => {
     });
   });
 
-  it('Assign Technician modal shows a NamePicker (not a raw-paste input) when the technician list is accessible (e.g. Team Leader)', async () => {
-    vi.mocked(getGanttBoard).mockResolvedValue({
-      date: '2026-09-09',
-      rows: [{ technicianId: 'tech-9', technicianName: 'Sanjay Rao', role: 'TECHNICIAN_FIELD', blocks: [], hasConflict: false }],
-      unassignedAppointments: [],
-      unassignedJobCards: [],
-    } as any);
-    vi.mocked(assignTechnician).mockResolvedValue(makeAppointment());
+});
+
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 2b) - Assign is gone as a
+// standalone row action/modal; (re)assigning a technician now happens from inside the same
+// Edit popup used for field edits, via its own scheduling grid - optional here, unlike
+// Create where a slot is mandatory.
+describe('SchedulePage - Edit popup (reassignment folded in, req. 2b)', () => {
+  it('has no standalone Assign row action any more', async () => {
     vi.mocked(listAppointments).mockResolvedValue({
       data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED' })],
       total: 1,
@@ -448,36 +564,61 @@ describe('SchedulePage - #218 name-based pickers', () => {
     renderPage();
     await screen.findByText('APT-0001');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Assign' }));
-    const heading = await screen.findByRole('heading', { name: /Assign technician/ });
-    const modal = within(heading.closest('.max-w-lg') as HTMLElement);
-    expect(modal.queryByText(/paste the technician's/)).not.toBeInTheDocument();
-
-    fireEvent.focus(modal.getByTestId('name-picker-input'));
-    fireEvent.click(await modal.findByText('Sanjay Rao'));
-    fireEvent.click(modal.getByRole('button', { name: 'Assign' }));
-
-    await waitFor(() => expect(vi.mocked(assignTechnician)).toHaveBeenCalledWith('appt-1', 'tech-9'));
+    expect(screen.queryByRole('button', { name: 'Assign' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
   });
 
-  it('Assign Technician modal falls back to a raw-paste input when the technician list 403s (e.g. CCE)', async () => {
-    vi.mocked(getGanttBoard).mockRejectedValue(new Error('Forbidden'));
+  it('opens pre-filled from the row and saves a plain field edit without touching the technician/time when no new slot is picked', async () => {
+    vi.mocked(updateAppointment).mockResolvedValue(makeAppointment({ id: 'appt-1', problemDescription: 'Updated description' }));
     vi.mocked(listAppointments).mockResolvedValue({
-      data: [makeAppointment({ id: 'appt-2', appointmentNumber: 'APT-0002', status: 'SCHEDULED' })],
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'TECHNICIAN_ASSIGNED', customerName: 'Jane Doe' })],
       total: 1,
       page: 1,
       limit: 20,
     });
     renderPage();
-    await screen.findByText('APT-0002');
+    await screen.findByText('APT-0001');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Assign' }));
-    const heading = await screen.findByRole('heading', { name: /Assign technician/ });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const heading = await screen.findByRole('heading', { name: /Edit — APT-0001/ });
+    const modal = within(heading.closest('.max-w-lg') as HTMLElement);
+    expect(modal.getByLabelText('Customer name', { exact: false })).toHaveValue('Jane Doe');
+
+    fireEvent.change(modal.getByLabelText('Problem description', { exact: false }), { target: { value: 'Updated description' } });
+    fireEvent.click(modal.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(updateAppointment)).toHaveBeenCalledWith(
+        'appt-1',
+        expect.objectContaining({ problemDescription: 'Updated description' }),
+      ),
+    );
+    expect(vi.mocked(assignTechnician)).not.toHaveBeenCalled();
+  });
+
+  it('reassigns via a newly-picked grid slot as a second call, awaited after the field update', async () => {
+    vi.mocked(updateAppointment).mockResolvedValue(makeAppointment({ id: 'appt-1' }));
+    vi.mocked(assignTechnician).mockResolvedValue(makeAppointment({ id: 'appt-1' }));
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'TECHNICIAN_ASSIGNED', serviceCentreId: 'sc-1' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0001');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const heading = await screen.findByRole('heading', { name: /Edit — APT-0001/ });
     const modal = within(heading.closest('.max-w-lg') as HTMLElement);
 
-    await modal.findByText(/paste the technician's/);
-    expect(modal.getByLabelText('Technician user id')).toBeInTheDocument();
-    expect(modal.queryByTestId('name-picker-input')).not.toBeInTheDocument();
+    fireEvent.click(await modal.findByTestId('chip-tech-1-08:00'));
+    fireEvent.click(modal.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(assignTechnician)).toHaveBeenCalledWith('appt-1', 'tech-1', '2026-09-09T08:00:00.000Z'),
+    );
+    expect(vi.mocked(updateAppointment)).toHaveBeenCalled();
   });
 });
 
@@ -499,13 +640,19 @@ describe('SchedulePage - Group B capability gating', () => {
     await screen.findByText('APT-0001');
 
     expect(screen.queryByRole('button', { name: '+ New Appointment' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Assign' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark on-site' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark collected to WS' })).not.toBeInTheDocument();
   });
 
-  it('shows only Assign (not Confirm/Cancel/+ New Appointment) for a caller holding just SCHEDULE_ASSIGN_TECHNICIAN', async () => {
-    mockCapabilities(['SCHEDULE_ASSIGN_TECHNICIAN']);
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 2b) - Edit is now gated
+  // on SCHEDULE_VIEW_UPDATE (the same capability the invoice-number Add/Edit control
+  // already used), independent of SCHEDULE_CCE_MANAGE (Confirm/Cancel) - a role could hold
+  // either, both, or neither.
+  it('shows only Edit (not Confirm/Cancel/+ New Appointment) for a caller holding just SCHEDULE_VIEW_UPDATE', async () => {
+    mockCapabilities(['SCHEDULE_VIEW_UPDATE']);
     vi.mocked(listAppointments).mockResolvedValue({
       data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED', jobCard: null })],
       total: 1,
@@ -515,13 +662,13 @@ describe('SchedulePage - Group B capability gating', () => {
     renderPage();
     await screen.findByText('APT-0001');
 
-    expect(screen.getByRole('button', { name: 'Assign' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '+ New Appointment' })).not.toBeInTheDocument();
   });
 
-  it('shows Confirm, Cancel, and + New Appointment (not Assign) for a caller holding just SCHEDULE_CCE_MANAGE - the whole point being this is independent of role name, e.g. a role granted it only via Designation access', async () => {
+  it('shows Confirm, Cancel, and + New Appointment (not Edit) for a caller holding just SCHEDULE_CCE_MANAGE - the whole point being this is independent of role name, e.g. a role granted it only via Designation access', async () => {
     mockCapabilities(['SCHEDULE_CCE_MANAGE']);
     vi.mocked(listAppointments).mockResolvedValue({
       data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED', jobCard: null })],
@@ -535,7 +682,45 @@ describe('SchedulePage - Group B capability gating', () => {
     expect(screen.getByRole('button', { name: '+ New Appointment' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Assign' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, decision #2) - Edit is only
+  // ever offered pre-visit (SCHEDULED/CONFIRMED/TECHNICIAN_ASSIGNED); once real field work
+  // has started the row becomes read-only via View, even for a caller who otherwise has
+  // SCHEDULE_VIEW_UPDATE.
+  it('hides Edit for an ON_SITE row even with SCHEDULE_VIEW_UPDATE - editable window is pre-visit only', async () => {
+    mockCapabilities(['SCHEDULE_VIEW_UPDATE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-onsite', appointmentNumber: 'APT-0006', status: 'ON_SITE' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0006');
+
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
+  });
+
+  // Same SCHEDULE_FIELD_VISIT capability markOnSite already used - Mark collected to WS is
+  // the new peer action (decision #2/#3), not a separately-gated one.
+  it('shows Mark collected to WS for a TECHNICIAN_ASSIGNED row once SCHEDULE_FIELD_VISIT is granted, and calls the endpoint on click', async () => {
+    mockCapabilities(['SCHEDULE_FIELD_VISIT']);
+    vi.mocked(markAppointmentCollectedToWorkshop).mockResolvedValue(makeAppointment({ status: 'COLLECTED_TO_WS' }));
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-collect', appointmentNumber: 'APT-0007', status: 'TECHNICIAN_ASSIGNED' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0007');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark collected to WS' }));
+
+    await waitFor(() => expect(vi.mocked(markAppointmentCollectedToWorkshop)).toHaveBeenCalledWith('appt-collect'));
   });
 
   it('hides Complete for an ON_SITE row without SCHEDULE_FIELD_VISIT', async () => {

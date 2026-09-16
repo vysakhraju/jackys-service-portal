@@ -211,7 +211,8 @@ export class AppointmentsService {
     limit?: number;
     // #218 pre-mortem follow-up (2026-09-14): free-text search across appointmentNumber/
     // customerName/customerPhone, for JobCardsPage's "find the appointment" picker - see the
-    // ILIKE-escaping comment below for why the wildcard characters are escaped.
+    // ILIKE-escaping comment below for why the wildcard characters are escaped. Also matches
+    // serialNumber since 2026-09-16 Phase 2 (the New Appointment popup's customer lookup).
     q?: string;
   }): Promise<{ data: Appointment[]; total: number; page: number; limit: number }> {
     const query = this.appointmentRepository
@@ -219,6 +220,15 @@ export class AppointmentsService {
       .leftJoinAndSelect('apt.serviceCentre', 'sc')
       .leftJoinAndSelect('apt.technician', 'tech')
       .leftJoinAndSelect('apt.createdBy', 'createdBy')
+      // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2): apt.city/apt.applianceModel
+      // are declared `eager: true` on the entity, but TypeORM's eager loading only applies to
+      // repository find()/findOne() calls, NOT QueryBuilder - a real gap this findAll() (which
+      // has always used createQueryBuilder for its filters) would otherwise hit silently,
+      // coming back with `city`/`applianceModel` always undefined even though `cityId`/
+      // `applianceModelId` are plain columns and would still be present. Explicit join, same
+      // as every other relation this list already needs.
+      .leftJoinAndSelect('apt.city', 'city')
+      .leftJoinAndSelect('apt.applianceModel', 'am')
       // Partial select (id + jobCardNumber only, not the full Job Card) so the schedule
       // list can know whether an appointment is already "fulfilled" - see cancel()'s
       // guard - without hydrating the whole nested Job Card into every list row.
@@ -270,8 +280,12 @@ export class AppointmentsService {
       // the match. Escaping them plus the explicit ESCAPE clause keeps the search literal.
       const escaped = trimmedQ.replace(/[\\%_]/g, (c) => `\\${c}`);
       const like = `%${escaped}%`;
+      // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2): also matches
+      // serialNumber, so the New Appointment popup's customer-lookup search (req. 1b -
+      // "name / phone / serial number") can reuse this one endpoint instead of a
+      // purpose-built lookup route. Same escaping, same ESCAPE clause.
       query.andWhere(
-        "(apt.appointmentNumber ILIKE :q ESCAPE '\\' OR apt.customerName ILIKE :q ESCAPE '\\' OR apt.customerPhone ILIKE :q ESCAPE '\\')",
+        "(apt.appointmentNumber ILIKE :q ESCAPE '\\' OR apt.customerName ILIKE :q ESCAPE '\\' OR apt.customerPhone ILIKE :q ESCAPE '\\' OR apt.serialNumber ILIKE :q ESCAPE '\\')",
         { q: like },
       );
     }
@@ -410,7 +424,17 @@ export class AppointmentsService {
   async cancel(id: string, reason: string, userId: string, req?: any): Promise<Appointment> {
     const appointment = await this.findById(id);
 
-    if ([AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED].includes(appointment.status)) {
+    // Idempotent (Appointment/Mobile/Job Card overhaul, 2026-09-16 Phase 1, decision #2):
+    // a duplicate cancel - e.g. mobile's offline queue re-firing a request that already
+    // landed once connectivity returns, or a CCE's manual override racing the same mobile
+    // request - must be a safe no-op, not an error. COMPLETED still hard-blocks below:
+    // that's a genuine conflicting state (the job already finished), not a duplicate
+    // request, so it stays an error.
+    if (appointment.status === AppointmentStatus.CANCELLED) {
+      return appointment;
+    }
+
+    if (appointment.status === AppointmentStatus.COMPLETED) {
       throw new BadRequestException(`Cannot cancel appointment with status ${appointment.status}`);
     }
 
@@ -730,6 +754,25 @@ export class AppointmentsService {
   async confirmAppointment(id: string, userId: string, req?: any): Promise<Appointment> {
     const appointment = await this.findById(id);
 
+    // Idempotent, and now a manual-override action rather than a hard precondition
+    // (Appointment/Mobile/Job Card overhaul, 2026-09-16 Phase 1, decisions #1/#2): a
+    // technician no longer needs a CCE confirm before tapping Onsite on mobile (see
+    // markOnSite below, already unblocked by TECHNICIAN_ASSIGNED alone), so this endpoint
+    // is now the "manual override" a CCE can click if mobile's own status genuinely can't
+    // reach the server. Any status at or past CONFIRMED is treated as already-confirmed,
+    // a safe no-op rather than an error, so a late-arriving duplicate can never conflict
+    // with a CCE's manual click (or vice versa).
+    const alreadyConfirmedOrLater = [
+      AppointmentStatus.CONFIRMED,
+      AppointmentStatus.TECHNICIAN_ASSIGNED,
+      AppointmentStatus.ON_SITE,
+      AppointmentStatus.COLLECTED_TO_WS,
+      AppointmentStatus.COMPLETED,
+    ];
+    if (alreadyConfirmedOrLater.includes(appointment.status)) {
+      return appointment;
+    }
+
     if (appointment.status !== AppointmentStatus.SCHEDULED) {
       throw new BadRequestException(`Can only confirm scheduled appointments`);
     }
@@ -753,6 +796,22 @@ export class AppointmentsService {
   async markOnSite(id: string, userId: string, req?: any): Promise<Appointment> {
     const appointment = await this.findById(id);
 
+    // Idempotent (Appointment/Mobile/Job Card overhaul, 2026-09-16 Phase 1, decision #2):
+    // a late-arriving duplicate from mobile's offline queue, or a race with a CCE's manual
+    // override, must be a safe no-op once already on-site or further along.
+    if (
+      [
+        AppointmentStatus.ON_SITE,
+        AppointmentStatus.COLLECTED_TO_WS,
+        AppointmentStatus.COMPLETED,
+      ].includes(appointment.status)
+    ) {
+      return appointment;
+    }
+
+    // Decision #1: no CCE-confirm precondition for the mobile Onsite tap - TECHNICIAN_
+    // ASSIGNED alone is already enough here (CONFIRMED remains accepted too, since the
+    // manual-override path above can still move an appointment there first).
     if (appointment.status !== AppointmentStatus.CONFIRMED && appointment.status !== AppointmentStatus.TECHNICIAN_ASSIGNED) {
       throw new BadRequestException(`Can only mark on-site for confirmed/assigned appointments`);
     }
@@ -768,6 +827,48 @@ export class AppointmentsService {
       id,
       { status: appointment.status, actualStartAt: appointment.actualStartAt },
       { status: AppointmentStatus.ON_SITE, actualStartAt: saved.actualStartAt },
+      req,
+    );
+
+    return this.findById(id);
+  }
+
+  // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 3d/3e: mobile's
+  // "Collection to WS" action. Deliberately transitions to COLLECTED_TO_WS, NOT
+  // COMPLETED - see AppointmentStatus's own doc comment for why (the pre-mortem's
+  // failure #3: COMPLETED would collide with cancel()'s "can't cancel once COMPLETED"
+  // rule and with completeFromJobCardCreation()'s own idempotency below). The web's
+  // "Mark Received" step (Phase 4) is what eventually moves this to COMPLETED, once a
+  // Job Card is created from the workshop-validated S/N. Same preconditions as
+  // markOnSite - either can happen from mobile once a technician is assigned, no
+  // CCE-confirm gate.
+  async markCollectedToWorkshop(id: string, userId: string, req?: any): Promise<Appointment> {
+    const appointment = await this.findById(id);
+
+    // Idempotent, same reasoning as markOnSite/cancel above.
+    if ([AppointmentStatus.COLLECTED_TO_WS, AppointmentStatus.COMPLETED].includes(appointment.status)) {
+      return appointment;
+    }
+
+    if (
+      appointment.status !== AppointmentStatus.CONFIRMED &&
+      appointment.status !== AppointmentStatus.TECHNICIAN_ASSIGNED &&
+      appointment.status !== AppointmentStatus.ON_SITE
+    ) {
+      throw new BadRequestException(`Can only mark collected-to-workshop for confirmed/assigned/on-site appointments`);
+    }
+
+    const oldStatus = appointment.status;
+    appointment.status = AppointmentStatus.COLLECTED_TO_WS;
+    const saved = await this.appointmentRepository.save(appointment);
+
+    await this.logAudit(
+      userId,
+      AuditAction.UPDATE,
+      'Appointment',
+      id,
+      { status: oldStatus },
+      { status: saved.status },
       req,
     );
 

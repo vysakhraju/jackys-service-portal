@@ -207,6 +207,20 @@ describe('AppointmentsService', () => {
       expect(result).toEqual({ data: [appointment()], total: 1, page: 2, limit: 10 });
     });
 
+    // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2): apt.city/apt.applianceModel
+    // are `eager: true` on the entity, but eager loading is silently ignored by QueryBuilder
+    // (only repository find()/findOne() honour it) - this list must join them explicitly or
+    // every row's `city`/`applianceModel` comes back undefined despite the eager flag.
+    it('explicitly joins city and applianceModel - entity-level eager: true does not apply to QueryBuilder', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({});
+
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('apt.city', 'city');
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('apt.applianceModel', 'am');
+    });
+
     it('defaults to page 1 / limit 20 with no filters applied', async () => {
       const qb = buildQb();
       appointmentRepository.createQueryBuilder.mockReturnValue(qb);
@@ -243,14 +257,14 @@ describe('AppointmentsService', () => {
     // which read as "broken" next to every other picker that does. This `q` filter is the
     // real fix - a true ILIKE search across appointment #, customer name, and phone - so it
     // behaves like every other converted picker.
-    it('q: ILIKE-searches appointment #, customer name, and phone together, wrapped in %...%', async () => {
+    it('q: ILIKE-searches appointment #, customer name, phone, and serial number together, wrapped in %...%', async () => {
       const qb = buildQb();
       appointmentRepository.createQueryBuilder.mockReturnValue(qb);
 
       await service.findAll({ q: 'APT-005' });
 
       expect(qb.andWhere).toHaveBeenCalledWith(
-        "(apt.appointmentNumber ILIKE :q ESCAPE '\\' OR apt.customerName ILIKE :q ESCAPE '\\' OR apt.customerPhone ILIKE :q ESCAPE '\\')",
+        "(apt.appointmentNumber ILIKE :q ESCAPE '\\' OR apt.customerName ILIKE :q ESCAPE '\\' OR apt.customerPhone ILIKE :q ESCAPE '\\' OR apt.serialNumber ILIKE :q ESCAPE '\\')",
         { q: '%APT-005%' },
       );
     });
@@ -478,10 +492,18 @@ describe('AppointmentsService', () => {
       await expect(service.cancel('apt-1', 'reason', 'user-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when the appointment is already cancelled', async () => {
-      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.CANCELLED }));
+    // Idempotent since the Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 1,
+    // decision #2): a duplicate cancel (e.g. mobile's offline queue re-firing, or a race
+    // with a CCE's manual override) is a safe no-op, not an error.
+    it('is a silent no-op when the appointment is already cancelled', async () => {
+      const already = appointment({ status: AppointmentStatus.CANCELLED });
+      appointmentRepository.findOne.mockResolvedValue(already);
 
-      await expect(service.cancel('apt-1', 'reason', 'user-1')).rejects.toThrow(BadRequestException);
+      const result = await service.cancel('apt-1', 'reason', 'user-1');
+
+      expect(result).toBe(already);
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
+      expect(auditLogRepository.create).not.toHaveBeenCalled();
     });
 
     // 2026-09-08 fix: once a Job Card exists for an appointment (created for any reason -
@@ -721,9 +743,29 @@ describe('AppointmentsService', () => {
       );
     });
 
-    it('confirmAppointment rejects a non-SCHEDULED appointment', async () => {
-      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.CONFIRMED }));
+    it('confirmAppointment rejects a non-SCHEDULED, non-already-confirmed appointment (e.g. cancelled)', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.CANCELLED }));
       await expect(service.confirmAppointment('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    // Idempotent + manual-override (Appointment/Mobile/Job Card overhaul, 2026-09-16
+    // Phase 1, decisions #1/#2): Confirm is no longer a hard precondition for the mobile
+    // Onsite tap, so a late confirm on an appointment that already moved on is a safe
+    // no-op rather than an error, for every status at or past CONFIRMED.
+    it.each([
+      AppointmentStatus.CONFIRMED,
+      AppointmentStatus.TECHNICIAN_ASSIGNED,
+      AppointmentStatus.ON_SITE,
+      AppointmentStatus.COLLECTED_TO_WS,
+      AppointmentStatus.COMPLETED,
+    ])('confirmAppointment is a silent no-op when already %s', async (status) => {
+      const already = appointment({ status });
+      appointmentRepository.findOne.mockResolvedValue(already);
+
+      const result = await service.confirmAppointment('apt-1', 'user-1');
+
+      expect(result).toBe(already);
+      expect(appointmentRepository.save).not.toHaveBeenCalled();
     });
 
     it('markOnSite moves CONFIRMED -> ON_SITE and stamps actualStartAt', async () => {
@@ -734,9 +776,77 @@ describe('AppointmentsService', () => {
       );
     });
 
+    // Decision #1: TECHNICIAN_ASSIGNED alone is enough for the mobile Onsite tap - no
+    // CCE-confirm gate. CONFIRMED (tested above) and TECHNICIAN_ASSIGNED both succeed.
+    it('markOnSite moves TECHNICIAN_ASSIGNED -> ON_SITE directly, without requiring a prior Confirm', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.TECHNICIAN_ASSIGNED }));
+      await service.markOnSite('apt-1', 'user-1');
+      expect(appointmentRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: AppointmentStatus.ON_SITE }),
+      );
+    });
+
     it('markOnSite rejects an appointment that is not confirmed/assigned', async () => {
       appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.SCHEDULED }));
       await expect(service.markOnSite('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    // Idempotent (decision #2): a late-arriving duplicate from mobile's offline queue, or
+    // a race with a CCE's manual override, must be a safe no-op once already on-site or
+    // further along.
+    it.each([AppointmentStatus.ON_SITE, AppointmentStatus.COLLECTED_TO_WS, AppointmentStatus.COMPLETED])(
+      'markOnSite is a silent no-op when already %s',
+      async (status) => {
+        const already = appointment({ status });
+        appointmentRepository.findOne.mockResolvedValue(already);
+
+        const result = await service.markOnSite('apt-1', 'user-1');
+
+        expect(result).toBe(already);
+        expect(appointmentRepository.save).not.toHaveBeenCalled();
+      },
+    );
+
+    // New mobile "Collection to WS" action (Appointment/Mobile/Job Card overhaul,
+    // 2026-09-16 Phase 1, req. 3d/3e). Deliberately a distinct status from COMPLETED -
+    // see AppointmentStatus's own doc comment (pre-mortem failure #3).
+    describe('markCollectedToWorkshop', () => {
+      it.each([AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED, AppointmentStatus.ON_SITE])(
+        'transitions %s -> COLLECTED_TO_WS',
+        async (status) => {
+          appointmentRepository.findOne.mockResolvedValue(appointment({ status }));
+
+          await service.markCollectedToWorkshop('apt-1', 'user-1');
+
+          expect(appointmentRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ status: AppointmentStatus.COLLECTED_TO_WS }),
+          );
+          expect(auditLogRepository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ action: AuditAction.UPDATE }),
+          );
+        },
+      );
+
+      it('rejects an appointment that is not confirmed/assigned/on-site (e.g. still just SCHEDULED)', async () => {
+        appointmentRepository.findOne.mockResolvedValue(appointment({ status: AppointmentStatus.SCHEDULED }));
+        await expect(service.markCollectedToWorkshop('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+      });
+
+      // Idempotent, same reasoning as markOnSite/cancel above - a duplicate mobile
+      // request or a race with the workshop's own "Mark Received" flow must be a
+      // safe no-op, never an error.
+      it.each([AppointmentStatus.COLLECTED_TO_WS, AppointmentStatus.COMPLETED])(
+        'is a silent no-op when already %s',
+        async (status) => {
+          const already = appointment({ status });
+          appointmentRepository.findOne.mockResolvedValue(already);
+
+          const result = await service.markCollectedToWorkshop('apt-1', 'user-1');
+
+          expect(result).toBe(already);
+          expect(appointmentRepository.save).not.toHaveBeenCalled();
+        },
+      );
     });
 
     it('completeAppointment moves ON_SITE -> COMPLETED and stamps actualEndAt', async () => {

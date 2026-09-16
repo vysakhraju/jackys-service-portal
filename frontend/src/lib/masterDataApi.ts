@@ -4,7 +4,13 @@
 // "list all component yield rows" route, so none is offered here either).
 import { api } from './api';
 import type {
+  ApplianceModel,
+  CancellationReason,
+  City,
   ComponentYieldMatrix,
+  CreateApplianceModelInput,
+  CreateCancellationReasonInput,
+  CreateCityInput,
   CreateComponentYieldInput,
   CreateFaultSymptomInput,
   CreateKpiRuleInput,
@@ -107,3 +113,31 @@ export const listYieldByModel = (modelId: string) =>
   api.get<ComponentYieldMatrix[]>(`${BASE}/component-yield/model/${encodeURIComponent(modelId)}`).then((r) => r.data);
 export const listYieldByCategory = (category: RecoveryCategoryValue) =>
   api.get<ComponentYieldMatrix[]>(`${BASE}/component-yield/category/${category}`).then((r) => r.data);
+
+// === City / Cancellation Reason / Appliance Model (full CRUD, Appointment/Mobile/Job
+// Card overhaul Phase 1) — same shape as Service Centre's own CRUD above: Create/Update
+// gated by MANAGE, List ungated (every screen that shows these dropdowns needs it, not
+// just admins), Delete is soft (isActive=false) and Super-Admin-only server-side. ===
+export const listCities = () => api.get<City[]>(`${BASE}/cities`).then((r) => r.data);
+export const createCity = (data: CreateCityInput) => api.post<City>(`${BASE}/cities`, data).then((r) => r.data);
+export const updateCity = (id: string, data: Partial<CreateCityInput>) =>
+  api.put<City>(`${BASE}/cities/${id}`, data).then((r) => r.data);
+export const deleteCity = (id: string) => api.delete(`${BASE}/cities/${id}`).then((r) => r.data);
+
+export const listCancellationReasons = () =>
+  api.get<CancellationReason[]>(`${BASE}/cancellation-reasons`).then((r) => r.data);
+export const createCancellationReason = (data: CreateCancellationReasonInput) =>
+  api.post<CancellationReason>(`${BASE}/cancellation-reasons`, data).then((r) => r.data);
+export const updateCancellationReason = (id: string, data: Partial<CreateCancellationReasonInput>) =>
+  api.put<CancellationReason>(`${BASE}/cancellation-reasons/${id}`, data).then((r) => r.data);
+export const deleteCancellationReason = (id: string) =>
+  api.delete(`${BASE}/cancellation-reasons/${id}`).then((r) => r.data);
+
+export const listApplianceModels = (brand?: string) =>
+  api.get<ApplianceModel[]>(`${BASE}/appliance-models`, { params: brand ? { brand } : {} }).then((r) => r.data);
+export const createApplianceModel = (data: CreateApplianceModelInput) =>
+  api.post<ApplianceModel>(`${BASE}/appliance-models`, data).then((r) => r.data);
+export const updateApplianceModel = (id: string, data: Partial<CreateApplianceModelInput>) =>
+  api.put<ApplianceModel>(`${BASE}/appliance-models/${id}`, data).then((r) => r.data);
+export const deleteApplianceModel = (id: string) =>
+  api.delete(`${BASE}/appliance-models/${id}`).then((r) => r.data);

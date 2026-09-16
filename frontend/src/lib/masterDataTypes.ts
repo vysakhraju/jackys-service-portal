@@ -295,3 +295,50 @@ export interface CreateComponentYieldInput {
   convertedSparePartCode?: string;
   isActive?: boolean;
 }
+
+// === City / Cancellation Reason / Appliance Model (Appointment/Mobile/Job Card
+// overhaul, Phase 1 backend / Phase 2 frontend, 2026-09-16) — mirrors
+// src/master-data/entities/city.entity.ts, cancellation-reason.entity.ts,
+// appliance-model.entity.ts, and their create-*.dto.ts pairs exactly. ===
+export interface City {
+  id: string;
+  name: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateCityInput {
+  name: string;
+  isActive?: boolean;
+}
+
+export interface CancellationReason {
+  id: string;
+  label: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateCancellationReasonInput {
+  label: string;
+  isActive?: boolean;
+}
+
+export interface ApplianceModel {
+  id: string;
+  brand: string;
+  model: string;
+  description: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateApplianceModelInput {
+  brand: string;
+  model: string;
+  description?: string;
+  isActive?: boolean;
+}

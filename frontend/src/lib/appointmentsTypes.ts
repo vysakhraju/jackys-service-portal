@@ -10,12 +10,28 @@ export const APPOINTMENT_STATUSES = [
   'CONFIRMED',
   'TECHNICIAN_ASSIGNED',
   'ON_SITE',
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 1) - mobile's "Collection to
+  // WS" action lands here, NOT COMPLETED (see AppointmentStatus's own backend doc comment
+  // for why). Only reachable server-side today via the web's manual-override action below
+  // (mobile itself doesn't build this until Phase 3) or the Phase-1 API directly.
+  'COLLECTED_TO_WS',
   'COMPLETED',
   'CANCELLED',
   'NO_SHOW',
   'RESCHEDULED',
 ] as const;
 export type AppointmentStatusValue = (typeof APPOINTMENT_STATUSES)[number];
+
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 1) - orthogonal to
+// AppointmentTypeValue (coverage: Warranty/AMC/etc), mirrors the new JobType enum on the
+// backend entity. Defaults to REPAIR (the DB column default) when omitted.
+export const JOB_TYPES = ['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION', 'MAINTENANCE'] as const;
+export type JobTypeValue = (typeof JOB_TYPES)[number];
+
+// Informational only (decision #5 in the spec doc) - never used for VAT, which stays
+// Service Centre-driven. Mirrors the new AppointmentCountry enum on the backend entity.
+export const APPOINTMENT_COUNTRIES = ['UAE', 'KSA'] as const;
+export type AppointmentCountryValue = (typeof APPOINTMENT_COUNTRIES)[number];
 
 export const CUSTOMER_TYPES = ['B2C', 'B2B', 'B2B_SALES_CHANNEL'] as const;
 export type CustomerTypeValue = (typeof CUSTOMER_TYPES)[number];
@@ -38,10 +54,24 @@ export interface UserRef {
   email: string;
 }
 
+export interface ApplianceModelRef {
+  id: string;
+  brand: string;
+  model: string;
+}
+
+export interface CityRef {
+  id: string;
+  name: string;
+}
+
 export interface Appointment {
   id: string;
   appointmentNumber: string;
   type: AppointmentTypeValue;
+  // Phase 1 (2026-09-16) - not returned by every older row until re-saved, but the DB
+  // column default (REPAIR) means it's never actually null once read back.
+  jobType: JobTypeValue;
   status: AppointmentStatusValue;
   channel: AppointmentChannelValue;
   customerType: CustomerTypeValue;
@@ -51,11 +81,23 @@ export interface Appointment {
   customerAddress: string | null;
   customerLat: number | null;
   customerLng: number | null;
+  // Old free-text fields - kept for backward-read-compat on appointments created before
+  // Phase 2 (2026-09-16); the New Appointment popup now writes cityId/country/
+  // applianceModelId below instead. Still read here so an old row's own values show up if
+  // its new FK fields were never set.
   customerCity: string | null;
   customerCountry: string | null;
   customerVatNumber: string | null;
   brand: string | null;
   modelNumber: string | null;
+  // Phase 1/2 (2026-09-16) - new FK fields, eager-loaded by the backend entity. Nullable:
+  // an appointment created before Phase 2, or one where the CCE didn't pick a City/model
+  // from the master, has neither.
+  cityId: string | null;
+  city?: CityRef | null;
+  country: AppointmentCountryValue;
+  applianceModelId: string | null;
+  applianceModel?: ApplianceModelRef | null;
   serialNumber: string | null;
   purchaseDate: string | null;
   invoiceNumber: string | null;
@@ -89,6 +131,7 @@ export interface Appointment {
 // Matches CreateAppointmentDto exactly - every optional field here is optional there too.
 export interface CreateAppointmentInput {
   type: AppointmentTypeValue;
+  jobType?: JobTypeValue;
   channel?: AppointmentChannelValue;
   customerType: CustomerTypeValue;
   customerName: string;
@@ -97,11 +140,18 @@ export interface CreateAppointmentInput {
   customerAddress?: string;
   customerLat?: number;
   customerLng?: number;
+  // Superseded by cityId below for anything the New Appointment popup writes from Phase 2
+  // onward - still accepted by the backend for old-style callers, but this frontend no
+  // longer sends it.
   customerCity?: string;
   customerCountry?: string;
   customerVatNumber?: string;
+  cityId?: string;
+  country?: AppointmentCountryValue;
+  // Superseded by applianceModelId below, same reasoning as customerCity.
   brand?: string;
   modelNumber?: string;
+  applianceModelId?: string;
   serialNumber?: string;
   purchaseDate?: string;
   invoiceNumber?: string;

@@ -8,6 +8,7 @@ import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { NamePicker } from '../../components/pickers/NamePicker';
+import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { DashboardStatsWidget } from './DashboardStatsWidget';
 import { SchedulingGridPicker, type SchedulingSelection } from './SchedulingGrid';
 import {
@@ -19,25 +20,32 @@ import {
   deleteAppointment,
   getVisit,
   listAppointments,
+  markAppointmentCollectedToWorkshop,
   markAppointmentOnSite,
   resolveMapLink,
+  searchAppointments,
   updateAppointment,
 } from '../../lib/appointmentsApi';
 import {
   APPOINTMENT_CHANNELS,
+  APPOINTMENT_COUNTRIES,
   APPOINTMENT_STATUSES,
   APPOINTMENT_TYPES,
   CUSTOMER_TYPES,
+  JOB_TYPES,
   type Appointment,
   type AppointmentStatusValue,
   type CreateAppointmentInput,
 } from '../../lib/appointmentsTypes';
-import { listServiceCentres } from '../../lib/masterDataApi';
+import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 
 type FormValues = {
   type: string;
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2) - orthogonal to `type`
+  // (coverage). Defaults to REPAIR.
+  jobType: string;
   channel: string;
   customerType: string;
   customerName: string;
@@ -51,11 +59,15 @@ type FormValues = {
   // happens once, explicitly, at submit time (onSubmit below) instead.
   customerLat: string;
   customerLng: string;
-  customerCity: string;
-  customerCountry: string;
+  // Phase 2 - City/Country dropdowns replace the old free-text customerCity/customerCountry
+  // inputs for anything created or edited from this popup going forward (see cityId/country
+  // on CreateAppointmentInput). Old appointments' string values still display read-only in
+  // ViewAppointmentModal if their new FK fields were never set.
+  cityId: string;
+  country: string;
   customerVatNumber: string;
-  brand: string;
-  modelNumber: string;
+  // Phase 2 - Appliance Model master replaces the old free-text brand/modelNumber inputs.
+  applianceModelId: string;
   serialNumber: string;
   purchaseDate: string;
   invoiceNumber: string;
@@ -66,6 +78,7 @@ type FormValues = {
 
 const EMPTY_FORM: FormValues = {
   type: 'WARRANTY',
+  jobType: 'REPAIR',
   channel: 'PHONE',
   customerType: 'B2C',
   customerName: '',
@@ -74,11 +87,10 @@ const EMPTY_FORM: FormValues = {
   customerAddress: '',
   customerLat: '',
   customerLng: '',
-  customerCity: '',
-  customerCountry: '',
+  cityId: '',
+  country: 'UAE',
   customerVatNumber: '',
-  brand: '',
-  modelNumber: '',
+  applianceModelId: '',
   serialNumber: '',
   purchaseDate: '',
   invoiceNumber: '',
@@ -107,7 +119,8 @@ function todayIsoDate(): string {
 
 // Mirrors the exact status-transition guards in AppointmentsService, so we don't render a
 // button that the backend will just 400 - see confirmAppointment/markOnSite/
-// completeAppointment/assignTechnician for the source of these checks.
+// completeAppointment/assignTechnician/markCollectedToWorkshop for the source of these
+// checks.
 //
 // Frontend Phase 10 (AMC Management) pre-mortem finding #1: an AMC-type appointment (a
 // generated PM visit) used to show this same generic "Complete" button, which calls PUT
@@ -121,15 +134,32 @@ function todayIsoDate(): string {
 // the first place.
 // 2026-09-14 (Group B): each flag now ALSO requires the exact backend capability that
 // guards its action (AppointmentsController: assign-technician -> SCHEDULE_ASSIGN_TECHNICIAN,
-// confirm/cancel -> SCHEDULE_CCE_MANAGE, on-site/complete -> SCHEDULE_FIELD_VISIT) - these
-// buttons used to render for every logged-in user regardless of capability, only 403ing on
-// click.
+// confirm/cancel -> SCHEDULE_CCE_MANAGE, on-site/complete/collected-to-ws -> SCHEDULE_FIELD_VISIT)
+// - these buttons used to render for every logged-in user regardless of capability, only
+// 403ing on click.
+//
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, decision #2/req. 2b/2c):
+// - `canAssign` is gone as a standalone row action - a technician is now (re)assigned from
+//   inside the Edit popup's own scheduling grid, not a repeated separate row button.
+// - `canConfirm`/`canMarkOnSite`/`canMarkCollectedToWorkshop` no longer gate on a strict
+//   linear order (there's no CCE-confirm precondition for Onsite any more) - they're each
+//   independently available across the same span of "still active, not yet on a terminal
+//   or completed path" statuses. Every one of the endpoints behind them is idempotent
+//   server-side, so clicking one that's already effectively true is a safe no-op - this is
+//   the "manual override" the spec calls for, built as plain always-safe buttons rather than
+//   one button that has to guess which state you meant.
+// - `canEdit` mirrors the backend's own read/write appointment.entity.ts intent: editable
+//   up to TECHNICIAN_ASSIGNED (nothing real has happened in the field yet), read-only once
+//   a visit or a workshop collection is actually underway.
 function availableActions(status: AppointmentStatusValue, type: string, hasJobCard: boolean, has: (key: string) => boolean) {
   const isAmc = type === 'AMC';
+  const preVisit = status === 'SCHEDULED' || status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED';
+  const activeNotYetOnSite = status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED';
   return {
-    canAssign: has('SCHEDULE_ASSIGN_TECHNICIAN') && (status === 'SCHEDULED' || status === 'CONFIRMED'),
+    canEdit: has('SCHEDULE_VIEW_UPDATE') && preVisit,
     canConfirm: has('SCHEDULE_CCE_MANAGE') && status === 'SCHEDULED',
-    canMarkOnSite: has('SCHEDULE_FIELD_VISIT') && (status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED'),
+    canMarkOnSite: has('SCHEDULE_FIELD_VISIT') && activeNotYetOnSite,
+    canMarkCollectedToWorkshop: has('SCHEDULE_FIELD_VISIT') && (activeNotYetOnSite || status === 'ON_SITE'),
     canComplete: has('SCHEDULE_FIELD_VISIT') && status === 'ON_SITE' && !isAmc,
     canCompleteAmcVisit: status === 'ON_SITE' && isAmc,
     // Once a Job Card exists the appointment is fulfilled - see
@@ -161,7 +191,23 @@ export function SchedulePage() {
   const serviceCentreOptions = (serviceCentres ?? []).map((sc) => ({ id: sc.id, name: sc.name }));
   const technicianOptions = useTechnicianOptions();
 
-  const { data, isLoading, error } = useQuery({
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 1) - the two new master
+  // data sources the New Appointment popup's City/Brand+Model dropdowns are built from.
+  const { data: cities } = useQuery({ queryKey: ['master-data', 'cities'], queryFn: () => listCities() });
+  const cityOptions = (cities ?? []).map((c) => ({ id: c.id, name: c.name }));
+  const { data: applianceModels } = useQuery({ queryKey: ['master-data', 'appliance-models'], queryFn: () => listApplianceModels() });
+  const applianceModelOptions = (applianceModels ?? []).map((m) => ({
+    id: m.id,
+    name: `${m.brand} — ${m.model}`,
+  }));
+
+  const {
+    data,
+    isLoading,
+    error,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['appointments', filters, page],
     queryFn: () =>
       listAppointments({
@@ -175,14 +221,22 @@ export function SchedulePage() {
         page,
         limit,
       }),
+    // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 4) - same lightweight
+    // polling pattern already used by the Workshop screen (15s) and mobile job-card
+    // polling, rather than a new WebSocket gateway. Refetches in the background - React
+    // Query only swaps in new data once it lands, so an open modal isn't disturbed by it.
+    refetchInterval: 20000,
   });
 
   const [createOpen, setCreateOpen] = useState(false);
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 2b) - the same popup
+  // now doubles as Edit: null means "creating new", an Appointment means "editing this
+  // one", pre-filled by openEdit() below. Assign is no longer a separate row action/modal -
+  // (re)assigning a technician happens from inside this popup's own scheduling grid.
+  const [editTarget, setEditTarget] = useState<Appointment | null>(null);
   const [mutationError, setMutationError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<unknown>(null);
 
-  const [assignTarget, setAssignTarget] = useState<Appointment | null>(null);
-  const [assignTechId, setAssignTechId] = useState('');
   const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [viewTarget, setViewTarget] = useState<Appointment | null>(null);
@@ -208,6 +262,15 @@ export function SchedulePage() {
   // purely to keep its `required` validation active - the documented RHF pattern for wiring
   // a non-native controlled input into the form without <Controller>.
   register('serviceCentreId', { required: 'Required' });
+  // Phase 2 (2026-09-16) - same NamePicker-via-setValue()/watch() pattern as
+  // serviceCentreId above, but both optional so no register()/required needed.
+  const watchedCityId = watch('cityId');
+  const watchedApplianceModelId = watch('applianceModelId');
+
+  // Phase 2 (2026-09-16, req. 1b) - which past appointment (if any) the customer-lookup
+  // search below was filled in from, so a "view repair history" link can show once
+  // something's been picked. Cleared whenever the popup opens fresh.
+  const [customerLookupHistory, setCustomerLookupHistory] = useState<Appointment | null>(null);
 
   const [mapLinkInput, setMapLinkInput] = useState('');
   const resolveMapLinkMutation = useMutation({
@@ -222,23 +285,35 @@ export function SchedulePage() {
     queryClient.invalidateQueries({ queryKey: ['appointments'] });
   }
 
+  function closeForm() {
+    setCreateOpen(false);
+    setEditTarget(null);
+    setCustomerLookupHistory(null);
+  }
+
   const createMutation = useMutation({
     mutationFn: (data: CreateAppointmentInput) => createAppointment(data),
     onSuccess: () => {
       invalidate();
-      setCreateOpen(false);
+      closeForm();
     },
     onError: (err) => setMutationError(err),
   });
 
-  const assignMutation = useMutation({
-    mutationFn: ({ id, technicianId }: { id: string; technicianId: string }) => assignTechnician(id, technicianId),
-    onSuccess: () => {
-      invalidate();
-      setAssignTarget(null);
-      setAssignTechId('');
-    },
-    onError: (err) => setActionError(err),
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 2b) - Edit is a real
+  // update, unlike the removed standalone Assign modal. Reassigning the technician/time
+  // from inside this same popup (below) is a SEPARATE call to the existing
+  // assignTechnician endpoint, awaited right after this one in onSubmit - the backend has
+  // no single "update everything including scheduling" endpoint, and there's no value in
+  // inventing one just for this form.
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<CreateAppointmentInput> }) => updateAppointment(id, data),
+    onError: (err) => setMutationError(err),
+  });
+  const reassignMutation = useMutation({
+    mutationFn: ({ id, technicianId, scheduledAt }: { id: string; technicianId: string; scheduledAt: string }) =>
+      assignTechnician(id, technicianId, scheduledAt),
+    onError: (err) => setMutationError(err),
   });
 
   const cancelMutation = useMutation({
@@ -261,6 +336,11 @@ export function SchedulePage() {
     onSuccess: invalidate,
     onError: (err) => setActionError(err),
   });
+  const collectedToWorkshopMutation = useMutation({
+    mutationFn: (id: string) => markAppointmentCollectedToWorkshop(id),
+    onSuccess: invalidate,
+    onError: (err) => setActionError(err),
+  });
   const completeMutation = useMutation({
     mutationFn: (id: string) => completeAppointment(id),
     onSuccess: invalidate,
@@ -274,6 +354,8 @@ export function SchedulePage() {
 
   function openCreate() {
     setMutationError(null);
+    setEditTarget(null);
+    setCustomerLookupHistory(null);
     reset(EMPTY_FORM);
     setMapLinkInput('');
     resolveMapLinkMutation.reset();
@@ -282,13 +364,50 @@ export function SchedulePage() {
     setCreateOpen(true);
   }
 
-  function onSubmit(values: FormValues) {
-    // scheduledAt/technicianId/estimatedDurationMinutes all come from one tap on the
-    // scheduling grid now, not three separate fields - see gridSelection's own doc comment.
-    // The Create button stays disabled until a chip is picked (below), so gridSelection is
-    // never null here in practice.
-    const payload: CreateAppointmentInput = {
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 2b) - opens the same
+  // popup pre-filled from an existing appointment. Only rendered from row actions when
+  // availableActions().canEdit is true (pre-visit statuses), so the backend's own
+  // read-only-once-visited intent is never actually tested here client-side - this is
+  // convenience, not the enforcement boundary.
+  function openEdit(appointment: Appointment) {
+    setMutationError(null);
+    setEditTarget(appointment);
+    setCustomerLookupHistory(null);
+    reset({
+      type: appointment.type,
+      jobType: appointment.jobType || 'REPAIR',
+      channel: appointment.channel,
+      customerType: appointment.customerType,
+      customerName: appointment.customerName,
+      customerPhone: appointment.customerPhone,
+      customerEmail: appointment.customerEmail ?? '',
+      customerAddress: appointment.customerAddress ?? '',
+      customerLat: appointment.customerLat != null ? String(appointment.customerLat) : '',
+      customerLng: appointment.customerLng != null ? String(appointment.customerLng) : '',
+      cityId: appointment.cityId ?? '',
+      country: appointment.country || 'UAE',
+      customerVatNumber: appointment.customerVatNumber ?? '',
+      applianceModelId: appointment.applianceModelId ?? '',
+      serialNumber: appointment.serialNumber ?? '',
+      purchaseDate: appointment.purchaseDate ? appointment.purchaseDate.slice(0, 10) : '',
+      invoiceNumber: appointment.invoiceNumber ?? '',
+      problemDescription: appointment.problemDescription ?? '',
+      serviceCentreId: appointment.serviceCentreId,
+      notes: appointment.notes ?? '',
+    });
+    setMapLinkInput('');
+    resolveMapLinkMutation.reset();
+    setGridDate(appointment.scheduledAt.slice(0, 10));
+    // Left null deliberately - "no change" for the technician/time, distinct from create
+    // where a slot pick is mandatory. Only set if the CCE actually taps a new slot below.
+    setGridSelection(null);
+    setCreateOpen(true);
+  }
+
+  async function onSubmit(values: FormValues) {
+    const sharedFields = {
       type: values.type as CreateAppointmentInput['type'],
+      jobType: values.jobType as CreateAppointmentInput['jobType'],
       channel: values.channel as CreateAppointmentInput['channel'],
       customerType: values.customerType as CreateAppointmentInput['customerType'],
       customerName: values.customerName,
@@ -297,20 +416,52 @@ export function SchedulePage() {
       customerAddress: values.customerAddress || undefined,
       customerLat: parseOptionalNumber(values.customerLat),
       customerLng: parseOptionalNumber(values.customerLng),
-      customerCity: values.customerCity || undefined,
-      customerCountry: values.customerCountry || undefined,
+      cityId: values.cityId || undefined,
+      country: (values.country || undefined) as CreateAppointmentInput['country'],
       customerVatNumber: values.customerVatNumber || undefined,
-      brand: values.brand || undefined,
-      modelNumber: values.modelNumber || undefined,
+      applianceModelId: values.applianceModelId || undefined,
       serialNumber: values.serialNumber || undefined,
       purchaseDate: values.purchaseDate || undefined,
       invoiceNumber: values.invoiceNumber || undefined,
       problemDescription: values.problemDescription || undefined,
+      notes: values.notes || undefined,
+    };
+
+    if (editTarget) {
+      // Edit mode (req. 2b): the popup's own scheduling grid is optional here - a blank
+      // gridSelection means "leave the technician/time as they are", so this is a plain
+      // field update. Only when the CCE actually taps a new slot does a second call
+      // (assignTechnician, same endpoint the removed standalone Assign modal used) also
+      // run, awaited right after so a failed reassignment surfaces without silently
+      // leaving the field edits half-applied.
+      try {
+        await updateMutation.mutateAsync({ id: editTarget.id, data: { ...sharedFields, serviceCentreId: values.serviceCentreId } });
+        if (gridSelection) {
+          await reassignMutation.mutateAsync({
+            id: editTarget.id,
+            technicianId: gridSelection.technicianId,
+            scheduledAt: gridSelection.scheduledAt,
+          });
+        }
+        invalidate();
+        closeForm();
+      } catch {
+        // onError on each mutation already set mutationError for display - nothing further
+        // to do here, and closeForm() must NOT run so the CCE can see the error and retry.
+      }
+      return;
+    }
+
+    // Create mode: scheduledAt/technicianId/estimatedDurationMinutes all come from one tap
+    // on the scheduling grid, not three separate fields - see gridSelection's own doc
+    // comment. The Create button stays disabled until a chip is picked (below), so
+    // gridSelection is never null here in practice.
+    const payload: CreateAppointmentInput = {
+      ...sharedFields,
       scheduledAt: gridSelection?.scheduledAt ?? '',
       estimatedDurationMinutes: gridSelection?.estimatedDurationMinutes,
       serviceCentreId: values.serviceCentreId,
       technicianId: gridSelection?.technicianId,
-      notes: values.notes || undefined,
     };
     createMutation.mutate(payload);
   }
@@ -324,6 +475,10 @@ export function SchedulePage() {
       </div>
     ) },
     { key: 'type', label: 'Type', render: (r) => r.type.replaceAll('_', ' ') },
+    // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2) - orthogonal to Type
+    // (coverage) above; jobType falls back to REPAIR for any row read before Phase 1
+    // shipped, matching the DB column's own default.
+    { key: 'jobType', label: 'Job Type', render: (r) => (r.jobType || 'REPAIR').replaceAll('_', ' ') },
     { key: 'channel', label: 'Channel', render: (r) => <span className="text-xs text-slate-600">{r.channel.replaceAll('_', ' ')}</span> },
     { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
     { key: 'centre', label: 'Service Centre', render: (r) => r.serviceCentre?.name ?? r.serviceCentreId },
@@ -340,14 +495,27 @@ export function SchedulePage() {
           Every filter below maps directly to a real <code>GET /appointments</code> query
           param - there's no client-side search, only what the backend actually accepts.
         </p>
-        {canManage && (
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 4) - manual
+              refresh alongside the 20s background poll above, for an immediate check
+              rather than waiting out the interval. */}
           <button
-            onClick={openCreate}
-            className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            title="Refresh now"
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
           >
-            + New Appointment
+            {isFetching ? 'Refreshing…' : '⟲ Refresh'}
           </button>
-        )}
+          {canManage && (
+            <button
+              onClick={openCreate}
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              + New Appointment
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4">
@@ -448,9 +616,9 @@ export function SchedulePage() {
               <button onClick={() => setViewTarget(row)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
                 View
               </button>
-              {a.canAssign && (
-                <button onClick={() => { setActionError(null); setAssignTarget(row); setAssignTechId(row.technicianId ?? ''); }} className="text-xs font-medium text-indigo-600 hover:text-indigo-800">
-                  Assign
+              {a.canEdit && (
+                <button onClick={() => { setActionError(null); openEdit(row); }} className="text-xs font-medium text-indigo-600 hover:text-indigo-800">
+                  Edit
                 </button>
               )}
               {a.canConfirm && (
@@ -458,9 +626,23 @@ export function SchedulePage() {
                   Confirm
                 </button>
               )}
+              {/* Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, decision #2) -
+                  no CCE-confirm precondition any more, and every one of these transition
+                  endpoints is idempotent server-side, so both buttons below double as the
+                  spec's "manual override": safe to click even if a mobile action for the
+                  same appointment is still in flight or already landed. */}
               {a.canMarkOnSite && (
                 <button onClick={() => { setActionError(null); onSiteMutation.mutate(row.id); }} className="text-xs font-medium text-amber-600 hover:text-amber-800">
                   Mark on-site
+                </button>
+              )}
+              {a.canMarkCollectedToWorkshop && (
+                <button
+                  onClick={() => { setActionError(null); collectedToWorkshopMutation.mutate(row.id); }}
+                  className="text-xs font-medium text-violet-600 hover:text-violet-800"
+                  title="For a walk-in, driver-collected, or field-technician-collected unit heading to the workshop"
+                >
+                  Mark collected to WS
                 </button>
               )}
               {a.canComplete && (
@@ -522,22 +704,83 @@ export function SchedulePage() {
         </div>
       )}
 
-      {/* --- Create --- */}
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="New Appointment">
+      {/* --- Create / Edit --- */}
+      <Modal open={createOpen} onClose={closeForm} title={editTarget ? `Edit — ${editTarget.appointmentNumber}` : 'New Appointment'}>
         <form onSubmit={handleSubmit(onSubmit)} className="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
           <ErrorNotice error={mutationError} />
+
+          {/* Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 1b) - customer
+              lookup by name/phone/serial number, reusing GET /appointments?q= (now also
+              ILIKE-matching serialNumber). Create-only: an edit already has its customer.
+              Selecting a result autofills the fields below and links into that
+              appointment's own repair history via Job Card Journey when one exists. */}
+          {!editTarget && (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+                Customer lookup (optional) — search by name, phone, or serial number
+              </p>
+              <AsyncSearchPicker
+                search={(query) => searchAppointments(query)}
+                getOptionLabel={(a) => `${a.customerName} ${a.customerPhone}`}
+                placeholder="Start typing a name, phone, or serial number…"
+                renderOption={(a) => (
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      <span className="font-medium text-slate-900">{a.customerName}</span>{' '}
+                      <span className="text-slate-400">{a.customerPhone}</span>
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      {a.appointmentNumber} · {new Date(a.scheduledAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                )}
+                emptyMessage="No past appointment matches that yet."
+                onSelect={(a) => {
+                  setValue('customerName', a.customerName);
+                  setValue('customerPhone', a.customerPhone);
+                  if (a.customerEmail) setValue('customerEmail', a.customerEmail);
+                  if (a.customerAddress) setValue('customerAddress', a.customerAddress);
+                  if (a.cityId) setValue('cityId', a.cityId);
+                  if (a.country) setValue('country', a.country);
+                  if (a.customerVatNumber) setValue('customerVatNumber', a.customerVatNumber);
+                  if (a.applianceModelId) setValue('applianceModelId', a.applianceModelId);
+                  if (a.serialNumber) setValue('serialNumber', a.serialNumber);
+                  setCustomerLookupHistory(a);
+                }}
+              />
+              {customerLookupHistory && (
+                <p className="mt-2 text-xs text-emerald-700">
+                  Filled in from {customerLookupHistory.appointmentNumber} ({new Date(customerLookupHistory.scheduledAt).toLocaleDateString()}).
+                  {customerLookupHistory.jobCard && (
+                    <>
+                      {' '}
+                      <Link to={`/job-cards/journey?jobCardId=${customerLookupHistory.jobCard.id}`} className="underline" target="_blank" rel="noreferrer">
+                        View repair history →
+                      </Link>
+                    </>
+                  )}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Type">
+            <Field label="Type" hint="Coverage - Warranty/AMC/etc">
               <select className={inputClass} {...register('type', { required: true })}>
                 {APPOINTMENT_TYPES.map((t) => <option key={t} value={t}>{t.replaceAll('_', ' ')}</option>)}
               </select>
             </Field>
-            <Field label="Customer type">
-              <select className={inputClass} {...register('customerType', { required: true })}>
-                {CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            <Field label="Job type" hint="What work is being done - independent of coverage">
+              <select className={inputClass} {...register('jobType', { required: true })}>
+                {JOB_TYPES.map((t) => <option key={t} value={t}>{t.replaceAll('_', ' ')}</option>)}
               </select>
             </Field>
           </div>
+          <Field label="Customer type">
+            <select className={inputClass} {...register('customerType', { required: true })}>
+              {CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </Field>
           <Field label="Channel" hint="How this request came in - Service Desk triage">
             <select className={inputClass} {...register('channel', { required: true })}>
               {APPOINTMENT_CHANNELS.map((c) => <option key={c} value={c}>{c.replaceAll('_', ' ')}</option>)}
@@ -600,23 +843,29 @@ export function SchedulePage() {
           </div>
           <div className="grid grid-cols-3 gap-4">
             <Field label="City (optional)">
-              <input className={inputClass} {...register('customerCity')} />
+              <NamePicker
+                value={watchedCityId || null}
+                options={cityOptions}
+                onChange={(id) => setValue('cityId', id ?? '')}
+              />
             </Field>
-            <Field label="Country (optional)">
-              <input className={inputClass} {...register('customerCountry')} />
+            <Field label="Country" hint="Informational only - VAT stays Service Centre-driven">
+              <select className={inputClass} {...register('country')}>
+                {APPOINTMENT_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
             </Field>
             <Field label="VAT number (optional)" hint="B2B only">
               <input className={inputClass} {...register('customerVatNumber')} />
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Brand (optional)">
-              <input className={inputClass} placeholder="Samsung" {...register('brand')} />
-            </Field>
-            <Field label="Model number (optional)">
-              <input className={inputClass} placeholder="WA80J5710" {...register('modelNumber')} />
-            </Field>
-          </div>
+          <Field label="Brand / Model (optional)" hint="Search by brand or model">
+            <NamePicker
+              value={watchedApplianceModelId || null}
+              options={applianceModelOptions}
+              onChange={(id) => setValue('applianceModelId', id ?? '')}
+              placeholder="Type a brand or model…"
+            />
+          </Field>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Serial number (optional)">
               <input className={inputClass} {...register('serialNumber')} />
@@ -643,7 +892,15 @@ export function SchedulePage() {
           </Field>
 
           <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Technician &amp; time</p>
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+              Technician &amp; time{editTarget ? ' (optional - only pick a slot to reassign)' : ''}
+            </p>
+            {editTarget && !gridSelection && (
+              <p className="mb-2 text-xs text-slate-500">
+                Currently {editTarget.technician ? `${editTarget.technician.firstName} ${editTarget.technician.lastName}` : 'unassigned'} ·{' '}
+                {new Date(editTarget.scheduledAt).toLocaleString()}. Pick a new slot below only if this needs to change.
+              </p>
+            )}
             <SchedulingGridPicker
               serviceCentreId={watchedServiceCentreId}
               date={gridDate}
@@ -654,9 +911,9 @@ export function SchedulePage() {
               <p className="mt-2 text-xs font-medium text-emerald-700">
                 {gridSelection.technicianName} · {new Date(gridSelection.scheduledAt).toLocaleString()} · {gridSelection.estimatedDurationMinutes} min
               </p>
-            ) : (
+            ) : !editTarget ? (
               <p className="mt-2 text-xs text-slate-400">Pick a slot above to set the technician and time.</p>
-            )}
+            ) : null}
           </div>
 
           <Field label="Notes (optional)">
@@ -664,62 +921,19 @@ export function SchedulePage() {
           </Field>
 
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={() => setCreateOpen(false)} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600">
+            <button type="button" onClick={closeForm} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600">
               Cancel
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || createMutation.isPending || !gridSelection}
-              title={!gridSelection ? 'Pick a technician + time slot on the grid above first' : undefined}
+              disabled={isSubmitting || createMutation.isPending || updateMutation.isPending || reassignMutation.isPending || (!editTarget && !gridSelection)}
+              title={!editTarget && !gridSelection ? 'Pick a technician + time slot on the grid above first' : undefined}
               className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
-              Create
+              {editTarget ? 'Save changes' : 'Create'}
             </button>
           </div>
         </form>
-      </Modal>
-
-      {/* --- Assign technician --- */}
-      <Modal open={!!assignTarget} onClose={() => setAssignTarget(null)} title={`Assign technician — ${assignTarget?.appointmentNumber ?? ''}`}>
-        {assignTarget && (
-          <div className="space-y-4">
-            <ErrorNotice error={actionError} />
-            {technicianOptions.accessible ? (
-              <Field label="Technician">
-                <NamePicker
-                  value={assignTechId || null}
-                  options={technicianOptions.options}
-                  loading={technicianOptions.loading}
-                  onChange={(id) => setAssignTechId(id ?? '')}
-                />
-              </Field>
-            ) : (
-              <>
-                <p className="text-sm text-slate-500">
-                  The technician name list needs Team Leader access - paste the technician's
-                  user id instead (from the seed script output, Section 4 of
-                  TESTING_GUIDE.md). The backend rejects anyone whose role isn't Technician
-                  Field/Workshop.
-                </p>
-                <Field label="Technician user id">
-                  <input className={inputClass} value={assignTechId} onChange={(e) => setAssignTechId(e.target.value)} />
-                </Field>
-              </>
-            )}
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setAssignTarget(null)} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600">
-                Cancel
-              </button>
-              <button
-                disabled={!assignTechId || assignMutation.isPending}
-                onClick={() => assignMutation.mutate({ id: assignTarget.id, technicianId: assignTechId })}
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-              >
-                Assign
-              </button>
-            </div>
-          </div>
-        )}
       </Modal>
 
       {/* --- Cancel --- */}
@@ -769,13 +983,20 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
           <DetailRow label="Status"><StatusBadge status={appointment.status} /></DetailRow>
           <DetailRow label="Type">{appointment.type.replaceAll('_', ' ')}</DetailRow>
+          <DetailRow label="Job type">{(appointment.jobType || 'REPAIR').replaceAll('_', ' ')}</DetailRow>
           <DetailRow label="Channel">{appointment.channel.replaceAll('_', ' ')}</DetailRow>
           <DetailRow label="Customer">{appointment.customerName} · {appointment.customerPhone}</DetailRow>
           <DetailRow label="Customer type">{appointment.customerType}</DetailRow>
+          <DetailRow label="City">{appointment.city?.name ?? appointment.customerCity ?? '—'}</DetailRow>
+          <DetailRow label="Country">{appointment.country ?? '—'}</DetailRow>
           <DetailRow label="Service centre">{appointment.serviceCentre?.name ?? appointment.serviceCentreId}</DetailRow>
           <DetailRow label="Technician">{appointment.technician ? `${appointment.technician.firstName} ${appointment.technician.lastName}` : 'Unassigned'}</DetailRow>
           <DetailRow label="Scheduled">{new Date(appointment.scheduledAt).toLocaleString()}</DetailRow>
-          <DetailRow label="Brand / model">{[appointment.brand, appointment.modelNumber].filter(Boolean).join(' / ') || '—'}</DetailRow>
+          <DetailRow label="Brand / model">
+            {appointment.applianceModel
+              ? `${appointment.applianceModel.brand} / ${appointment.applianceModel.model}`
+              : [appointment.brand, appointment.modelNumber].filter(Boolean).join(' / ') || '—'}
+          </DetailRow>
           <DetailRow label="Serial number">{appointment.serialNumber ?? '—'}</DetailRow>
           <DetailRow label="Invoice number"><InvoiceNumberField appointment={appointment} /></DetailRow>
           <DetailRow label="Service address coordinates">

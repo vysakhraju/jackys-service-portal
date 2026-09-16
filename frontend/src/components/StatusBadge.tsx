@@ -9,6 +9,10 @@ export const COLOR_BY_STATUS: Record<string, string> = {
   CONFIRMED: 'bg-sky-50 text-sky-700',
   TECHNICIAN_ASSIGNED: 'bg-indigo-50 text-indigo-700',
   ON_SITE: 'bg-amber-50 text-amber-700',
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 1) - mobile's "Collection to
+  // WS" lands here, distinct from ON_SITE/COMPLETED so it reads as its own real state
+  // (awaiting the workshop's Mark Received step, Phase 4) rather than looking finished.
+  COLLECTED_TO_WS: 'bg-violet-50 text-violet-700',
   COMPLETED: 'bg-emerald-50 text-emerald-700',
   CANCELLED: 'bg-red-50 text-red-600',
   NO_SHOW: 'bg-red-50 text-red-600',

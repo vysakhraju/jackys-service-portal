@@ -87,6 +87,13 @@ export const markAppointmentOnSite = (id: string) => api.put<Appointment>(`${BAS
 
 export const completeAppointment = (id: string) => api.put<Appointment>(`${BASE}/${id}/complete`).then((r) => r.data);
 
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 1 backend / Phase 2 frontend) -
+// mobile's "Collection to WS" action, also usable from the web as CCE's manual override
+// for a walk-in/driver-collected unit. Idempotent server-side (see
+// AppointmentsService.markCollectedToWorkshop's doc comment).
+export const markAppointmentCollectedToWorkshop = (id: string) =>
+  api.put<Appointment>(`${BASE}/${id}/collected-to-ws`).then((r) => r.data);
+
 export const deleteAppointment = (id: string) => api.delete(`${BASE}/${id}`).then((r) => r.data);
 
 // The user's own idea from the REDTRA360 review call: paste a Google Maps short link
