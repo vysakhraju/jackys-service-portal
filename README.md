@@ -430,6 +430,39 @@ npm run build    # Type-check + production build
 npm run preview  # Preview a production build locally
 ```
 
+## Git Commit & Push Workflow
+
+This repo keeps two branches — `main` and `master` — in sync. Normal flow after Claude
+stages and commits a batch of changes:
+
+```powershell
+git add <files>
+git commit -m "..."
+git push origin main
+git push origin master
+```
+
+**If `git push origin master` prints `Everything up-to-date` right after you pushed new
+commits to `main`** — that's not actually confirming master is current, it means your
+*local* `master` branch pointer never moved (the commit landed on `main`, not `master`),
+so the push had nothing new to send and remote `master` is still behind. Fix it with one
+command instead of switching branches:
+
+```powershell
+git push origin main:master
+```
+
+This pushes your local `main` branch's commit history directly onto remote `master`.
+It should fast-forward cleanly as long as the two branches were in sync before the
+commit that got stuck. Worth a quick sanity check afterward:
+
+```powershell
+git log --oneline -1 origin/main
+git log --oneline -1 origin/master
+```
+
+Both should print the same commit hash once they're back in sync.
+
 ## Environment Variables
 
 `.env` (repo root, gitignored — never committed) holds backend config. Key variables:
