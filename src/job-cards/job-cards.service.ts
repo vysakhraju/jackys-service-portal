@@ -11,6 +11,7 @@ import { getJobCardProgressFields, JobCardProgressFields } from './job-card-prog
 import { AppointmentsService } from '../appointments/appointments.service';
 import { AppointmentStatus } from '../appointments/entities/appointment.entity';
 import { TechnicianService } from '../technician/technician.service';
+import { WorkshopIntakeService } from '../workshop-intake/workshop-intake.service';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
 import { ValidateSnDto } from './dto/validate-sn.dto';
 import { AssignSectionDto } from './dto/assign-section.dto';
@@ -46,6 +47,7 @@ export class JobCardsService {
     private userRepository: Repository<User>,
     private appointmentsService: AppointmentsService,
     private technicianService: TechnicianService,
+    private workshopIntakeService: WorkshopIntakeService,
   ) {}
 
   // A helper only makes sense while the job is actively being worked in the workshop -
@@ -241,29 +243,73 @@ export class JobCardsService {
     // appointment UUID baked into its message (it only ever sees an id, never the
     // human-readable number). We already have the loaded `appointment` here, so catch
     // and re-throw with `appointmentNumber` instead - same fix applied to the
-    // "already exists" ConflictException above. Also: a COLLECTED_TO_WS appointment
-    // (mobile's new action, no on-site visit ever happened) will always land here -
-    // that's expected until Phase 4's workshop-intake ("Mark Received") screen ships its
-    // own Job Card creation branch; this is just making the interim error message sane.
-    let visit;
-    try {
-      visit = await this.technicianService.getVisit(dto.appointmentId);
-    } catch (err) {
-      if (err instanceof NotFoundException) {
+    // "already exists" ConflictException above.
+    //
+    // Phase 4 (2026-09-16): a COLLECTED_TO_WS appointment was never visited on-site, so it
+    // has no TechnicianVisit row at all - reads from the workshop-entered WorkshopIntake
+    // record instead (captured via the web's "Mark Received" + S/N + fault/symptom flow,
+    // see WorkshopIntakeService). Every other status still reads from TechnicianVisit,
+    // completely unchanged.
+    let source: {
+      serialNumber: string;
+      brand: string | null;
+      warrantyStatus: WarrantyStatus;
+      warrantySupplier: string | null;
+      faultCode: string;
+      symptomCode: string;
+    };
+
+    if (appointment.status === AppointmentStatus.COLLECTED_TO_WS) {
+      const intake = await this.workshopIntakeService.getIntake(dto.appointmentId);
+      if (!intake) {
         throw new NotFoundException(
-          `No technician visit has been started for appointment ${appointment.appointmentNumber} yet. ` +
-            (appointment.status === AppointmentStatus.COLLECTED_TO_WS
-              ? 'This appointment was collected to workshop from the field, not visited on-site - it needs the workshop intake / "Mark Received" flow instead of Create Job Card (not built yet - Phase 4).'
-              : 'Call Start Visit from the mobile app first.'),
+          `This appointment (${appointment.appointmentNumber}) has not been marked received yet - use "Mark Received" on the workshop intake screen first.`,
         );
       }
-      throw err;
-    }
-    if (!visit.serialNumber || !visit.warrantyStatus || !visit.faultCode || !visit.symptomCode) {
-      throw new BadRequestException(
-        'Cannot create a Job Card: the field visit is not complete yet (serial number, warranty check, ' +
-          'and fault/symptom must all be captured by the technician first).',
-      );
+      if (!intake.serialNumber || !intake.warrantyStatus || !intake.faultCode || !intake.symptomCode) {
+        throw new BadRequestException(
+          `Cannot create a Job Card: workshop intake for ${appointment.appointmentNumber} is not complete yet ` +
+            '(serial number, warranty check, and fault/symptom must all be captured on the workshop intake screen first).',
+        );
+      }
+      // Built field-by-field (rather than `source = intake`) so TypeScript's narrowing from
+      // the truthiness check above actually applies - each `intake.x` read here is narrowed
+      // to its non-null type, whereas assigning the whole `intake` object would still carry
+      // its class-declared nullable field types.
+      source = {
+        serialNumber: intake.serialNumber,
+        brand: intake.brand,
+        warrantyStatus: intake.warrantyStatus,
+        warrantySupplier: intake.warrantySupplier,
+        faultCode: intake.faultCode,
+        symptomCode: intake.symptomCode,
+      };
+    } else {
+      let visit;
+      try {
+        visit = await this.technicianService.getVisit(dto.appointmentId);
+      } catch (err) {
+        if (err instanceof NotFoundException) {
+          throw new NotFoundException(
+            `No technician visit has been started for appointment ${appointment.appointmentNumber} yet. Call Start Visit from the mobile app first.`,
+          );
+        }
+        throw err;
+      }
+      if (!visit.serialNumber || !visit.warrantyStatus || !visit.faultCode || !visit.symptomCode) {
+        throw new BadRequestException(
+          'Cannot create a Job Card: the field visit is not complete yet (serial number, warranty check, ' +
+            'and fault/symptom must all be captured by the technician first).',
+        );
+      }
+      source = {
+        serialNumber: visit.serialNumber,
+        brand: visit.brand,
+        warrantyStatus: visit.warrantyStatus,
+        warrantySupplier: visit.warrantySupplier,
+        faultCode: visit.faultCode,
+        symptomCode: visit.symptomCode,
+      };
     }
 
     const jobCardNumber = await this.generateJobCardNumber();
@@ -272,13 +318,13 @@ export class JobCardsService {
       jobCardNumber,
       appointmentId: dto.appointmentId,
       status: JobCardStatus.OPEN,
-      serialNumber: visit.serialNumber,
-      brand: visit.brand,
-      faultCode: visit.faultCode,
-      symptomCode: visit.symptomCode,
-      originalWarrantyStatus: visit.warrantyStatus,
-      warrantyStatus: visit.warrantyStatus,
-      warrantySupplier: visit.warrantySupplier,
+      serialNumber: source.serialNumber,
+      brand: source.brand,
+      faultCode: source.faultCode,
+      symptomCode: source.symptomCode,
+      originalWarrantyStatus: source.warrantyStatus,
+      warrantyStatus: source.warrantyStatus,
+      warrantySupplier: source.warrantySupplier,
       createdById: userId,
       // Phase 8 Customer Portal: a read-only tracking link, live for this job's whole
       // lifecycle (see the entity's doc comment on why this differs from Estimate's

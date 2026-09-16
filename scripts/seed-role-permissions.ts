@@ -110,6 +110,9 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'MASTER_DATA_CITY_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_CANCELLATION_REASON_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_APPLIANCE_MODEL_MANAGE', defaultRoles: [] },
+  // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 4 - mirror
+  // capability-catalog.ts's own comment for reasoning.
+  { key: 'WORKSHOP_INTAKE_SN_VALIDATE', defaultRoles: ['TECHNICIAN_WORKSHOP', 'WAREHOUSE_CLERK', 'CCE'] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

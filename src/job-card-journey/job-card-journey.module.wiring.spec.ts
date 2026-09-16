@@ -47,6 +47,11 @@ import { CancellationReason } from '../master-data/entities/cancellation-reason.
 import { ApplianceModel } from '../master-data/entities/appliance-model.entity';
 import { UserPermissionGrant } from '../permissions/entities/user-permission-grant.entity';
 import { GlPosting } from '../gl-ledger/entities/gl-posting.entity';
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4) - JobCardsModule now also
+// imports WorkshopIntakeModule (create()'s new COLLECTED_TO_WS branch), which registers
+// this entity via its own TypeOrmModule.forFeature - pulled in transitively the same way
+// every other JobCardsModule-registered entity here is.
+import { WorkshopIntake } from '../workshop-intake/entities/workshop-intake.entity';
 
 // InventoryService and DeliveryService both inject the raw DataSource directly
 // (@InjectDataSource(), for their own transactional writes) rather than only a
@@ -117,6 +122,7 @@ describe('JobCardJourneyModule wiring', () => {
       City,
       CancellationReason,
       ApplianceModel,
+      WorkshopIntake,
     ];
 
     let builder = Test.createTestingModule({

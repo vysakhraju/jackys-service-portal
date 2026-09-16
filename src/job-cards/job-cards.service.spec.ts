@@ -13,6 +13,7 @@ describe('JobCardsService', () => {
   let userRepository: any;
   let appointmentsService: any;
   let technicianService: any;
+  let workshopIntakeService: any;
   let queryBuilder: any;
 
   const appointment = (overrides: any = {}) => ({
@@ -109,6 +110,9 @@ describe('JobCardsService', () => {
     technicianService = {
       getVisit: jest.fn(),
     };
+    workshopIntakeService = {
+      getIntake: jest.fn(),
+    };
 
     service = new JobCardsService(
       jobCardRepository,
@@ -117,6 +121,7 @@ describe('JobCardsService', () => {
       userRepository,
       appointmentsService,
       technicianService,
+      workshopIntakeService,
     );
   });
 
@@ -231,18 +236,83 @@ describe('JobCardsService', () => {
       );
     });
 
-    it('re-throws "no visit started" with the workshop-intake hint for a COLLECTED_TO_WS appointment', async () => {
-      appointmentsService.findById.mockResolvedValue(
-        appointment({ appointmentNumber: 'APT-0003', status: 'COLLECTED_TO_WS' }),
-      );
-      jobCardRepository.findOne.mockResolvedValue(null);
-      technicianService.getVisit.mockRejectedValue(
-        new NotFoundException('No visit has been started for appointment apt-1. Call start-visit first.'),
-      );
+    // Phase 4 (2026-09-16): a COLLECTED_TO_WS appointment never went through a
+    // TechnicianVisit at all - create() now reads from the workshop-entered
+    // WorkshopIntake record instead, and never calls technicianService.getVisit().
+    describe('COLLECTED_TO_WS branch (Phase 4 workshop intake)', () => {
+      const collectedAppointment = appointment({ appointmentNumber: 'APT-0003', status: 'COLLECTED_TO_WS' });
 
-      await expect(service.create(dto, 'user-1')).rejects.toThrow(
-        /collected to workshop from the field.*workshop intake.*Mark Received.*Phase 4/s,
-      );
+      const intake = (overrides: any = {}) => ({
+        id: 'intake-1',
+        appointmentId: 'apt-1',
+        serialNumber: 'SN990000',
+        brand: 'LG',
+        warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY,
+        warrantySupplier: 'LG Gulf',
+        faultCode: 'F002',
+        symptomCode: 'S002',
+        ...overrides,
+      });
+
+      it('creates a Job Card from a complete workshop intake, never calling technicianService.getVisit', async () => {
+        appointmentsService.findById.mockResolvedValue(collectedAppointment);
+        jobCardRepository.findOne.mockResolvedValue(null);
+        workshopIntakeService.getIntake.mockResolvedValue(intake());
+
+        const result = await service.create(dto, 'user-1');
+
+        expect(technicianService.getVisit).not.toHaveBeenCalled();
+        expect(jobCardRepository.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            serialNumber: 'SN990000',
+            brand: 'LG',
+            faultCode: 'F002',
+            symptomCode: 'S002',
+            originalWarrantyStatus: WarrantyStatus.OUT_OF_WARRANTY,
+            warrantyStatus: WarrantyStatus.OUT_OF_WARRANTY,
+            warrantySupplier: 'LG Gulf',
+          }),
+        );
+        expect(result).toEqual(expect.objectContaining({ jobCardNumber: 'JC-0001' }));
+      });
+
+      it('names the appointment number and points at "Mark Received" when no intake exists yet', async () => {
+        appointmentsService.findById.mockResolvedValue(collectedAppointment);
+        jobCardRepository.findOne.mockResolvedValue(null);
+        workshopIntakeService.getIntake.mockResolvedValue(null);
+
+        await expect(service.create(dto, 'user-1')).rejects.toThrow(NotFoundException);
+        await expect(service.create(dto, 'user-1')).rejects.toThrow(
+          /APT-0003.*not been marked received.*Mark Received/s,
+        );
+      });
+
+      it('blocks creation when the workshop intake is missing serial number/warranty', async () => {
+        appointmentsService.findById.mockResolvedValue(collectedAppointment);
+        jobCardRepository.findOne.mockResolvedValue(null);
+        workshopIntakeService.getIntake.mockResolvedValue(intake({ serialNumber: null, warrantyStatus: null }));
+
+        await expect(service.create(dto, 'user-1')).rejects.toThrow(BadRequestException);
+        await expect(service.create(dto, 'user-1')).rejects.toThrow(/APT-0003.*not complete yet/s);
+      });
+
+      it('blocks creation when the workshop intake has no fault/symptom captured yet', async () => {
+        appointmentsService.findById.mockResolvedValue(collectedAppointment);
+        jobCardRepository.findOne.mockResolvedValue(null);
+        workshopIntakeService.getIntake.mockResolvedValue(intake({ faultCode: null, symptomCode: null }));
+
+        await expect(service.create(dto, 'user-1')).rejects.toThrow(BadRequestException);
+      });
+
+      it('auto-completes the appointment right after the Job Card is created, same as the on-site path', async () => {
+        appointmentsService.findById.mockResolvedValue(collectedAppointment);
+        jobCardRepository.findOne.mockResolvedValue(null);
+        workshopIntakeService.getIntake.mockResolvedValue(intake());
+
+        await service.create(dto, 'user-1');
+
+        expect(appointmentsService.completeFromJobCardCreation).toHaveBeenCalledWith('apt-1', 'user-1');
+      });
     });
 
     it('propagates a non-NotFoundException error from getVisit unchanged', async () => {

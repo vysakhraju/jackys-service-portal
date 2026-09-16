@@ -11,6 +11,7 @@ import { TechnicianModule } from '../technician/technician.module';
 import { AuthModule } from '../auth/auth.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { PermissionsModule } from '../permissions/permissions.module';
+import { WorkshopIntakeModule } from '../workshop-intake/workshop-intake.module';
 
 @Module({
   imports: [
@@ -31,6 +32,11 @@ import { PermissionsModule } from '../permissions/permissions.module';
     // Phase 6: JobCardsController's qc/approve and qc/reject endpoints both call
     // PermissionsService.requireActiveGrant() before doing anything else.
     PermissionsModule,
+    // Phase 4 of the Appointment/Mobile/Job Card overhaul (2026-09-16): create()'s new
+    // COLLECTED_TO_WS branch reads the workshop-entered intake record instead of a
+    // TechnicianVisit. Safe to import directly - WorkshopIntakeModule has no dependency
+    // back on JobCardsModule/TechnicianModule.
+    WorkshopIntakeModule,
   ],
   controllers: [JobCardsController],
   providers: [JobCardsService],

@@ -11,6 +11,8 @@ import { NamePicker } from '../../components/pickers/NamePicker';
 import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { DashboardStatsWidget } from './DashboardStatsWidget';
 import { SchedulingGridPicker, type SchedulingSelection } from './SchedulingGrid';
+import { WorkshopIntakeModal } from './WorkshopIntakeModal';
+import { getWorkshopIntake } from '../../lib/workshopIntakeApi';
 import {
   assignTechnician,
   cancelAppointment,
@@ -162,6 +164,12 @@ function availableActions(status: AppointmentStatusValue, type: string, hasJobCa
     canMarkCollectedToWorkshop: has('SCHEDULE_FIELD_VISIT') && (activeNotYetOnSite || status === 'ON_SITE'),
     canComplete: has('SCHEDULE_FIELD_VISIT') && status === 'ON_SITE' && !isAmc,
     canCompleteAmcVisit: status === 'ON_SITE' && isAmc,
+    // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4, req. 3e) - the
+    // COLLECTED_TO_WS equivalent of "Complete": leads into the workshop intake screen
+    // rather than completing directly, since a Job Card still needs to be created from
+    // there first (see WorkshopIntakeModal). Gated on the same capability the backend
+    // requires for every workshop-intake endpoint (WORKSHOP_INTAKE_SN_VALIDATE).
+    canMarkReceived: has('WORKSHOP_INTAKE_SN_VALIDATE') && status === 'COLLECTED_TO_WS',
     // Once a Job Card exists the appointment is fulfilled - see
     // AppointmentsService.cancel()'s guard, which this mirrors so we don't render a
     // button the backend will just 409 on.
@@ -236,6 +244,13 @@ export function SchedulePage() {
   const [editTarget, setEditTarget] = useState<Appointment | null>(null);
   const [mutationError, setMutationError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<unknown>(null);
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4, req. 3e/3.4) - "Mark
+  // Received" reuses this same Edit popup (spec: "reopens the same appointment popup so
+  // details can be verified/updated") rather than a separate form; this flag just changes
+  // the popup's submit button/footer and, on success, routes into the workshop intake
+  // screen instead of just closing. See openMarkReceived() and onSubmit()'s edit branch.
+  const [openedForIntake, setOpenedForIntake] = useState(false);
+  const [intakeTarget, setIntakeTarget] = useState<Appointment | null>(null);
 
   const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
@@ -289,6 +304,7 @@ export function SchedulePage() {
     setCreateOpen(false);
     setEditTarget(null);
     setCustomerLookupHistory(null);
+    setOpenedForIntake(false);
   }
 
   const createMutation = useMutation({
@@ -404,6 +420,15 @@ export function SchedulePage() {
     setCreateOpen(true);
   }
 
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4, req. 3e) - "Mark Received"
+  // opens the exact same pre-filled Edit popup as openEdit(), just flagged so its footer
+  // offers a path into the workshop intake screen (see onSubmit()'s edit branch and the
+  // "Skip" button rendered near the form's submit button below).
+  function openMarkReceived(appointment: Appointment) {
+    openEdit(appointment);
+    setOpenedForIntake(true);
+  }
+
   async function onSubmit(values: FormValues) {
     const sharedFields = {
       type: values.type as CreateAppointmentInput['type'],
@@ -444,7 +469,13 @@ export function SchedulePage() {
           });
         }
         invalidate();
+        // Captured before closeForm() resets editTarget/openedForIntake to null/false.
+        const goToIntake = openedForIntake;
+        const target = editTarget;
         closeForm();
+        if (goToIntake && target) {
+          setIntakeTarget(target);
+        }
       } catch {
         // onError on each mutation already set mutationError for display - nothing further
         // to do here, and closeForm() must NOT run so the CCE can see the error and retry.
@@ -650,6 +681,15 @@ export function SchedulePage() {
                   Complete
                 </button>
               )}
+              {a.canMarkReceived && (
+                <button
+                  onClick={() => { setActionError(null); openMarkReceived(row); }}
+                  className="text-xs font-medium text-violet-700 hover:text-violet-900"
+                  title="Verify the appointment's details, then capture serial number/warranty/fault/symptom and create the Job Card"
+                >
+                  Mark Received →
+                </button>
+              )}
               {a.canCompleteAmcVisit && (
                 <Link
                   to={`/amc/contracts?contractId=${row.amcContractId ?? ''}`}
@@ -705,9 +745,25 @@ export function SchedulePage() {
       )}
 
       {/* --- Create / Edit --- */}
-      <Modal open={createOpen} onClose={closeForm} title={editTarget ? `Edit — ${editTarget.appointmentNumber}` : 'New Appointment'}>
+      <Modal
+        open={createOpen}
+        onClose={closeForm}
+        title={
+          editTarget
+            ? openedForIntake
+              ? `Verify before workshop intake — ${editTarget.appointmentNumber}`
+              : `Edit — ${editTarget.appointmentNumber}`
+            : 'New Appointment'
+        }
+      >
         <form onSubmit={handleSubmit(onSubmit)} className="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
           <ErrorNotice error={mutationError} />
+          {openedForIntake && (
+            <p className="rounded-md border border-violet-200 bg-violet-50 p-2 text-xs text-violet-800">
+              Check the details below (brand/model, serial number, invoice number) are
+              correct before receiving this unit into the workshop.
+            </p>
+          )}
 
           {/* Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 1b) - customer
               lookup by name/phone/serial number, reusing GET /appointments?q= (now also
@@ -924,13 +980,27 @@ export function SchedulePage() {
             <button type="button" onClick={closeForm} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600">
               Cancel
             </button>
+            {openedForIntake && editTarget && (
+              <button
+                type="button"
+                onClick={() => {
+                  const target = editTarget;
+                  closeForm();
+                  setIntakeTarget(target);
+                }}
+                className="rounded-md border border-violet-200 px-3 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-50"
+                title="Nothing to change — go straight to the workshop intake screen"
+              >
+                Skip — details are correct
+              </button>
+            )}
             <button
               type="submit"
               disabled={isSubmitting || createMutation.isPending || updateMutation.isPending || reassignMutation.isPending || (!editTarget && !gridSelection)}
               title={!editTarget && !gridSelection ? 'Pick a technician + time slot on the grid above first' : undefined}
               className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
-              {editTarget ? 'Save changes' : 'Create'}
+              {editTarget ? (openedForIntake ? 'Save & continue to intake' : 'Save changes') : 'Create'}
             </button>
           </div>
         </form>
@@ -961,17 +1031,47 @@ export function SchedulePage() {
       </Modal>
 
       {/* --- View detail --- */}
-      <ViewAppointmentModal appointment={viewTarget} onClose={() => setViewTarget(null)} />
+      <ViewAppointmentModal
+        appointment={viewTarget}
+        onClose={() => setViewTarget(null)}
+        onMarkReceived={(a) => { setViewTarget(null); openMarkReceived(a); }}
+        canMarkReceived={has('WORKSHOP_INTAKE_SN_VALIDATE')}
+      />
+
+      {/* --- Workshop intake (Phase 4) --- */}
+      <WorkshopIntakeModal appointment={intakeTarget} onClose={() => setIntakeTarget(null)} />
     </div>
   );
 }
 
-function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointment | null; onClose: () => void }) {
+function ViewAppointmentModal({
+  appointment,
+  onClose,
+  onMarkReceived,
+  canMarkReceived,
+}: {
+  appointment: Appointment | null;
+  onClose: () => void;
+  onMarkReceived: (appointment: Appointment) => void;
+  canMarkReceived: boolean;
+}) {
+  // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4) - a COLLECTED_TO_WS
+  // appointment can never have a TechnicianVisit (it was collected, not visited on-site),
+  // so the old unconditional getVisit() query below used to 404 and render a misleading
+  // "No visit started for this appointment yet" with no way forward (live-tested bug,
+  // 2026-09-16). Skip that query entirely for COLLECTED_TO_WS and show the workshop
+  // intake status instead.
+  const isCollectedToWs = appointment?.status === 'COLLECTED_TO_WS';
   const { data: visit, error: visitError, isLoading: visitLoading } = useQuery({
     queryKey: ['technician-visit', appointment?.id],
     queryFn: () => getVisit(appointment!.id),
-    enabled: !!appointment,
+    enabled: !!appointment && !isCollectedToWs,
     retry: false,
+  });
+  const { data: intake, isLoading: intakeLoading } = useQuery({
+    queryKey: ['workshop-intake', appointment?.id],
+    queryFn: () => getWorkshopIntake(appointment!.id),
+    enabled: !!appointment && isCollectedToWs,
   });
 
   if (!appointment) return null;
@@ -1022,33 +1122,65 @@ function ViewAppointmentModal({ appointment, onClose }: { appointment: Appointme
           </div>
         )}
 
-        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Technician visit</p>
-          {visitLoading && <p className="mt-1 text-slate-500">Loading…</p>}
-          {notFound && <p className="mt-1 text-slate-500">No visit started for this appointment yet.</p>}
-          {visitError && !notFound && <ErrorNotice error={visitError} />}
-          {visit && (
-            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-              <DetailRow label="Started">{new Date(visit.startedAt).toLocaleString()}</DetailRow>
-              {/* Number(...) guards against a decimal column ever coming back as a string
-                  (node-postgres's default for NUMERIC/DECIMAL) - see main.ts's global type
-                  parser fix for the real root cause; this is just defense-in-depth so a
-                  future drift here degrades to a value, not a blank page. */}
-              <DetailRow label="GPS">{Number(visit.startGpsLat).toFixed(4)}, {Number(visit.startGpsLng).toFixed(4)}</DetailRow>
-              <DetailRow label="Serial / warranty">
-                {visit.serialNumber ? (
-                  <>
-                    {visit.serialNumber}{' '}
-                    {visit.warrantyStatus && <StatusBadge status={visit.warrantyStatus} />}
-                  </>
-                ) : 'Not captured yet'}
-              </DetailRow>
-              <DetailRow label="Fault / symptom">
-                {visit.faultCode ? `${visit.faultCode} / ${visit.symptomCode}` : 'Not captured yet'}
-              </DetailRow>
-            </div>
-          )}
-        </div>
+        {isCollectedToWs ? (
+          <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-violet-500">Workshop intake</p>
+            {intakeLoading && <p className="mt-1 text-slate-500">Loading…</p>}
+            {!intakeLoading && !intake && <p className="mt-1 text-slate-600">Not received at the workshop yet.</p>}
+            {intake && (
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+                <DetailRow label="Received">{new Date(intake.receivedAt).toLocaleString()}</DetailRow>
+                <DetailRow label="Serial / warranty">
+                  {intake.serialNumber ? (
+                    <>
+                      {intake.serialNumber}{' '}
+                      {intake.warrantyStatus && <StatusBadge status={intake.warrantyStatus} />}
+                    </>
+                  ) : 'Not captured yet'}
+                </DetailRow>
+                <DetailRow label="Fault / symptom">
+                  {intake.faultCode ? `${intake.faultCode} / ${intake.symptomCode}` : 'Not captured yet'}
+                </DetailRow>
+              </div>
+            )}
+            {canMarkReceived && (
+              <button
+                onClick={() => onMarkReceived(appointment)}
+                className="mt-3 rounded-md bg-violet-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-800"
+              >
+                {intake ? 'Continue workshop intake →' : 'Mark Received →'}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Technician visit</p>
+            {visitLoading && <p className="mt-1 text-slate-500">Loading…</p>}
+            {notFound && <p className="mt-1 text-slate-500">No visit started for this appointment yet.</p>}
+            {visitError && !notFound && <ErrorNotice error={visitError} />}
+            {visit && (
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+                <DetailRow label="Started">{new Date(visit.startedAt).toLocaleString()}</DetailRow>
+                {/* Number(...) guards against a decimal column ever coming back as a string
+                    (node-postgres's default for NUMERIC/DECIMAL) - see main.ts's global type
+                    parser fix for the real root cause; this is just defense-in-depth so a
+                    future drift here degrades to a value, not a blank page. */}
+                <DetailRow label="GPS">{Number(visit.startGpsLat).toFixed(4)}, {Number(visit.startGpsLng).toFixed(4)}</DetailRow>
+                <DetailRow label="Serial / warranty">
+                  {visit.serialNumber ? (
+                    <>
+                      {visit.serialNumber}{' '}
+                      {visit.warrantyStatus && <StatusBadge status={visit.warrantyStatus} />}
+                    </>
+                  ) : 'Not captured yet'}
+                </DetailRow>
+                <DetailRow label="Fault / symptom">
+                  {visit.faultCode ? `${visit.faultCode} / ${visit.symptomCode}` : 'Not captured yet'}
+                </DetailRow>
+              </div>
+            )}
+          </div>
+        )}
 
         {appointment.status === 'COMPLETED' && (
           <Link

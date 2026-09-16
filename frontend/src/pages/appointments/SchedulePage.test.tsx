@@ -33,6 +33,14 @@ vi.mock('../../lib/masterDataApi', () => ({
 vi.mock('../../lib/technicianScheduleApi', () => ({
   getGanttBoard: vi.fn(),
 }));
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4) - WorkshopIntakeModal (rendered
+// by this page for a COLLECTED_TO_WS row's "Mark Received" action) goes through these.
+vi.mock('../../lib/workshopIntakeApi', () => ({
+  getWorkshopIntake: vi.fn(),
+  markWorkshopReceived: vi.fn(),
+  captureWorkshopSerialNumber: vi.fn(),
+  captureWorkshopFaultSymptom: vi.fn(),
+}));
 
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
@@ -49,6 +57,7 @@ import {
 } from '../../lib/appointmentsApi';
 import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
+import { getWorkshopIntake } from '../../lib/workshopIntakeApi';
 import { SchedulePage } from './SchedulePage';
 
 // One technician, one hour, all free - just enough for fillRequiredCreateFields() below to
@@ -128,6 +137,7 @@ beforeEach(() => {
     unassignedAppointments: [],
     unassignedJobCards: [],
   } as any);
+  vi.mocked(getWorkshopIntake).mockReset().mockResolvedValue(null);
   mockCapabilities([], true);
 });
 
@@ -777,5 +787,103 @@ describe('SchedulePage - Group B capability gating', () => {
     fireEvent.click(within(screen.getByText('APT-0300').closest('tr')!).getByRole('button', { name: 'View' }));
     await screen.findByRole('heading', { name: /APT-0300/ });
     expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+  });
+});
+
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4, req. 3e/3.4) - live-tested bug
+// fix: a COLLECTED_TO_WS appointment used to have no way forward at all from this page (no
+// row action, and its View modal's "Technician visit" box just 404'd and said "No visit
+// started for this appointment yet" - a real visit never happens for a collected unit). See
+// WorkshopIntakeModal.test.tsx for the intake screen's own step-by-step behavior; these
+// tests cover only this page's wiring into it.
+describe('SchedulePage - Mark Received (Phase 4 workshop intake)', () => {
+  it('hides Mark Received for a COLLECTED_TO_WS row without WORKSHOP_INTAKE_SN_VALIDATE', async () => {
+    mockCapabilities([]);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-ws', appointmentNumber: 'APT-0008', status: 'COLLECTED_TO_WS' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0008');
+    expect(screen.queryByRole('button', { name: 'Mark Received →' })).not.toBeInTheDocument();
+  });
+
+  it('shows Mark Received for a COLLECTED_TO_WS row once WORKSHOP_INTAKE_SN_VALIDATE is granted, and opens the verify-details popup', async () => {
+    mockCapabilities(['WORKSHOP_INTAKE_SN_VALIDATE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-ws', appointmentNumber: 'APT-0008', status: 'COLLECTED_TO_WS' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0008');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark Received →' }));
+
+    await screen.findByRole('heading', { name: /Verify before workshop intake — APT-0008/ });
+    expect(screen.getByRole('button', { name: 'Save & continue to intake' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Skip — details are correct' })).toBeInTheDocument();
+  });
+
+  it('Skip routes straight to the workshop intake screen without calling updateAppointment', async () => {
+    mockCapabilities(['WORKSHOP_INTAKE_SN_VALIDATE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-ws', appointmentNumber: 'APT-0008', status: 'COLLECTED_TO_WS' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0008');
+    fireEvent.click(screen.getByRole('button', { name: 'Mark Received →' }));
+    await screen.findByRole('button', { name: 'Skip — details are correct' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip — details are correct' }));
+
+    await screen.findByRole('heading', { name: /Workshop intake — APT-0008/ });
+    expect(vi.mocked(updateAppointment)).not.toHaveBeenCalled();
+  });
+
+  it('saving the verify-details popup updates the appointment, then opens the workshop intake screen', async () => {
+    mockCapabilities(['WORKSHOP_INTAKE_SN_VALIDATE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-ws', appointmentNumber: 'APT-0008', status: 'COLLECTED_TO_WS' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(updateAppointment).mockResolvedValue(makeAppointment({ id: 'appt-ws', status: 'COLLECTED_TO_WS' }));
+    renderPage();
+    await screen.findByText('APT-0008');
+    fireEvent.click(screen.getByRole('button', { name: 'Mark Received →' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save & continue to intake' }));
+
+    await waitFor(() => expect(vi.mocked(updateAppointment)).toHaveBeenCalledWith('appt-ws', expect.anything()));
+    await screen.findByRole('heading', { name: /Workshop intake — APT-0008/ });
+  });
+
+  it('the View modal shows a Workshop intake box (not the misleading "No visit started") for a COLLECTED_TO_WS row, with its own Mark Received button', async () => {
+    mockCapabilities(['WORKSHOP_INTAKE_SN_VALIDATE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-ws', appointmentNumber: 'APT-0008', status: 'COLLECTED_TO_WS' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0008');
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+
+    const heading = await screen.findByRole('heading', { name: /APT-0008/ });
+    const modal = heading.closest('[role="dialog"]')!;
+    expect(within(modal).getByText('Workshop intake')).toBeInTheDocument();
+    expect(within(modal).queryByText('No visit started for this appointment yet.')).not.toBeInTheDocument();
+    expect(getVisit).not.toHaveBeenCalled();
+    fireEvent.click(within(modal).getByRole('button', { name: 'Mark Received →' }));
+    await screen.findByRole('heading', { name: /Verify before workshop intake — APT-0008/ });
   });
 });

@@ -301,9 +301,11 @@ export function JobCardsPage() {
             <div className="rounded-lg border border-slate-200 bg-white p-4">
               <p className="text-sm text-slate-600">
                 No Job Card exists yet for this appointment. Creating one requires the
-                appointment to have an invoice number on file and a fully-captured field
-                visit (serial number, warranty check, fault/symptom) - the backend blocks
-                creation otherwise (FR-05).
+                appointment to have an invoice number on file, plus a fully-captured serial
+                number/warranty check/fault/symptom - either from a field technician's visit
+                (on-site appointments), or from the workshop intake screen's Mark Received
+                flow (for a collected-to-workshop appointment, via Schedule → Mark
+                Received →) - the backend blocks creation otherwise (FR-05).
               </p>
               <ErrorNotice error={createMutation.error} />
               <button

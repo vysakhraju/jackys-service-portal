@@ -642,10 +642,21 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [],
     migrated: true,
   },
-  // NOTE: WORKSHOP_INTAKE_SN_VALIDATE (Phase 4 of the same overhaul - the workshop
-  // S/N-entry + invoice-check screen) is deliberately NOT added here yet - it has no
-  // gated endpoint to attach to until that screen is built, and an unused capability
-  // would just be confusing noise in the Designation Access admin UI. Add it in Phase 4.
+  // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 4 - see
+  // claude/APPOINTMENT_MOBILE_JOBCARD_SPEC.md section 3.4. Gates all 3 mutating
+  // WorkshopIntakeController endpoints (mark-received, serial-number, fault-symptom) - one
+  // capability for the whole self-contained screen, same pattern as SCHEDULE_FIELD_VISIT
+  // on the mobile side. Default membership matches the spec's own decision exactly:
+  // TECHNICIAN_WORKSHOP/WAREHOUSE_CLERK/CCE are all eligible out of the box, and a Super
+  // Admin can grant/revoke per designation via Designation Access like every other
+  // capability here.
+  {
+    key: 'WORKSHOP_INTAKE_SN_VALIDATE',
+    label: 'Workshop intake: mark a collected-to-workshop appointment received, capture its serial number/warranty/fault/symptom',
+    module: 'Workshop Intake',
+    defaultRoles: [RoleName.TECHNICIAN_WORKSHOP, RoleName.WAREHOUSE_CLERK, RoleName.CCE],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {
