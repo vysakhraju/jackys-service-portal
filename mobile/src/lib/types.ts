@@ -170,6 +170,13 @@ export interface CancellationReason {
   label: string;
 }
 
+// Calendar view (2026-09-16): one entry per day that has at least 1 active appointment -
+// a day with none simply doesn't appear, rather than a zero-count entry for every day.
+export interface MonthDayCount {
+  date: string; // YYYY-MM-DD
+  count: number;
+}
+
 // --- Mobile Phase 5: Need Spare + Complete/QC-handoff --------------------------------
 
 // GET /master-data/spare-parts - trimmed to what the Need Spare picker shows/searches;

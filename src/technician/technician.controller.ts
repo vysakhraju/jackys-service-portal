@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, Request, UseGuards, UseInterceptors, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, Request, UseGuards, UseInterceptors, ParseUUIDPipe, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { TechnicianService } from './technician.service';
 import { StartVisitDto } from './dto/start-visit.dto';
@@ -165,5 +165,27 @@ export class TechnicianController {
   @ApiResponse({ status: 200 })
   async getMySchedule(@CurrentUser() user: User, @Query('date') date?: string) {
     return this.technicianService.getMySchedule(user.id, date ? new Date(date) : undefined);
+  }
+
+  // Mobile calendar view (2026-09-16), alongside the day-grouped Dashboard - no
+  // @RequiresCapability here either, same as `schedule` above: always scoped to the
+  // caller's own id server-side, so there is nothing to gate.
+  @Get('schedule/month')
+  @ApiOperation({ summary: "Per-day appointment counts for the calling technician's own calendar month (defaults to this month)" })
+  @ApiQuery({ name: 'month', required: false, type: String, description: 'YYYY-MM, defaults to the current month' })
+  @ApiResponse({ status: 200 })
+  async getMyMonthSchedule(@CurrentUser() user: User, @Query('month') month?: string) {
+    const now = new Date();
+    let year = now.getFullYear();
+    let mon = now.getMonth() + 1;
+    if (month) {
+      const match = /^(\d{4})-(\d{2})$/.exec(month);
+      if (!match) {
+        throw new BadRequestException('month must be in YYYY-MM format');
+      }
+      year = Number(match[1]);
+      mon = Number(match[2]);
+    }
+    return this.technicianService.getMyMonthSchedule(user.id, year, mon);
   }
 }

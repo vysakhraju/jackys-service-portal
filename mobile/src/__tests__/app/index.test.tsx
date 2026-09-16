@@ -199,4 +199,14 @@ describe('DashboardScreen', () => {
 
     expect(logout).toHaveBeenCalled();
   });
+
+  it('navigates to the calendar view when "Calendar view" is pressed', async () => {
+    stubSchedule({});
+    await renderScreen();
+    await waitFor(() => expect(screen.getByText('Today')).toBeOnTheScreen());
+
+    await fireEvent.press(screen.getByTestId('open-calendar-view'));
+
+    expect(mockPush).toHaveBeenCalledWith('/calendar');
+  });
 });

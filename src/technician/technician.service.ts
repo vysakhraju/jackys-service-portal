@@ -208,6 +208,18 @@ export class TechnicianService {
   }
 
   /**
+   * Mobile calendar view (2026-09-16, added alongside the day-grouped Dashboard per your
+   * request): per-day appointment counts for one calendar month, so the calendar grid can
+   * show a number/dot on each day without firing one request per day. Delegates the actual
+   * query + status filtering to AppointmentsService.getTechnicianScheduleMonthCounts, which
+   * reuses the exact same active-status filter as getTechnicianSchedule() above - a day's
+   * count here always matches what tapping into that day's list actually shows.
+   */
+  async getMyMonthSchedule(technicianId: string, year: number, month: number) {
+    return this.appointmentsService.getTechnicianScheduleMonthCounts(technicianId, year, month);
+  }
+
+  /**
    * Lean lookup used by both Mobile Phase 5 methods below - a Job Card only exists once
    * staff have created it from this visit's captured data (JobCardsService.create()'s own
    * Gate 1 already requires serial number + warranty + fault/symptom to all be present

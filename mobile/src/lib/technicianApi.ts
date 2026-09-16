@@ -9,6 +9,7 @@ import type {
   CompleteVisitInput,
   JobCardSummary,
   JobCardTaskPause,
+  MonthDayCount,
   NeedSpareInput,
   NeedSpareReservation,
   OwnJobCardResult,
@@ -35,6 +36,13 @@ const APPOINTMENTS_BASE = '/appointments';
 
 export const getMySchedule = (date?: string) =>
   api.get<ScheduledAppointment[]>(`${TECH_BASE}/schedule`, { params: date ? { date } : {} }).then((r) => r.data);
+
+// Calendar view (2026-09-16, added alongside the day-grouped Dashboard per your request):
+// one call per visible month instead of one per day - backed by the new
+// GET /technician/schedule/month endpoint, which reuses getMySchedule's exact same
+// active-status filter so a day's count here always agrees with that day's own list.
+export const getMyMonthSchedule = (month?: string) =>
+  api.get<MonthDayCount[]>(`${TECH_BASE}/schedule/month`, { params: month ? { month } : {} }).then((r) => r.data);
 
 export const startVisit = (appointmentId: string, data: StartVisitInput) =>
   api.post<TechnicianVisit>(`${TECH_BASE}/visits/${appointmentId}/start`, data).then((r) => r.data);

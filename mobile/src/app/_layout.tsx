@@ -49,6 +49,7 @@ function RootNavigator() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Protected guard={isAuthenticated}>
         <Stack.Screen name="index" />
+        <Stack.Screen name="calendar" />
         <Stack.Screen name="day/[date]" />
         <Stack.Screen name="appointment/[id]" />
       </Stack.Protected>

@@ -982,6 +982,56 @@ describe('AppointmentsService', () => {
     });
   });
 
+  describe('getTechnicianScheduleMonthCounts (mobile calendar view, 2026-09-16)', () => {
+    it('groups appointments by calendar day and counts them', async () => {
+      appointmentRepository.find.mockResolvedValue([
+        appointment({ scheduledAt: new Date('2026-09-16T09:00:00Z') }),
+        appointment({ scheduledAt: new Date('2026-09-16T14:00:00Z') }),
+        appointment({ scheduledAt: new Date('2026-09-03T10:00:00Z') }),
+      ]);
+
+      const result = await service.getTechnicianScheduleMonthCounts('tech-1', 2026, 9);
+
+      expect(result).toEqual([
+        { date: '2026-09-03', count: 1 },
+        { date: '2026-09-16', count: 2 },
+      ]);
+    });
+
+    it('queries with the given technicianId and the active-status filter', async () => {
+      appointmentRepository.find.mockResolvedValue([]);
+
+      await service.getTechnicianScheduleMonthCounts('tech-1', 2026, 2); // Feb 2026 - 28 days, not a leap year
+
+      expect(appointmentRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ technicianId: 'tech-1' }),
+          select: { scheduledAt: true },
+        }),
+      );
+    });
+
+    it('returns an empty array when nothing is scheduled that month', async () => {
+      appointmentRepository.find.mockResolvedValue([]);
+
+      const result = await service.getTechnicianScheduleMonthCounts('tech-1', 2026, 9);
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns results sorted by date ascending regardless of appointment order', async () => {
+      appointmentRepository.find.mockResolvedValue([
+        appointment({ scheduledAt: new Date('2026-09-20T09:00:00Z') }),
+        appointment({ scheduledAt: new Date('2026-09-01T09:00:00Z') }),
+        appointment({ scheduledAt: new Date('2026-09-10T09:00:00Z') }),
+      ]);
+
+      const result = await service.getTechnicianScheduleMonthCounts('tech-1', 2026, 9);
+
+      expect(result.map((r) => r.date)).toEqual(['2026-09-01', '2026-09-10', '2026-09-20']);
+    });
+  });
+
   describe('reorderTechnicianSchedule (field/workshop scheduling split, 2026-09-10)', () => {
     const active = (id: string) => appointment({ id, status: AppointmentStatus.CONFIRMED, technicianId: 'tech-1' });
 

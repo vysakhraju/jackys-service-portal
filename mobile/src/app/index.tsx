@@ -172,6 +172,12 @@ export default function DashboardScreen() {
         </Pressable>
       </View>
 
+      {/* Calendar view (2026-09-16): added alongside this list per your request, not a
+          replacement - this link is the only way between the two screens. */}
+      <Pressable style={styles.altViewLink} onPress={() => router.push('/calendar')} testID="open-calendar-view">
+        <Text style={styles.altViewLinkText}>Calendar view ›</Text>
+      </Pressable>
+
       <OfflineBanner />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -203,6 +209,8 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: '700', color: '#0f172a' },
   headerSubtitle: { fontSize: 13, color: '#64748b', marginTop: 2 },
   logoutText: { fontSize: 13, color: '#2563eb', fontWeight: '500', paddingTop: 4 },
+  altViewLink: { paddingHorizontal: 20, paddingBottom: 8 },
+  altViewLinkText: { fontSize: 13, color: '#2563eb', fontWeight: '500' },
   scrollContent: { padding: 16, gap: 20 },
   section: { gap: 10 },
   sectionHeader: {

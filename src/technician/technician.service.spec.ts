@@ -67,6 +67,7 @@ describe('TechnicianService', () => {
       markOnSite: jest.fn(),
       completeAppointment: jest.fn(),
       getTechnicianSchedule: jest.fn(),
+      getTechnicianScheduleMonthCounts: jest.fn(),
     };
     masterDataService = {
       checkWarranty: jest.fn(),
@@ -356,6 +357,17 @@ describe('TechnicianService', () => {
       await service.getMySchedule('tech-1');
 
       expect(appointmentsService.getTechnicianSchedule).toHaveBeenCalledWith('tech-1', expect.any(Date));
+    });
+  });
+
+  describe('getMyMonthSchedule', () => {
+    it('delegates to AppointmentsService.getTechnicianScheduleMonthCounts with the given year/month', async () => {
+      appointmentsService.getTechnicianScheduleMonthCounts.mockResolvedValue([{ date: '2026-09-16', count: 3 }]);
+
+      const result = await service.getMyMonthSchedule('tech-1', 2026, 9);
+
+      expect(appointmentsService.getTechnicianScheduleMonthCounts).toHaveBeenCalledWith('tech-1', 2026, 9);
+      expect(result).toEqual([{ date: '2026-09-16', count: 3 }]);
     });
   });
 

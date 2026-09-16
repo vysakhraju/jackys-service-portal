@@ -8,6 +8,7 @@ import {
   captureFaultSymptom,
   captureSerialNumber,
   completeVisit,
+  getMyMonthSchedule,
   getMySchedule,
   getOwnJobCard,
   getTaskPauses,
@@ -41,6 +42,23 @@ describe('getMySchedule', () => {
   it('calls GET /technician/schedule with a date param when given', async () => {
     await getMySchedule('2026-09-07');
     expect(mockedGet).toHaveBeenCalledWith('/technician/schedule', { params: { date: '2026-09-07' } });
+  });
+});
+
+describe('getMyMonthSchedule', () => {
+  it('calls GET /technician/schedule/month with no params by default', async () => {
+    await getMyMonthSchedule();
+    expect(mockedGet).toHaveBeenCalledWith('/technician/schedule/month', { params: {} });
+  });
+
+  it('calls GET /technician/schedule/month with a month param when given', async () => {
+    await getMyMonthSchedule('2026-09');
+    expect(mockedGet).toHaveBeenCalledWith('/technician/schedule/month', { params: { month: '2026-09' } });
+  });
+
+  it('resolves with the per-day count list the backend returns', async () => {
+    mockedGet.mockResolvedValue({ data: [{ date: '2026-09-16', count: 3 }] });
+    await expect(getMyMonthSchedule('2026-09')).resolves.toEqual([{ date: '2026-09-16', count: 3 }]);
   });
 });
 

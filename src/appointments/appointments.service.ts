@@ -636,6 +636,41 @@ export class AppointmentsService {
   }
 
   /**
+   * Mobile calendar view (2026-09-16): per-day appointment counts for one calendar month,
+   * for the calendar-grid dashboard added alongside the day-grouped Dashboard. One query for
+   * the whole month (not one per day) - same active-status filter as getTechnicianSchedule()
+   * above, so a day's count here always agrees with what that day's own list shows.
+   * `month` is 1-12 (calendar convention), converted to the 0-11 JS Date expects below.
+   */
+  async getTechnicianScheduleMonthCounts(
+    technicianId: string,
+    year: number,
+    month: number,
+  ): Promise<{ date: string; count: number }[]> {
+    const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
+    const end = new Date(year, month, 0, 23, 59, 59, 999); // day 0 of next month = last day of this one
+
+    const appointments = await this.appointmentRepository.find({
+      where: {
+        technicianId,
+        scheduledAt: Between(start, end),
+        status: In([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED, AppointmentStatus.ON_SITE]),
+      },
+      select: { scheduledAt: true },
+    });
+
+    const counts = new Map<string, number>();
+    for (const appt of appointments) {
+      const d = new Date(appt.scheduledAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  /**
    * Field/workshop technician scheduling split (2026-09-10): a CCE drag-reorder on the
    * Field Technician Schedule board. Sets priorityOrder = array index for every id in
    * orderedAppointmentIds, and ONLY priorityOrder - scheduledAt/technicianId are never
