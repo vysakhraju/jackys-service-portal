@@ -18,11 +18,22 @@ import { AppointmentType } from '../entities/appointment.entity';
 import { AppointmentStatus } from '../entities/appointment.entity';
 import { CustomerType } from '../entities/appointment.entity';
 import { AppointmentChannel } from '../entities/appointment.entity';
+import { JobType, AppointmentCountry } from '../entities/appointment.entity';
 
 export class CreateAppointmentDto {
   @ApiProperty({ enum: AppointmentType })
   @IsEnum(AppointmentType)
   type: AppointmentType;
+
+  // Req. 1a - defaults REPAIR (the DB column default) when omitted, same pattern as
+  // `channel` defaulting PHONE below.
+  @ApiPropertyOptional({
+    enum: JobType,
+    description: 'What work is being done, independent of the coverage `type` above. Defaults to REPAIR (the DB column default) when omitted.',
+  })
+  @IsOptional()
+  @IsEnum(JobType)
+  jobType?: JobType;
 
   @ApiPropertyOptional({
     enum: AppointmentChannel,
@@ -95,6 +106,20 @@ export class CreateAppointmentDto {
   @MaxLength(20)
   customerVatNumber?: string;
 
+  // Req. 1c - the new City master FK, replacing free-text customerCity above for new
+  // appointments. customerCity is kept for backward-compat, not removed.
+  @ApiPropertyOptional({ description: 'City master id (see GET /master-data/cities)' })
+  @IsOptional()
+  @IsUUID()
+  cityId?: string;
+
+  // Req. 1d/5 - informational only, defaults UAE (the DB column default) when omitted.
+  // Does NOT affect VAT, which stays Service Centre-driven.
+  @ApiPropertyOptional({ enum: AppointmentCountry })
+  @IsOptional()
+  @IsEnum(AppointmentCountry)
+  country?: AppointmentCountry;
+
   @ApiPropertyOptional({ example: 'Samsung' })
   @IsOptional()
   @IsString()
@@ -106,6 +131,13 @@ export class CreateAppointmentDto {
   @IsString()
   @MaxLength(50)
   modelNumber?: string;
+
+  // Req. 1e - the new Appliance Model master FK, replacing brand/modelNumber above for
+  // new appointments. brand/modelNumber are kept for backward-compat, not removed.
+  @ApiPropertyOptional({ description: 'Appliance Model master id (see GET /master-data/appliance-models)' })
+  @IsOptional()
+  @IsUUID()
+  applianceModelId?: string;
 
   @ApiPropertyOptional({ example: 'SN123456789' })
   @IsOptional()

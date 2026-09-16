@@ -38,6 +38,13 @@ import { TechnicianKpiRule } from '../master-data/entities/technician-kpi-rule.e
 import { NotificationTemplate } from '../master-data/entities/notification-template.entity';
 import { WarrantyMaster } from '../master-data/entities/warranty-master.entity';
 import { ComponentYieldMatrix } from '../master-data/entities/component-yield-matrix.entity';
+// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 1) - new master-data entities,
+// registered in MasterDataModule's TypeOrmModule.forFeature alongside ServiceCentre
+// (already in this list), and now also referenced by Appointment's own new FK columns
+// (cityId/applianceModelId/cancellationReasonId).
+import { City } from '../master-data/entities/city.entity';
+import { CancellationReason } from '../master-data/entities/cancellation-reason.entity';
+import { ApplianceModel } from '../master-data/entities/appliance-model.entity';
 import { UserPermissionGrant } from '../permissions/entities/user-permission-grant.entity';
 import { GlPosting } from '../gl-ledger/entities/gl-posting.entity';
 
@@ -107,6 +114,9 @@ describe('JobCardJourneyModule wiring', () => {
       // Transitively via InvoicingModule -> GlLedgerModule (every recorded payment posts a
       // GL journal entry).
       GlPosting,
+      City,
+      CancellationReason,
+      ApplianceModel,
     ];
 
     let builder = Test.createTestingModule({

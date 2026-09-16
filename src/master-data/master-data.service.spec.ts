@@ -12,6 +12,9 @@ describe('MasterDataService', () => {
   let notificationTemplateRepository: any;
   let warrantyMasterRepository: any;
   let componentYieldMatrixRepository: any;
+  let cityRepository: any;
+  let cancellationReasonRepository: any;
+  let applianceModelRepository: any;
   let userRepository: any;
 
   const buildQb = (result: any, isMany = false) => ({
@@ -19,6 +22,8 @@ describe('MasterDataService', () => {
     andWhere: jest.fn().mockReturnThis(),
     leftJoinAndSelect: jest.fn().mockReturnThis(),
     innerJoin: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
     getMany: jest.fn().mockResolvedValue(isMany ? result : []),
     getOne: jest.fn().mockResolvedValue(!isMany ? result : null),
   });
@@ -42,6 +47,9 @@ describe('MasterDataService', () => {
     notificationTemplateRepository = repoFactory();
     warrantyMasterRepository = repoFactory();
     componentYieldMatrixRepository = repoFactory();
+    cityRepository = repoFactory();
+    cancellationReasonRepository = repoFactory();
+    applianceModelRepository = repoFactory();
     userRepository = repoFactory();
 
     service = new MasterDataService(
@@ -54,6 +62,9 @@ describe('MasterDataService', () => {
       notificationTemplateRepository,
       warrantyMasterRepository,
       componentYieldMatrixRepository,
+      cityRepository,
+      cancellationReasonRepository,
+      applianceModelRepository,
       userRepository,
     );
   });
@@ -525,6 +536,152 @@ describe('MasterDataService', () => {
       sparePartModelRepository.findOne.mockResolvedValue(null);
 
       await expect(service.linkSparePartToModel('spare-1', 'missing')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1 - City/CancellationReason/
+  // ApplianceModel all share the same create/findAll(active-only)/update/soft-delete
+  // shape as Service Centre above, so these tests mirror that block's structure.
+  describe('City', () => {
+    it('creates a city when the name is not already used', async () => {
+      cityRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createCity({ name: 'DXB' });
+
+      expect(cityRepository.save).toHaveBeenCalled();
+      expect(result).toMatchObject({ name: 'DXB' });
+    });
+
+    it('throws ConflictException when the name is already used', async () => {
+      cityRepository.findOne.mockResolvedValue({ id: 'existing', name: 'DXB' });
+
+      await expect(service.createCity({ name: 'DXB' })).rejects.toThrow(ConflictException);
+    });
+
+    it('finds only active cities', async () => {
+      cityRepository.find.mockResolvedValue([{ id: '1', name: 'DXB', isActive: true }]);
+
+      const result = await service.findAllCities();
+
+      expect(cityRepository.find).toHaveBeenCalledWith({
+        where: { isActive: true },
+        order: { name: 'ASC' },
+      });
+      expect(result).toHaveLength(1);
+    });
+
+    it('throws NotFoundException when updating a city that does not exist', async () => {
+      cityRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.updateCity('missing', { name: 'X' })).rejects.toThrow(NotFoundException);
+    });
+
+    it('soft-deletes (deactivates) a city rather than removing the row', async () => {
+      cityRepository.findOne.mockResolvedValue({ id: '1', name: 'DXB', isActive: true });
+
+      await service.deleteCity('1');
+
+      expect(cityRepository.update).toHaveBeenCalledWith('1', { isActive: false });
+    });
+  });
+
+  describe('Cancellation Reason', () => {
+    it('creates a cancellation reason when the label is not already used', async () => {
+      cancellationReasonRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createCancellationReason({ label: 'Customer not available' });
+
+      expect(cancellationReasonRepository.save).toHaveBeenCalled();
+      expect(result).toMatchObject({ label: 'Customer not available' });
+    });
+
+    it('throws ConflictException when the label is already used', async () => {
+      cancellationReasonRepository.findOne.mockResolvedValue({ id: 'existing' });
+
+      await expect(service.createCancellationReason({ label: 'BER' })).rejects.toThrow(ConflictException);
+    });
+
+    it('finds only active cancellation reasons', async () => {
+      cancellationReasonRepository.find.mockResolvedValue([{ id: '1', label: 'BER', isActive: true }]);
+
+      const result = await service.findAllCancellationReasons();
+
+      expect(cancellationReasonRepository.find).toHaveBeenCalledWith({
+        where: { isActive: true },
+        order: { label: 'ASC' },
+      });
+      expect(result).toHaveLength(1);
+    });
+
+    it('soft-deletes (deactivates) a cancellation reason rather than removing the row', async () => {
+      cancellationReasonRepository.findOne.mockResolvedValue({ id: '1', label: 'BER', isActive: true });
+
+      await service.deleteCancellationReason('1');
+
+      expect(cancellationReasonRepository.update).toHaveBeenCalledWith('1', { isActive: false });
+    });
+  });
+
+  describe('Appliance Model', () => {
+    it('creates an appliance model when the brand+model combination is not already used', async () => {
+      applianceModelRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createApplianceModel({ brand: 'Samsung', model: 'RT28' });
+
+      expect(applianceModelRepository.save).toHaveBeenCalled();
+      expect(result).toMatchObject({ brand: 'Samsung', model: 'RT28' });
+    });
+
+    it('throws ConflictException when the same brand+model combination already exists', async () => {
+      applianceModelRepository.findOne.mockResolvedValue({ id: 'existing' });
+
+      await expect(
+        service.createApplianceModel({ brand: 'Samsung', model: 'RT28' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('finds only active appliance models, optionally filtered by brand', async () => {
+      const qb = buildQb([{ id: '1', brand: 'Samsung', model: 'RT28' }], true);
+      applianceModelRepository.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.findAllApplianceModels('Samsung');
+
+      expect(qb.andWhere).toHaveBeenCalledWith('model.brand = :brand', { brand: 'Samsung' });
+      expect(result).toHaveLength(1);
+    });
+
+    it('soft-deletes (deactivates) an appliance model rather than removing the row', async () => {
+      applianceModelRepository.findOne.mockResolvedValue({ id: '1', brand: 'Samsung', model: 'RT28' });
+
+      await service.deleteApplianceModel('1');
+
+      expect(applianceModelRepository.update).toHaveBeenCalledWith('1', { isActive: false });
+    });
+  });
+
+  describe('bulkImportFromCsv - new master types', () => {
+    it('routes a city row to createCity', async () => {
+      cityRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.bulkImportFromCsv('city', [{ name: 'SHJ' }]);
+
+      expect(result).toEqual({ success: 1, errors: [] });
+    });
+
+    it('routes a cancellation-reason row to createCancellationReason', async () => {
+      cancellationReasonRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.bulkImportFromCsv('cancellation-reason', [{ label: 'Not agreed for repair' }]);
+
+      expect(result).toEqual({ success: 1, errors: [] });
+    });
+
+    it('routes an appliance-model row to createApplianceModel', async () => {
+      applianceModelRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.bulkImportFromCsv('appliance-model', [{ brand: 'LG', model: 'GR-B247' }]);
+
+      expect(result).toEqual({ success: 1, errors: [] });
     });
   });
 });

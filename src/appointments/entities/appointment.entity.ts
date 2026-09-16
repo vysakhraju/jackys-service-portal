@@ -10,26 +10,63 @@ import {
   Index,
 } from 'typeorm';
 import { ServiceCentre } from '../../master-data/entities/service-centre.entity';
+import { City } from '../../master-data/entities/city.entity';
+import { CancellationReason } from '../../master-data/entities/cancellation-reason.entity';
+import { ApplianceModel } from '../../master-data/entities/appliance-model.entity';
 import { User } from '../../auth/entities/user.entity';
 import { JobCard } from '../../job-cards/entities/job-card.entity';
 
+// Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 3d/3e: COLLECTED_TO_WS
+// is the new intermediate status for the mobile "Collection to WS" action. Deliberately
+// NOT the same as COMPLETED (the pre-mortem's failure #3) - a collected-but-not-yet-
+// received unit must still be cancellable-in-spirit-blocked-by-Job-Card the same way any
+// other active appointment is, and must NOT trip the existing "can't cancel once
+// COMPLETED" rule. It only reaches COMPLETED once the web's "Mark Received" + workshop
+// S/N/invoice check (Phase 4) succeeds and a Job Card is created. See
+// claude/APPOINTMENT_MOBILE_JOBCARD_SPEC.md section 2.2 for the full state machine.
 export enum AppointmentStatus {
   SCHEDULED = 'SCHEDULED',
   CONFIRMED = 'CONFIRMED',
   TECHNICIAN_ASSIGNED = 'TECHNICIAN_ASSIGNED',
   ON_SITE = 'ON_SITE',
+  COLLECTED_TO_WS = 'COLLECTED_TO_WS',
   COMPLETED = 'COMPLETED',
   CANCELLED = 'CANCELLED',
   NO_SHOW = 'NO_SHOW',
   RESCHEDULED = 'RESCHEDULED',
 }
 
+// Coverage category - what financial/contract coverage this appointment falls under.
+// Unchanged by the 2026-09-16 overhaul; see JobType below for the new, deliberately
+// separate "what work is being done" axis (spec doc decision #1 - Option 1, two
+// independent fields rather than conflating coverage with work type in one enum).
 export enum AppointmentType {
   WARRANTY = 'WARRANTY',
   OUT_OF_WARRANTY = 'OUT_OF_WARRANTY',
   AMC = 'AMC',
   PREVENTIVE = 'PREVENTIVE',
   DISMANTLING = 'DISMANTLING',
+}
+
+// Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 1a: what work is being
+// done, orthogonal to AppointmentType's coverage category above. REPAIR is the default -
+// every appointment created before this field existed, and every existing consumer of
+// this app that doesn't yet pass one, behaves exactly as before (a repair visit).
+// Installation/Delivery+Installation's cost/rate logic stays parked per the request.
+export enum JobType {
+  REPAIR = 'REPAIR',
+  INSTALLATION = 'INSTALLATION',
+  DELIVERY_INSTALLATION = 'DELIVERY_INSTALLATION',
+  MAINTENANCE = 'MAINTENANCE',
+}
+
+// Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 1d/5: purely
+// informational going forward - VAT stays Service Centre-driven, unchanged (spec doc
+// decision #5). Kept as a small fixed enum rather than a master-data table since only
+// these two values were ever asked for.
+export enum AppointmentCountry {
+  UAE = 'UAE',
+  KSA = 'KSA',
 }
 
 export enum CustomerType {
@@ -67,6 +104,12 @@ export class Appointment {
 
   @Column({ type: 'enum', enum: AppointmentType })
   type: AppointmentType;
+
+  // Req. 1a - defaults REPAIR at the DB level (same reasoning as `channel` defaulting
+  // PHONE above) so every pre-existing row and every caller that doesn't yet pass this
+  // field keeps behaving exactly as before.
+  @Column({ type: 'enum', enum: JobType, default: JobType.REPAIR })
+  jobType: JobType;
 
   @Column({ type: 'enum', enum: AppointmentStatus, default: AppointmentStatus.SCHEDULED })
   status: AppointmentStatus;
@@ -118,11 +161,36 @@ export class Appointment {
   @Column({ nullable: true })
   customerVatNumber: string;
 
+  // Req. 1c/1d - proper FK/enum replacements for the plain customerCity/customerCountry
+  // strings above, added by the 2026-09-16 overhaul. Nullable so existing rows (and any
+  // caller not yet updated to send them) stay valid; customerCity/customerCountry are
+  // kept as-is for backward read-compat rather than migrated/dropped. `country` is
+  // informational only - see AppointmentCountry's own doc comment; VAT stays Service
+  // Centre-driven.
+  @ManyToOne(() => City, { nullable: true, eager: true })
+  @JoinColumn({ name: 'cityId' })
+  city: City | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  cityId: string | null;
+
+  @Column({ type: 'enum', enum: AppointmentCountry, default: AppointmentCountry.UAE })
+  country: AppointmentCountry;
+
   @Column({ nullable: true })
   brand: string;
 
   @Column({ nullable: true })
   modelNumber: string;
+
+  // Req. 1e - proper FK replacement for the plain brand/modelNumber strings above.
+  // Nullable for the same backward-compat reason as cityId.
+  @ManyToOne(() => ApplianceModel, { nullable: true, eager: true })
+  @JoinColumn({ name: 'applianceModelId' })
+  applianceModel: ApplianceModel | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  applianceModelId: string | null;
 
   @Column({ nullable: true })
   serialNumber: string;
@@ -175,6 +243,16 @@ export class Appointment {
 
   @Column({ nullable: true })
   cancellationReason: string;
+
+  // Req. 3f - the mobile Cancellation action's DB-backed reason. Existing free-text
+  // `cancellationReason` above stays for the web/CCE-initiated cancel path (unchanged);
+  // this FK is set only when the cancellation came from the new mobile reason dropdown.
+  @ManyToOne(() => CancellationReason, { nullable: true, eager: true })
+  @JoinColumn({ name: 'cancellationReasonId' })
+  cancellationReasonEntity: CancellationReason | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  cancellationReasonId: string | null;
 
   @ManyToOne(() => ServiceCentre, { eager: true })
   @JoinColumn({ name: 'serviceCentreId' })

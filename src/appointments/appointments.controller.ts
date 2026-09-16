@@ -279,6 +279,29 @@ export class AppointmentsController {
     return this.appointmentsService.markOnSite(id, user.id, req);
   }
 
+  // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 3d/3e: mobile's
+  // "Collection to WS" action. Same capability as on-site/complete above - whoever can
+  // act on the appointment from mobile can use any of its 3 new actions.
+  @Put(':id/collected-to-ws')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'Appointment',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Mark appointment as collected to workshop (mobile "Collection to WS" action)' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200, type: Appointment })
+  @ApiResponse({ status: 400, description: 'Can only mark collected-to-workshop for confirmed/assigned/on-site appointments' })
+  async markCollectedToWorkshop(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.appointmentsService.markCollectedToWorkshop(id, user.id, req);
+  }
+
   @Put(':id/complete')
   @RequiresCapability('SCHEDULE_FIELD_VISIT')
   @UseInterceptors(AuditInterceptor)

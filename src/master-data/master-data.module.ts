@@ -11,6 +11,9 @@ import { TechnicianKpiRule } from './entities/technician-kpi-rule.entity';
 import { NotificationTemplate } from './entities/notification-template.entity';
 import { WarrantyMaster } from './entities/warranty-master.entity';
 import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
+import { City } from './entities/city.entity';
+import { CancellationReason } from './entities/cancellation-reason.entity';
+import { ApplianceModel } from './entities/appliance-model.entity';
 import { User } from '../auth/entities/user.entity';
 import { AuthModule } from '../auth/auth.module';
 
@@ -26,6 +29,13 @@ import { AuthModule } from '../auth/auth.module';
       NotificationTemplate,
       WarrantyMaster,
       ComponentYieldMatrix,
+      // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1 - new admin-manageable
+      // masters backing the New Appointment popup (City, ApplianceModel) and the mobile
+      // Cancellation action (CancellationReason). See
+      // claude/APPOINTMENT_MOBILE_JOBCARD_SPEC.md for the full spec.
+      City,
+      CancellationReason,
+      ApplianceModel,
       // #218/#253: listActiveFieldTechnicians() below backs the Service Centres page's
       // field-technician picker - CCE (who can create/update service centres) has no
       // access to GET /users (admin-only) or GET /technician-schedule/gantt (Team-Leader-

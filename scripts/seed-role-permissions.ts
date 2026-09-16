@@ -105,6 +105,11 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'DASHBOARD_WIDGET_AMC_STATUS', defaultRoles: ['CCE'] },
   { key: 'DASHBOARD_WIDGET_DELIVERY_INVOICING', defaultRoles: ['LOGISTICS_DISPATCHER'] },
   { key: 'DASHBOARD_WIDGET_FINANCE_SUMMARY', defaultRoles: [] },
+  // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1 - mirror
+  // capability-catalog.ts's own comments for reasoning.
+  { key: 'MASTER_DATA_CITY_MANAGE', defaultRoles: [] },
+  { key: 'MASTER_DATA_CANCELLATION_REASON_MANAGE', defaultRoles: [] },
+  { key: 'MASTER_DATA_APPLIANCE_MODEL_MANAGE', defaultRoles: [] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

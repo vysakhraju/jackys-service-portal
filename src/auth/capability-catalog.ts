@@ -616,6 +616,36 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [],
     migrated: true,
   },
+  // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1 - see
+  // claude/APPOINTMENT_MOBILE_JOBCARD_SPEC.md. New master-data manage capabilities,
+  // same "empty defaultRoles" pattern as every other Master Data entry above (Master
+  // Data should not be accessible to any normal user until a Super Admin explicitly
+  // grants it via Designation Access).
+  {
+    key: 'MASTER_DATA_CITY_MANAGE',
+    label: 'Create, update, or delete a City master entry',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_CANCELLATION_REASON_MANAGE',
+    label: 'Create, update, or delete a Cancellation Reason master entry',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_APPLIANCE_MODEL_MANAGE',
+    label: 'Create, update, or delete an Appliance Model (brand/model SKU) master entry',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  // NOTE: WORKSHOP_INTAKE_SN_VALIDATE (Phase 4 of the same overhaul - the workshop
+  // S/N-entry + invoice-check screen) is deliberately NOT added here yet - it has no
+  // gated endpoint to attach to until that screen is built, and an unused capability
+  // would just be confusing noise in the Designation Access admin UI. Add it in Phase 4.
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {

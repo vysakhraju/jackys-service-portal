@@ -22,6 +22,9 @@ import { CreateKpiRuleDto } from './dto/create-kpi-rule.dto';
 import { CreateNotificationTemplateDto } from './dto/create-notification-template.dto';
 import { CreateWarrantyMasterDto } from './dto/create-warranty-master.dto';
 import { CreateComponentYieldDto } from './dto/create-component-yield.dto';
+import { CreateCityDto, UpdateCityDto } from './dto/create-city.dto';
+import { CreateCancellationReasonDto, UpdateCancellationReasonDto } from './dto/create-cancellation-reason.dto';
+import { CreateApplianceModelDto, UpdateApplianceModelDto } from './dto/create-appliance-model.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -43,6 +46,9 @@ import { TechnicianKpiRule } from './entities/technician-kpi-rule.entity';
 import { NotificationTemplate } from './entities/notification-template.entity';
 import { WarrantyMaster } from './entities/warranty-master.entity';
 import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
+import { City } from './entities/city.entity';
+import { CancellationReason } from './entities/cancellation-reason.entity';
+import { ApplianceModel } from './entities/appliance-model.entity';
 
 @ApiTags('master-data')
 @Controller('master-data')
@@ -386,6 +392,134 @@ export class MasterDataController {
   @ApiResponse({ status: 200, type: [ComponentYieldMatrix] })
   findYieldByCategory(@Param('category') category: RecoveryCategory) {
     return this.masterDataService.findYieldByCategory(category);
+  }
+
+  // === City === (Appointment/Mobile/Job Card overhaul, 2026-09-16 Phase 1, req. 1c)
+  // List is deliberately open (no capability check) - same exception as service-centres/
+  // spare-parts list above: this backs the New Appointment popup's City dropdown for
+  // every CCE-type user, not just Master Data admins, so gating it behind MASTER_DATA_VIEW
+  // (default: nobody) would break appointment creation for everyone until a Super Admin
+  // separately granted that too.
+  @Post('cities')
+  @RequiresCapability('MASTER_DATA_CITY_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.CREATE, entityType: 'City', getEntityId: (args) => args.body?.name })
+  @ApiOperation({ summary: 'Create a city' })
+  @ApiBody({ type: CreateCityDto })
+  @ApiResponse({ status: 201, type: City })
+  createCity(@Body() data: CreateCityDto) {
+    return this.masterDataService.createCity(data);
+  }
+
+  @Get('cities')
+  @ApiOperation({ summary: 'Get all active cities' })
+  @ApiResponse({ status: 200, type: [City] })
+  findAllCities() {
+    return this.masterDataService.findAllCities();
+  }
+
+  @Put('cities/:id')
+  @RequiresCapability('MASTER_DATA_CITY_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.UPDATE, entityType: 'City', getEntityId: (args) => args.params?.id })
+  @ApiOperation({ summary: 'Update a city (also used to reactivate one)' })
+  @ApiBody({ type: UpdateCityDto })
+  @ApiResponse({ status: 200, type: City })
+  updateCity(@Param('id') id: string, @Body() data: UpdateCityDto) {
+    return this.masterDataService.updateCity(id, data);
+  }
+
+  // Hardcoded @Roles('SUPER_ADMIN') rather than a capability - same asymmetric pattern as
+  // deleteServiceCentre above (this is the "delete" the request explicitly asked to be a
+  // Super Admin action; "deactivate" is the same operation via PUT above with
+  // isActive:false, for anyone holding MASTER_DATA_CITY_MANAGE).
+  @Delete('cities/:id')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Delete a city (soft)' })
+  deleteCity(@Param('id') id: string) {
+    return this.masterDataService.deleteCity(id);
+  }
+
+  // === Cancellation Reason === (req. 3f - mobile Cancellation action's reason dropdown)
+  // List also deliberately open - the mobile Cancellation screen needs it for every field
+  // technician, not just Master Data admins.
+  @Post('cancellation-reasons')
+  @RequiresCapability('MASTER_DATA_CANCELLATION_REASON_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.CREATE, entityType: 'CancellationReason', getEntityId: (args) => args.body?.label })
+  @ApiOperation({ summary: 'Create a cancellation reason' })
+  @ApiBody({ type: CreateCancellationReasonDto })
+  @ApiResponse({ status: 201, type: CancellationReason })
+  createCancellationReason(@Body() data: CreateCancellationReasonDto) {
+    return this.masterDataService.createCancellationReason(data);
+  }
+
+  @Get('cancellation-reasons')
+  @ApiOperation({ summary: 'Get all active cancellation reasons' })
+  @ApiResponse({ status: 200, type: [CancellationReason] })
+  findAllCancellationReasons() {
+    return this.masterDataService.findAllCancellationReasons();
+  }
+
+  @Put('cancellation-reasons/:id')
+  @RequiresCapability('MASTER_DATA_CANCELLATION_REASON_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.UPDATE, entityType: 'CancellationReason', getEntityId: (args) => args.params?.id })
+  @ApiOperation({ summary: 'Update a cancellation reason (also used to reactivate one)' })
+  @ApiBody({ type: UpdateCancellationReasonDto })
+  @ApiResponse({ status: 200, type: CancellationReason })
+  updateCancellationReason(@Param('id') id: string, @Body() data: UpdateCancellationReasonDto) {
+    return this.masterDataService.updateCancellationReason(id, data);
+  }
+
+  @Delete('cancellation-reasons/:id')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Delete a cancellation reason (soft)' })
+  deleteCancellationReason(@Param('id') id: string) {
+    return this.masterDataService.deleteCancellationReason(id);
+  }
+
+  // === Appliance Model === (req. 1e - New Appointment popup's Brand + Model dropdowns)
+  // List also deliberately open, same reasoning as City/Cancellation Reason above.
+  @Post('appliance-models')
+  @RequiresCapability('MASTER_DATA_APPLIANCE_MODEL_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.CREATE,
+    entityType: 'ApplianceModel',
+    getEntityId: (args) => `${args.body?.brand} ${args.body?.model}`,
+  })
+  @ApiOperation({ summary: 'Create an appliance model (brand/model SKU)' })
+  @ApiBody({ type: CreateApplianceModelDto })
+  @ApiResponse({ status: 201, type: ApplianceModel })
+  createApplianceModel(@Body() data: CreateApplianceModelDto) {
+    return this.masterDataService.createApplianceModel(data);
+  }
+
+  @Get('appliance-models')
+  @ApiQuery({ name: 'brand', required: false })
+  @ApiOperation({ summary: 'Get all active appliance models, optionally filtered by brand' })
+  @ApiResponse({ status: 200, type: [ApplianceModel] })
+  findAllApplianceModels(@Query('brand') brand?: string) {
+    return this.masterDataService.findAllApplianceModels(brand);
+  }
+
+  @Put('appliance-models/:id')
+  @RequiresCapability('MASTER_DATA_APPLIANCE_MODEL_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.UPDATE, entityType: 'ApplianceModel', getEntityId: (args) => args.params?.id })
+  @ApiOperation({ summary: 'Update an appliance model (also used to reactivate one)' })
+  @ApiBody({ type: UpdateApplianceModelDto })
+  @ApiResponse({ status: 200, type: ApplianceModel })
+  updateApplianceModel(@Param('id') id: string, @Body() data: UpdateApplianceModelDto) {
+    return this.masterDataService.updateApplianceModel(id, data);
+  }
+
+  @Delete('appliance-models/:id')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Delete an appliance model (soft)' })
+  deleteApplianceModel(@Param('id') id: string) {
+    return this.masterDataService.deleteApplianceModel(id);
   }
 
   // === Bulk Import ===

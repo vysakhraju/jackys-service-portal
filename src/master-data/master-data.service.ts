@@ -15,6 +15,9 @@ import { TechnicianKpiRule } from './entities/technician-kpi-rule.entity';
 import { NotificationTemplate } from './entities/notification-template.entity';
 import { WarrantyMaster } from './entities/warranty-master.entity';
 import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
+import { City } from './entities/city.entity';
+import { CancellationReason } from './entities/cancellation-reason.entity';
+import { ApplianceModel } from './entities/appliance-model.entity';
 import { Country } from './entities/service-centre.entity';
 import { ApplianceCategory } from './entities/fault-symptom.entity';
 import { ServiceActivityType } from './entities/service-price-list.entity';
@@ -44,6 +47,12 @@ export class MasterDataService {
     private warrantyMasterRepository: Repository<WarrantyMaster>,
     @InjectRepository(ComponentYieldMatrix)
     private componentYieldMatrixRepository: Repository<ComponentYieldMatrix>,
+    @InjectRepository(City)
+    private cityRepository: Repository<City>,
+    @InjectRepository(CancellationReason)
+    private cancellationReasonRepository: Repository<CancellationReason>,
+    @InjectRepository(ApplianceModel)
+    private applianceModelRepository: Repository<ApplianceModel>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
   ) {}
@@ -369,6 +378,116 @@ export class MasterDataService {
     });
   }
 
+  // City - Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 1c. Same
+  // create/findAll(active-only)/update/soft-delete shape as Service Centre above -
+  // "deactivate or delete" both resolve to the same isActive=false, same as
+  // deleteServiceCentre's own "soft" delete.
+  async createCity(data: Partial<City>): Promise<City> {
+    const existing = await this.cityRepository.findOne({ where: { name: data.name } });
+    if (existing) {
+      throw new ConflictException(`City "${data.name}" already exists`);
+    }
+    const city = this.cityRepository.create(data);
+    return this.cityRepository.save(city);
+  }
+
+  async findAllCities(): Promise<City[]> {
+    return this.cityRepository.find({ where: { isActive: true }, order: { name: 'ASC' } });
+  }
+
+  async findCityById(id: string): Promise<City> {
+    const city = await this.cityRepository.findOne({ where: { id } });
+    if (!city) {
+      throw new NotFoundException(`City ${id} not found`);
+    }
+    return city;
+  }
+
+  async updateCity(id: string, data: Partial<City>): Promise<City> {
+    await this.findCityById(id);
+    await this.cityRepository.update(id, data);
+    return this.findCityById(id);
+  }
+
+  async deleteCity(id: string): Promise<void> {
+    await this.findCityById(id);
+    await this.cityRepository.update(id, { isActive: false });
+  }
+
+  // Cancellation Reason - req. 3f (mobile Cancellation action's reason dropdown).
+  async createCancellationReason(data: Partial<CancellationReason>): Promise<CancellationReason> {
+    const existing = await this.cancellationReasonRepository.findOne({ where: { label: data.label } });
+    if (existing) {
+      throw new ConflictException(`Cancellation reason "${data.label}" already exists`);
+    }
+    const reason = this.cancellationReasonRepository.create(data);
+    return this.cancellationReasonRepository.save(reason);
+  }
+
+  async findAllCancellationReasons(): Promise<CancellationReason[]> {
+    return this.cancellationReasonRepository.find({ where: { isActive: true }, order: { label: 'ASC' } });
+  }
+
+  async findCancellationReasonById(id: string): Promise<CancellationReason> {
+    const reason = await this.cancellationReasonRepository.findOne({ where: { id } });
+    if (!reason) {
+      throw new NotFoundException(`Cancellation reason ${id} not found`);
+    }
+    return reason;
+  }
+
+  async updateCancellationReason(id: string, data: Partial<CancellationReason>): Promise<CancellationReason> {
+    await this.findCancellationReasonById(id);
+    await this.cancellationReasonRepository.update(id, data);
+    return this.findCancellationReasonById(id);
+  }
+
+  async deleteCancellationReason(id: string): Promise<void> {
+    await this.findCancellationReasonById(id);
+    await this.cancellationReasonRepository.update(id, { isActive: false });
+  }
+
+  // Appliance Model - req. 1e (New Appointment popup's Brand + Model dropdowns).
+  async createApplianceModel(data: Partial<ApplianceModel>): Promise<ApplianceModel> {
+    const existing = await this.applianceModelRepository.findOne({
+      where: { brand: data.brand, model: data.model },
+    });
+    if (existing) {
+      throw new ConflictException(`Appliance model "${data.brand} ${data.model}" already exists`);
+    }
+    const applianceModel = this.applianceModelRepository.create(data);
+    return this.applianceModelRepository.save(applianceModel);
+  }
+
+  async findAllApplianceModels(brand?: string): Promise<ApplianceModel[]> {
+    const query = this.applianceModelRepository.createQueryBuilder('model');
+    query.where('model.isActive = :isActive', { isActive: true });
+    if (brand) {
+      query.andWhere('model.brand = :brand', { brand });
+    }
+    query.orderBy('model.brand', 'ASC').addOrderBy('model.model', 'ASC');
+    return query.getMany();
+  }
+
+  async findApplianceModelById(id: string): Promise<ApplianceModel> {
+    const applianceModel = await this.applianceModelRepository.findOne({ where: { id } });
+    if (!applianceModel) {
+      throw new NotFoundException(`Appliance model ${id} not found`);
+    }
+    return applianceModel;
+  }
+
+  async updateApplianceModel(id: string, data: Partial<ApplianceModel>): Promise<ApplianceModel> {
+    await this.findApplianceModelById(id);
+    await this.applianceModelRepository.update(id, data);
+    return this.findApplianceModelById(id);
+  }
+
+  async deleteApplianceModel(id: string): Promise<void> {
+    await this.findApplianceModelById(id);
+    await this.applianceModelRepository.update(id, { isActive: false });
+  }
+
   // Bulk import from CSV/Excel
   async bulkImportFromCsv(entityType: string, data: any[]): Promise<{ success: number; errors: string[] }> {
     const errors: string[] = [];
@@ -403,6 +522,15 @@ export class MasterDataService {
             break;
           case 'component-yield':
             await this.createComponentYield(row);
+            break;
+          case 'city':
+            await this.createCity(row);
+            break;
+          case 'cancellation-reason':
+            await this.createCancellationReason(row);
+            break;
+          case 'appliance-model':
+            await this.createApplianceModel(row);
             break;
           default:
             errors.push(`Unknown entity type: ${entityType}`);
