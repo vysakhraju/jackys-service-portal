@@ -17,7 +17,9 @@ describe('JobCardsService', () => {
 
   const appointment = (overrides: any = {}) => ({
     id: 'apt-1',
+    appointmentNumber: 'APT-0001',
     invoiceNumber: 'INV-1001',
+    status: 'ON_SITE',
     ...overrides,
   });
 
@@ -201,6 +203,54 @@ describe('JobCardsService', () => {
 
       await expect(service.create(dto, 'user-1')).rejects.toThrow(ConflictException);
       expect(technicianService.getVisit).not.toHaveBeenCalled();
+    });
+
+    it('the "already exists" error names the human-readable appointment number, not the raw UUID', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ appointmentNumber: 'APT-0001' }));
+      jobCardRepository.findOne.mockResolvedValue(jobCard());
+
+      await expect(service.create(dto, 'user-1')).rejects.toThrow(
+        'A Job Card already exists for appointment APT-0001',
+      );
+    });
+
+    // Bug fix (mobile Phase 3 live testing, 2026-09-16): getVisit() only ever sees the raw
+    // appointment UUID, so its own NotFoundException message baked that in. create() now
+    // catches and re-throws using the appointment it already loaded, naming the
+    // human-readable number instead.
+    it('re-throws "no visit started" naming the appointment number, with a Start Visit hint for an on-site appointment', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ appointmentNumber: 'APT-0002', status: 'ON_SITE' }));
+      jobCardRepository.findOne.mockResolvedValue(null);
+      technicianService.getVisit.mockRejectedValue(
+        new NotFoundException('No visit has been started for appointment apt-1. Call start-visit first.'),
+      );
+
+      await expect(service.create(dto, 'user-1')).rejects.toThrow(NotFoundException);
+      await expect(service.create(dto, 'user-1')).rejects.toThrow(
+        'No technician visit has been started for appointment APT-0002 yet. Call Start Visit from the mobile app first.',
+      );
+    });
+
+    it('re-throws "no visit started" with the workshop-intake hint for a COLLECTED_TO_WS appointment', async () => {
+      appointmentsService.findById.mockResolvedValue(
+        appointment({ appointmentNumber: 'APT-0003', status: 'COLLECTED_TO_WS' }),
+      );
+      jobCardRepository.findOne.mockResolvedValue(null);
+      technicianService.getVisit.mockRejectedValue(
+        new NotFoundException('No visit has been started for appointment apt-1. Call start-visit first.'),
+      );
+
+      await expect(service.create(dto, 'user-1')).rejects.toThrow(
+        /collected to workshop from the field.*workshop intake.*Mark Received.*Phase 4/s,
+      );
+    });
+
+    it('propagates a non-NotFoundException error from getVisit unchanged', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment());
+      jobCardRepository.findOne.mockResolvedValue(null);
+      technicianService.getVisit.mockRejectedValue(new Error('DB down'));
+
+      await expect(service.create(dto, 'user-1')).rejects.toThrow('DB down');
     });
 
     // 2026-09-08: "an appointment is fulfilled the instant a Job Card exists for it" - see

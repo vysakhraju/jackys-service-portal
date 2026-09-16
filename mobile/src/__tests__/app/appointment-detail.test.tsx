@@ -636,6 +636,54 @@ describe('AppointmentDetailScreen - Collection to WS & Cancellation', () => {
 
     await waitFor(() => expect(screen.getByTestId('cancellation-reasons-error')).toBeOnTheScreen());
   });
+
+  // Bug fix (live testing, 2026-09-16): tapping Collection to WS/Confirm cancellation while
+  // online used to make the whole Actions card silently vanish on success (status flips ->
+  // both canX flags flip false -> nothing else on screen said the tap worked). Now a
+  // server-derived confirmation line renders in its place.
+  it('shows a success confirmation after marking collected to workshop online (no queued item)', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedMarkCollectedToWorkshop.mockResolvedValue({ id: 'appt-1', status: 'COLLECTED_TO_WS' });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('mark-collected-to-ws-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('mark-collected-to-ws-button'));
+
+    await waitFor(() => expect(screen.getByTestId('collected-to-ws-success')).toBeOnTheScreen());
+    expect(screen.queryByTestId('mark-collected-to-ws-button')).toBeNull();
+  });
+
+  it('does not show the collected-to-ws success line when the action is only queued offline, not yet synced', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue({
+      isOnline: false,
+      pendingItems: [queuedAction({ type: 'COLLECTED_TO_WS', appointmentId: 'appt-1' })],
+      failedItems: [],
+      enqueue: mockEnqueue,
+      retry: jest.fn(),
+      dismiss: jest.fn(),
+    });
+    await renderScreen(appt({ status: 'COLLECTED_TO_WS' }));
+
+    await waitFor(() => expect(screen.getByTestId('collected-to-ws-queued')).toBeOnTheScreen());
+    expect(screen.queryByTestId('collected-to-ws-success')).toBeNull();
+  });
+
+  it('shows a success confirmation after confirming cancellation online (no queued item)', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedListCancellationReasons.mockResolvedValue([cancellationReasonFixture()]);
+    mockedCancelAppointment.mockResolvedValue({ id: 'appt-1', status: 'CANCELLED' });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-cancel-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-cancel-section'));
+    await waitFor(() => expect(screen.getByTestId('cancel-reason-reason-1')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('cancel-reason-reason-1'));
+    await fireEvent.press(screen.getByTestId('confirm-cancel-button'));
+
+    await waitFor(() => expect(screen.getByTestId('cancel-success')).toBeOnTheScreen());
+    expect(screen.queryByTestId('open-cancel-section')).toBeNull();
+  });
 });
 
 // Phase 5: Job Card polling + Need Spare + Complete/QC-handoff. Online behavior only -

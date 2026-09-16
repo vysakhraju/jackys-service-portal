@@ -451,8 +451,24 @@ export default function AppointmentDetailScreen() {
   const canStart = STARTABLE_STATUSES.has(appointment.status) && visitNotFound && !queuedStartVisit;
   const busy = locating || startMutation.isPending;
   const canCaptureFaultSymptom = Boolean(visit?.serialNumber);
-  const canMarkCollectedToWorkshop = !NOT_COLLECTIBLE_TO_WS_STATUSES.has(appointment.status) && !queuedCollectedToWs;
-  const canCancel = !NOT_CANCELLABLE_STATUSES.has(appointment.status) && !queuedCancel;
+  // Bug fix (live testing, 2026-09-16): `appointment` above is frozen route-param data (see
+  // the useMemo(() => JSON.parse(params.appt), ...) near the top of this component) - it is
+  // NOT re-fetched after a mutation, so appointment.status here never actually changes for
+  // the lifetime of this screen instance. Before this fix, canMarkCollectedToWorkshop/canCancel
+  // were computed from that same frozen status, so tapping Collection to WS or Confirm
+  // cancellation left the button sitting there looking untouched, with zero on-screen sign
+  // the tap did anything - exactly what was reported ("no pop up... to show action completed
+  // success"). Gating on the mutation's own `isSuccess` instead - the same local-state pattern
+  // this screen already uses for Complete Visit (see completeMutation.isSuccess further down) -
+  // fixes both: the button/section is replaced by a confirmation line, and it won't reappear on
+  // a re-render. It does reset if this screen unmounts/remounts (e.g. navigating away and back),
+  // but by then the technician would be looking at a freshly-fetched appointment from the
+  // schedule list anyway, showing the real new status.
+  const canMarkCollectedToWorkshop =
+    !NOT_COLLECTIBLE_TO_WS_STATUSES.has(appointment.status) && !queuedCollectedToWs && !collectedToWsMutation.isSuccess;
+  const canCancel = !NOT_CANCELLABLE_STATUSES.has(appointment.status) && !queuedCancel && !cancelMutation.isSuccess;
+  const justCollectedToWs = collectedToWsMutation.isSuccess && !queuedCollectedToWs;
+  const justCancelled = cancelMutation.isSuccess && !queuedCancel;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -484,9 +500,25 @@ export default function AppointmentDetailScreen() {
           {appointment.problemDescription && <Text style={styles.problem}>{appointment.problemDescription}</Text>}
         </View>
 
-        {(canMarkCollectedToWorkshop || queuedCollectedToWs || canCancel || queuedCancel) && (
+        {(canMarkCollectedToWorkshop ||
+          queuedCollectedToWs ||
+          canCancel ||
+          queuedCancel ||
+          justCollectedToWs ||
+          justCancelled) && (
           <View style={styles.card} testID="mobile-actions-card">
             <Text style={styles.sectionTitle}>Actions</Text>
+
+            {justCollectedToWs && (
+              <Text style={styles.successText} testID="collected-to-ws-success">
+                ✓ Marked collected to workshop.
+              </Text>
+            )}
+            {justCancelled && (
+              <Text style={styles.successText} testID="cancel-success">
+                ✓ This appointment was cancelled.
+              </Text>
+            )}
 
             {queuedCollectedToWs ? (
               <Text style={styles.meta} testID="collected-to-ws-queued">
@@ -1096,6 +1128,8 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 13, fontWeight: '600', color: '#334155', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 },
   spinner: { marginVertical: 8 },
   visitStartedText: { fontSize: 15, fontWeight: '600', color: '#166534', marginBottom: 4 },
+  // Same green as visitStartedText above - this app's established "confirmed success" color.
+  successText: { fontSize: 14, fontWeight: '600', color: '#166534', marginBottom: 8 },
   errorBox: { backgroundColor: '#fef2f2', borderRadius: 8, padding: 10, marginBottom: 12 },
   errorBoxText: { color: '#b91c1c', fontSize: 13, marginBottom: 8 },
   linkText: { color: '#2563eb', fontSize: 13, fontWeight: '600', marginTop: 6 },

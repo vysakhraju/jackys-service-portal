@@ -9,6 +9,7 @@ import { User } from '../auth/entities/user.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { getJobCardProgressFields, JobCardProgressFields } from './job-card-progress.util';
 import { AppointmentsService } from '../appointments/appointments.service';
+import { AppointmentStatus } from '../appointments/entities/appointment.entity';
 import { TechnicianService } from '../technician/technician.service';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
 import { ValidateSnDto } from './dto/validate-sn.dto';
@@ -227,7 +228,7 @@ export class JobCardsService {
 
     const existing = await this.jobCardRepository.findOne({ where: { appointmentId: dto.appointmentId } });
     if (existing) {
-      throw new ConflictException(`A Job Card already exists for appointment ${dto.appointmentId}`);
+      throw new ConflictException(`A Job Card already exists for appointment ${appointment.appointmentNumber}`);
     }
 
     if (!appointment.invoiceNumber) {
@@ -236,7 +237,28 @@ export class JobCardsService {
       );
     }
 
-    const visit = await this.technicianService.getVisit(dto.appointmentId);
+    // Bug fix (mobile Phase 3 live testing, 2026-09-16): getVisit() throws with the raw
+    // appointment UUID baked into its message (it only ever sees an id, never the
+    // human-readable number). We already have the loaded `appointment` here, so catch
+    // and re-throw with `appointmentNumber` instead - same fix applied to the
+    // "already exists" ConflictException above. Also: a COLLECTED_TO_WS appointment
+    // (mobile's new action, no on-site visit ever happened) will always land here -
+    // that's expected until Phase 4's workshop-intake ("Mark Received") screen ships its
+    // own Job Card creation branch; this is just making the interim error message sane.
+    let visit;
+    try {
+      visit = await this.technicianService.getVisit(dto.appointmentId);
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        throw new NotFoundException(
+          `No technician visit has been started for appointment ${appointment.appointmentNumber} yet. ` +
+            (appointment.status === AppointmentStatus.COLLECTED_TO_WS
+              ? 'This appointment was collected to workshop from the field, not visited on-site - it needs the workshop intake / "Mark Received" flow instead of Create Job Card (not built yet - Phase 4).'
+              : 'Call Start Visit from the mobile app first.'),
+        );
+      }
+      throw err;
+    }
     if (!visit.serialNumber || !visit.warrantyStatus || !visit.faultCode || !visit.symptomCode) {
       throw new BadRequestException(
         'Cannot create a Job Card: the field visit is not complete yet (serial number, warranty check, ' +
