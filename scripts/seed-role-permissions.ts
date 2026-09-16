@@ -101,6 +101,10 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   { key: 'DASHBOARD_WIDGET_WORKSHOP_QUEUE', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
   { key: 'DASHBOARD_WIDGET_SLA_BREACH', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
   { key: 'DASHBOARD_WIDGET_SPARE_CONSUMPTION', defaultRoles: ['TECHNICAL_TEAM_LEADER'] },
+  // Second round (2026-09-16) - mirror capability-catalog.ts's own comments for reasoning.
+  { key: 'DASHBOARD_WIDGET_AMC_STATUS', defaultRoles: ['CCE'] },
+  { key: 'DASHBOARD_WIDGET_DELIVERY_INVOICING', defaultRoles: ['LOGISTICS_DISPATCHER'] },
+  { key: 'DASHBOARD_WIDGET_FINANCE_SUMMARY', defaultRoles: [] },
 ];
 
 const MATRIX_LOCKED_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD', 'CUSTOMER'];

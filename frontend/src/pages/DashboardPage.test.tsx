@@ -109,4 +109,39 @@ describe('DashboardPage', () => {
     fireEvent.click(await screen.findByText('JC-0001'));
     expect(navigate).toHaveBeenCalledWith('/job-cards/journey?jobCardId=jc-1');
   });
+
+  it('navigates to AMC Contracts when the AMC Status widget action is clicked', async () => {
+    vi.mocked(getDashboardOverview).mockResolvedValue({
+      widgets: {
+        amcStatus: { activeCount: 12, expiringSoonCount: 2, expiringSoonWithinDays: 30, upsellCandidatesCount: 1 },
+      },
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open AMC Contracts →' }));
+    expect(navigate).toHaveBeenCalledWith('/amc/contracts');
+  });
+
+  it('routes the Delivery & Invoicing widget to its own two destinations', async () => {
+    vi.mocked(getDashboardOverview).mockResolvedValue({
+      widgets: { deliveryInvoicing: { readyForDeliveryCount: 4, b2bOutstandingAmount: 500 } },
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Ready for Delivery →' }));
+    expect(navigate).toHaveBeenCalledWith('/delivery/ready');
+
+    fireEvent.click(screen.getByText('AED 500.00'));
+    expect(navigate).toHaveBeenCalledWith('/finance/aging');
+  });
+
+  it('navigates to Finance Reports when the Finance Summary widget action is clicked', async () => {
+    vi.mocked(getDashboardOverview).mockResolvedValue({
+      widgets: { financeSummary: { totalServiceRevenue: 1000, totalAmcRevenue: 200, activeAmcContracts: 3 } },
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Finance Reports →' }));
+    expect(navigate).toHaveBeenCalledWith('/reports/finance');
+  });
 });

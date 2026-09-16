@@ -7,6 +7,10 @@ describe('DashboardService', () => {
   let reportsService: any;
   let operationalReportsService: any;
   let technicianScheduleService: any;
+  let amcService: any;
+  let deliveryService: any;
+  let invoicingService: any;
+  let financeReportsService: any;
 
   const caller = (roleName: RoleName = RoleName.TECHNICAL_TEAM_LEADER) =>
     ({ id: 'user-1', role: { id: 'role-1', name: roleName } } as any);
@@ -49,6 +53,21 @@ describe('DashboardService', () => {
     byWarrantyStatus: [],
   };
 
+  const amcActiveContracts = [{ id: 'amc-1' }, { id: 'amc-2' }];
+  const amcExpiringSoon = [{ id: 'amc-2' }];
+  const amcUpsellCandidates = [{ jobCardId: 'jc-9', jobCardNumber: 'JC-0009', customerName: 'A', customerPhone: '1', estimateAmount: 500 }];
+
+  const deliveryReady = [
+    { jobCard: { id: 'jc-1' }, invoiceStatus: null, payable: true },
+    { jobCard: { id: 'jc-2' }, invoiceStatus: 'DRAFT', payable: true },
+  ];
+  const b2bAging = { buckets: [], totalOutstanding: 1234.56 };
+
+  const financeSummary = {
+    revenueSummary: { totalServiceRevenue: 5000, totalLabourRevenue: null, totalSparePartsRevenue: null, totalAmcRevenue: 800 },
+    amc: { activeContractsCount: 2 },
+  };
+
   beforeEach(() => {
     rolePermissionsService = { userHasCapability: jest.fn().mockResolvedValue(true) };
     reportsService = { getKanbanSummary: jest.fn().mockResolvedValue(kanbanSummary) };
@@ -57,16 +76,28 @@ describe('DashboardService', () => {
       getSpareConsumption: jest.fn().mockResolvedValue(spareConsumption),
     };
     technicianScheduleService = { getWorkshopQueue: jest.fn().mockResolvedValue(workshopQueue) };
+    amcService = {
+      findAll: jest.fn().mockResolvedValue(amcActiveContracts),
+      getExpiringContracts: jest.fn().mockResolvedValue(amcExpiringSoon),
+      getRwrUpsellCandidates: jest.fn().mockResolvedValue(amcUpsellCandidates),
+    };
+    deliveryService = { findReady: jest.fn().mockResolvedValue(deliveryReady) };
+    invoicingService = { getB2bAgingReport: jest.fn().mockResolvedValue(b2bAging) };
+    financeReportsService = { getSummary: jest.fn().mockResolvedValue(financeSummary) };
 
     service = new DashboardService(
       rolePermissionsService,
       reportsService,
       operationalReportsService,
       technicianScheduleService,
+      amcService,
+      deliveryService,
+      invoicingService,
+      financeReportsService,
     );
   });
 
-  it('includes every widget when the caller holds all four capabilities', async () => {
+  it('includes every widget when the caller holds all seven capabilities', async () => {
     const result = await service.getOverview(caller());
 
     expect(result.widgets.jobsByStatus).toEqual({
@@ -98,23 +129,43 @@ describe('DashboardService', () => {
       ],
       topByValue: [{ sparePartId: 'sp-1', code: 'C1', name: 'Compressor', totalValue: 900 }],
     });
+    expect(result.widgets.amcStatus).toEqual({
+      activeCount: 2,
+      expiringSoonCount: 1,
+      expiringSoonWithinDays: 30,
+      upsellCandidatesCount: 1,
+    });
+    expect(amcService.getExpiringContracts).toHaveBeenCalledWith(30);
+    expect(result.widgets.deliveryInvoicing).toEqual({
+      readyForDeliveryCount: 2,
+      b2bOutstandingAmount: 1234.56,
+    });
+    expect(result.widgets.financeSummary).toEqual({
+      totalServiceRevenue: 5000,
+      totalAmcRevenue: 800,
+      activeAmcContracts: 2,
+    });
   });
 
   it('omits a widget entirely (not just empties it) when the caller lacks its capability', async () => {
     rolePermissionsService.userHasCapability.mockImplementation((_user: any, key: string) =>
-      Promise.resolve(key !== 'DASHBOARD_WIDGET_SLA_BREACH'),
+      Promise.resolve(key !== 'DASHBOARD_WIDGET_SLA_BREACH' && key !== 'DASHBOARD_WIDGET_FINANCE_SUMMARY'),
     );
 
     const result = await service.getOverview(caller());
 
     expect(result.widgets.slaBreach).toBeUndefined();
     expect(operationalReportsService.getSlaBreach).not.toHaveBeenCalled();
+    expect(result.widgets.financeSummary).toBeUndefined();
+    expect(financeReportsService.getSummary).not.toHaveBeenCalled();
     expect(result.widgets.jobsByStatus).toBeDefined();
     expect(result.widgets.workshopQueue).toBeDefined();
     expect(result.widgets.spareConsumption).toBeDefined();
+    expect(result.widgets.amcStatus).toBeDefined();
+    expect(result.widgets.deliveryInvoicing).toBeDefined();
   });
 
-  it('returns an empty widgets object (never throws) when the caller holds none of the four capabilities', async () => {
+  it('returns an empty widgets object (never throws) when the caller holds none of the seven capabilities', async () => {
     rolePermissionsService.userHasCapability.mockResolvedValue(false);
 
     const result = await service.getOverview(caller(RoleName.WAREHOUSE_CLERK));
@@ -124,6 +175,10 @@ describe('DashboardService', () => {
     expect(technicianScheduleService.getWorkshopQueue).not.toHaveBeenCalled();
     expect(operationalReportsService.getSlaBreach).not.toHaveBeenCalled();
     expect(operationalReportsService.getSpareConsumption).not.toHaveBeenCalled();
+    expect(amcService.findAll).not.toHaveBeenCalled();
+    expect(deliveryService.findReady).not.toHaveBeenCalled();
+    expect(invoicingService.getB2bAgingReport).not.toHaveBeenCalled();
+    expect(financeReportsService.getSummary).not.toHaveBeenCalled();
   });
 
   it('passes the caller through to getKanbanSummary and getWorkshopQueue for their own self-scoping', async () => {

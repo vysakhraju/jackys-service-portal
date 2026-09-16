@@ -578,6 +578,44 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [RoleName.TECHNICAL_TEAM_LEADER],
     migrated: true,
   },
+
+  // Second round (2026-09-16) - the "full company-wide widget set" explicitly parked in
+  // the first round's own MODIFICATION_REQUESTS.md entry. Same non-migration reasoning as
+  // above: defaultRoles again picked to mirror the closest existing reused-data-source
+  // capability's own audience, not invented from scratch.
+  {
+    key: 'DASHBOARD_WIDGET_AMC_STATUS',
+    label: 'Dashboard: "AMC Contract Status" widget (active/expiring-soon/upsell counts, reuses AMC\'s own contract data)',
+    module: 'Dashboard',
+    // Mirrors AMC_MANAGE's own default audience - CCE is who already creates/renews/views
+    // these same contracts today.
+    defaultRoles: [RoleName.CCE],
+    migrated: true,
+  },
+  {
+    key: 'DASHBOARD_WIDGET_DELIVERY_INVOICING',
+    label: 'Dashboard: "Delivery & Invoicing" widget (ready-for-delivery count + B2B outstanding total, reuses Delivery\'s and Invoicing\'s own data)',
+    module: 'Dashboard',
+    // This widget straddles two capabilities with two different default audiences
+    // (DELIVERY_MANAGE -> Logistics Dispatcher/Driver; INVOICING_MANAGE -> Accountant/
+    // Finance Manager). Defaulted to the operational half's audience (mirrors
+    // DELIVERY_MANAGE), same call as leaving the dollar-figure half (like the Finance
+    // widget below) for a Super Admin to widen deliberately rather than guessing who
+    // should see a live outstanding-balance number by default.
+    defaultRoles: [RoleName.LOGISTICS_DISPATCHER],
+    migrated: true,
+  },
+  {
+    key: 'DASHBOARD_WIDGET_FINANCE_SUMMARY',
+    label: 'Dashboard: "Finance Summary" widget (total service + AMC revenue, active AMC contracts, reuses Finance Reports\' own summary)',
+    module: 'Dashboard',
+    // Deliberately no default roles, same pattern as WORKSHOP_ACTION_ANY_JOB - a revenue
+    // figure is sensitive enough that the business owner should explicitly opt a role in
+    // via Designation Access rather than this catalog guessing Accountant/Finance Manager
+    // (confirmed with the business owner directly, 2026-09-16).
+    defaultRoles: [],
+    migrated: true,
+  },
 ];
 
 export function getMigratedCapability(key: string): CapabilityDefinition | undefined {

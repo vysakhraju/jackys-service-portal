@@ -9,6 +9,9 @@
 // Operational Reports) - see each component's onOpen/onOpenJob prop.
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type {
+  AmcStatusWidget,
+  DeliveryInvoicingWidget,
+  FinanceSummaryWidget,
   JobsByStatusWidget,
   SlaBreachWidget,
   SpareConsumptionWidget,
@@ -249,6 +252,72 @@ export function SpareConsumptionChart({ data, onOpen }: { data: SpareConsumption
           </ResponsiveContainer>
         </div>
       )}
+    </WidgetCard>
+  );
+}
+
+// --- Second round (2026-09-16): the parked "company-wide snapshot" widgets. These are all
+// point-in-time counts/totals rather than distributions, so a bar/pie chart would add
+// visual weight with nothing to actually show - a small stat-tile row is the right form for
+// a single number, per the dataviz method's own "match chart form to what the data actually
+// is" rule. Magnitude/status colors reused from above; currency follows this app's own
+// existing "AED {n.toFixed(2)}" convention (see e.g. AgingReportPage.tsx), not a new format.
+
+function StatTile({ value, label, tone = 'default' }: { value: string; label: string; tone?: 'default' | 'warning' }) {
+  return (
+    <div className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2.5">
+      <p className={`text-xl font-semibold ${tone === 'warning' ? 'text-amber-600' : 'text-slate-900'}`}>{value}</p>
+      <p className="mt-0.5 text-xs text-slate-400">{label}</p>
+    </div>
+  );
+}
+
+export function AmcStatusCard({ data, onOpen }: { data: AmcStatusWidget; onOpen: () => void }) {
+  return (
+    <WidgetCard title="AMC Contract Status" subtitle="Active contracts, renewals due, upsell leads" onOpen={onOpen} openLabel="Open AMC Contracts">
+      <div className="grid grid-cols-3 gap-2">
+        <StatTile value={String(data.activeCount)} label="Active contracts" />
+        <StatTile
+          value={String(data.expiringSoonCount)}
+          label={`Expiring within ${data.expiringSoonWithinDays}d`}
+          tone={data.expiringSoonCount > 0 ? 'warning' : 'default'}
+        />
+        <StatTile value={String(data.upsellCandidatesCount)} label="Upsell candidates" />
+      </div>
+    </WidgetCard>
+  );
+}
+
+export function DeliveryInvoicingCard({
+  data,
+  onOpenDelivery,
+  onOpenInvoicing,
+}: {
+  data: DeliveryInvoicingWidget;
+  onOpenDelivery: () => void;
+  onOpenInvoicing: () => void;
+}) {
+  return (
+    <WidgetCard title="Delivery & Invoicing" subtitle="Ready to hand over, B2B outstanding balance" onOpen={onOpenDelivery} openLabel="Open Ready for Delivery">
+      <div className="grid grid-cols-2 gap-2">
+        <StatTile value={String(data.readyForDeliveryCount)} label="Ready for delivery" />
+        <button type="button" onClick={onOpenInvoicing} className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2.5 text-left hover:bg-slate-100">
+          <p className="text-xl font-semibold text-slate-900">AED {data.b2bOutstandingAmount.toFixed(2)}</p>
+          <p className="mt-0.5 text-xs text-slate-400">B2B outstanding →</p>
+        </button>
+      </div>
+    </WidgetCard>
+  );
+}
+
+export function FinanceSummaryCard({ data, onOpen }: { data: FinanceSummaryWidget; onOpen: () => void }) {
+  return (
+    <WidgetCard title="Finance Summary" subtitle="All-time revenue at a glance" onOpen={onOpen} openLabel="Open Finance Reports">
+      <div className="grid grid-cols-3 gap-2">
+        <StatTile value={`AED ${data.totalServiceRevenue.toFixed(2)}`} label="Service revenue" />
+        <StatTile value={`AED ${data.totalAmcRevenue.toFixed(2)}`} label="AMC revenue" />
+        <StatTile value={String(data.activeAmcContracts)} label="Active AMC contracts" />
+      </div>
     </WidgetCard>
   );
 }

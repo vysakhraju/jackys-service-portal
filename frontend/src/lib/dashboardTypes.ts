@@ -26,11 +26,32 @@ export interface SpareConsumptionWidget {
   topByValue: { sparePartId: string; code: string; name: string; totalValue: number }[];
 }
 
+export interface AmcStatusWidget {
+  activeCount: number;
+  expiringSoonCount: number;
+  expiringSoonWithinDays: number;
+  upsellCandidatesCount: number;
+}
+
+export interface DeliveryInvoicingWidget {
+  readyForDeliveryCount: number;
+  b2bOutstandingAmount: number;
+}
+
+export interface FinanceSummaryWidget {
+  totalServiceRevenue: number;
+  totalAmcRevenue: number;
+  activeAmcContracts: number;
+}
+
 export interface DashboardOverviewResponse {
   widgets: {
     jobsByStatus?: JobsByStatusWidget;
     workshopQueue?: WorkshopQueueWidget;
     slaBreach?: SlaBreachWidget;
     spareConsumption?: SpareConsumptionWidget;
+    amcStatus?: AmcStatusWidget;
+    deliveryInvoicing?: DeliveryInvoicingWidget;
+    financeSummary?: FinanceSummaryWidget;
   };
 }

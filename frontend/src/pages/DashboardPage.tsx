@@ -6,8 +6,10 @@
 // role-gated, interactive operational dashboard (#3/#4/#5/#6/#7) built from
 // GET /dashboard/overview - each widget below renders only if the backend actually included
 // it (DashboardService's own per-widget capability check - see that file's doc comment), so
-// a plain technician with none of the four DASHBOARD_WIDGET_* grants sees a clean empty
-// state, never a wall of "access denied" cards.
+// a plain technician with none of the seven DASHBOARD_WIDGET_* grants sees a clean empty
+// state, never a wall of "access denied" cards. (AMC Status/Delivery & Invoicing/Finance
+// Summary added 2026-09-16 - the "full company-wide widget set" parked when the first four
+// shipped.)
 //
 // Deliberately reuses Reports & Dashboards' own underlying data (Kanban summary, SLA
 // breach, spare consumption) and the Workshop Queue board's data, but is its own new
@@ -25,6 +27,9 @@ import {
   WorkshopQueueChart,
   SlaBreachCard,
   SpareConsumptionChart,
+  AmcStatusCard,
+  DeliveryInvoicingCard,
+  FinanceSummaryCard,
 } from '../components/dashboard/DashboardWidgets';
 
 export function DashboardPage() {
@@ -84,6 +89,22 @@ export function DashboardPage() {
           )}
           {widgets.spareConsumption && (
             <SpareConsumptionChart data={widgets.spareConsumption} onOpen={() => navigate('/reports/operational')} />
+          )}
+        </div>
+      )}
+
+      {(widgets.amcStatus || widgets.deliveryInvoicing || widgets.financeSummary) && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {widgets.amcStatus && <AmcStatusCard data={widgets.amcStatus} onOpen={() => navigate('/amc/contracts')} />}
+          {widgets.deliveryInvoicing && (
+            <DeliveryInvoicingCard
+              data={widgets.deliveryInvoicing}
+              onOpenDelivery={() => navigate('/delivery/ready')}
+              onOpenInvoicing={() => navigate('/finance/aging')}
+            />
+          )}
+          {widgets.financeSummary && (
+            <FinanceSummaryCard data={widgets.financeSummary} onOpen={() => navigate('/reports/finance')} />
           )}
         </div>
       )}

@@ -3,10 +3,16 @@ import { User } from '../auth/entities/user.entity';
 import { RolePermissionsService } from '../auth/role-permissions.service';
 import { ReportsService } from '../reports/reports.service';
 import { OperationalReportsService } from '../reports/operational-reports.service';
+import { FinanceReportsService } from '../reports/finance-reports.service';
 import { TechnicianScheduleService } from '../technician-schedule/technician-schedule.service';
+import { AmcService } from '../amc/amc.service';
+import { AmcContractStatus } from '../amc/entities/amc-contract.entity';
+import { DeliveryService } from '../delivery/delivery.service';
+import { InvoicingService } from '../invoicing/invoicing.service';
 
 const DEFAULT_SLA_THRESHOLD_HOURS = 48;
 const TOP_N = 5;
+const AMC_EXPIRING_SOON_WITHIN_DAYS = 30;
 
 export interface JobsByStatusWidget {
   columns: { key: string; label: string; count: number }[];
@@ -31,12 +37,33 @@ export interface SpareConsumptionWidget {
   topByValue: { sparePartId: string; code: string; name: string; totalValue: number }[];
 }
 
+export interface AmcStatusWidget {
+  activeCount: number;
+  expiringSoonCount: number;
+  expiringSoonWithinDays: number;
+  upsellCandidatesCount: number;
+}
+
+export interface DeliveryInvoicingWidget {
+  readyForDeliveryCount: number;
+  b2bOutstandingAmount: number;
+}
+
+export interface FinanceSummaryWidget {
+  totalServiceRevenue: number;
+  totalAmcRevenue: number;
+  activeAmcContracts: number;
+}
+
 export interface DashboardOverview {
   widgets: {
     jobsByStatus?: JobsByStatusWidget;
     workshopQueue?: WorkshopQueueWidget;
     slaBreach?: SlaBreachWidget;
     spareConsumption?: SpareConsumptionWidget;
+    amcStatus?: AmcStatusWidget;
+    deliveryInvoicing?: DeliveryInvoicingWidget;
+    financeSummary?: FinanceSummaryWidget;
   };
 }
 
@@ -55,6 +82,11 @@ export interface DashboardOverview {
  * catalog" module's own established pattern for admin tick/untick) - a widget the frontend
  * doesn't render because it's missing from the payload was NEVER fetched from the source
  * report data at all, not just hidden with CSS.
+ *
+ * Second round (2026-09-16) added 3 more widgets (AMC Status, Delivery & Invoicing, Finance
+ * Summary) - the "full company-wide widget set" explicitly parked when the first four
+ * shipped. Same rules apply: each is a reshaped call into AMC/Delivery/Invoicing/Finance
+ * Reports' own already-tested aggregators, gated the same per-widget way.
  */
 @Injectable()
 export class DashboardService {
@@ -63,29 +95,51 @@ export class DashboardService {
     private reportsService: ReportsService,
     private operationalReportsService: OperationalReportsService,
     private technicianScheduleService: TechnicianScheduleService,
+    private amcService: AmcService,
+    private deliveryService: DeliveryService,
+    private invoicingService: InvoicingService,
+    private financeReportsService: FinanceReportsService,
   ) {}
 
   async getOverview(caller: User): Promise<DashboardOverview> {
-    const [canJobStatus, canWorkshopQueue, canSlaBreach, canSpareConsumption] = await Promise.all([
+    const [
+      canJobStatus,
+      canWorkshopQueue,
+      canSlaBreach,
+      canSpareConsumption,
+      canAmcStatus,
+      canDeliveryInvoicing,
+      canFinanceSummary,
+    ] = await Promise.all([
       this.rolePermissionsService.userHasCapability(caller, 'DASHBOARD_WIDGET_JOB_STATUS'),
       this.rolePermissionsService.userHasCapability(caller, 'DASHBOARD_WIDGET_WORKSHOP_QUEUE'),
       this.rolePermissionsService.userHasCapability(caller, 'DASHBOARD_WIDGET_SLA_BREACH'),
       this.rolePermissionsService.userHasCapability(caller, 'DASHBOARD_WIDGET_SPARE_CONSUMPTION'),
+      this.rolePermissionsService.userHasCapability(caller, 'DASHBOARD_WIDGET_AMC_STATUS'),
+      this.rolePermissionsService.userHasCapability(caller, 'DASHBOARD_WIDGET_DELIVERY_INVOICING'),
+      this.rolePermissionsService.userHasCapability(caller, 'DASHBOARD_WIDGET_FINANCE_SUMMARY'),
     ]);
 
     const widgets: DashboardOverview['widgets'] = {};
 
-    const [jobsByStatus, workshopQueue, slaBreach, spareConsumption] = await Promise.all([
-      canJobStatus ? this.buildJobsByStatus(caller) : Promise.resolve(undefined),
-      canWorkshopQueue ? this.buildWorkshopQueue(caller) : Promise.resolve(undefined),
-      canSlaBreach ? this.buildSlaBreach() : Promise.resolve(undefined),
-      canSpareConsumption ? this.buildSpareConsumption() : Promise.resolve(undefined),
-    ]);
+    const [jobsByStatus, workshopQueue, slaBreach, spareConsumption, amcStatus, deliveryInvoicing, financeSummary] =
+      await Promise.all([
+        canJobStatus ? this.buildJobsByStatus(caller) : Promise.resolve(undefined),
+        canWorkshopQueue ? this.buildWorkshopQueue(caller) : Promise.resolve(undefined),
+        canSlaBreach ? this.buildSlaBreach() : Promise.resolve(undefined),
+        canSpareConsumption ? this.buildSpareConsumption() : Promise.resolve(undefined),
+        canAmcStatus ? this.buildAmcStatus() : Promise.resolve(undefined),
+        canDeliveryInvoicing ? this.buildDeliveryInvoicing() : Promise.resolve(undefined),
+        canFinanceSummary ? this.buildFinanceSummary() : Promise.resolve(undefined),
+      ]);
 
     if (jobsByStatus) widgets.jobsByStatus = jobsByStatus;
     if (workshopQueue) widgets.workshopQueue = workshopQueue;
     if (slaBreach) widgets.slaBreach = slaBreach;
     if (spareConsumption) widgets.spareConsumption = spareConsumption;
+    if (amcStatus) widgets.amcStatus = amcStatus;
+    if (deliveryInvoicing) widgets.deliveryInvoicing = deliveryInvoicing;
+    if (financeSummary) widgets.financeSummary = financeSummary;
 
     return { widgets };
   }
@@ -140,6 +194,48 @@ export class DashboardService {
       topByValue: report.topByValue
         .slice(0, TOP_N)
         .map((e) => ({ sparePartId: e.sparePartId, code: e.code, name: e.name, totalValue: e.totalValue })),
+    };
+  }
+
+  // Second round (2026-09-16) - the parked "full company-wide widget set". Same reuse-only
+  // rule as the first four: each of these calls exactly one already-tested aggregator and
+  // reshapes its result, no new query logic here.
+  private async buildAmcStatus(): Promise<AmcStatusWidget> {
+    const [activeContracts, expiringSoon, upsellCandidates] = await Promise.all([
+      this.amcService.findAll(AmcContractStatus.ACTIVE),
+      this.amcService.getExpiringContracts(AMC_EXPIRING_SOON_WITHIN_DAYS),
+      this.amcService.getRwrUpsellCandidates(),
+    ]);
+    return {
+      activeCount: activeContracts.length,
+      expiringSoonCount: expiringSoon.length,
+      expiringSoonWithinDays: AMC_EXPIRING_SOON_WITHIN_DAYS,
+      upsellCandidatesCount: upsellCandidates.length,
+    };
+  }
+
+  private async buildDeliveryInvoicing(): Promise<DeliveryInvoicingWidget> {
+    // DeliveryService.findReady() with no args = every warranty status, no date filter -
+    // the same "everything currently ready" count the Ready for Delivery page itself shows
+    // before any filter is applied.
+    const [ready, aging] = await Promise.all([
+      this.deliveryService.findReady(),
+      this.invoicingService.getB2bAgingReport(),
+    ]);
+    return {
+      readyForDeliveryCount: ready.length,
+      b2bOutstandingAmount: aging.totalOutstanding,
+    };
+  }
+
+  private async buildFinanceSummary(): Promise<FinanceSummaryWidget> {
+    // No period args = all-time, matching this widget's "big picture" purpose rather than
+    // the full Finance Reports page's own date-range picker.
+    const summary = await this.financeReportsService.getSummary();
+    return {
+      totalServiceRevenue: summary.revenueSummary.totalServiceRevenue,
+      totalAmcRevenue: summary.revenueSummary.totalAmcRevenue,
+      activeAmcContracts: summary.amc.activeContractsCount,
     };
   }
 }
