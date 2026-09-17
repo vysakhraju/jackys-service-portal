@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -885,5 +885,264 @@ describe('SchedulePage - Mark Received (Phase 4 workshop intake)', () => {
     expect(getVisit).not.toHaveBeenCalled();
     fireEvent.click(within(modal).getByRole('button', { name: 'Mark Received →' }));
     await screen.findByRole('heading', { name: /Verify before workshop intake — APT-0008/ });
+  });
+});
+
+// req.txt (2026-09-17) Issues A/B/C/D - "Today at a Glance" counters, the newly-created/
+// sub-status list visibility gap, and click-to-filter interactivity.
+describe('SchedulePage - req.txt fixes: dashboard-stats recount, sub-status filter, click-to-filter', () => {
+  it('Issue A: a successful mutation (Confirm) recounts "Today at a Glance", not just the appointment list', async () => {
+    mockCapabilities([], true);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
+    renderPage();
+    await screen.findByText('APT-0001');
+    await waitFor(() => expect(getAppointmentDashboardStats).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    // invalidateQueries on ['appointment-dashboard-stats'] re-triggers the widget's own
+    // query, same as invalidating ['appointments'] already re-triggers the list - both
+    // funnel through the one shared invalidate().
+    await waitFor(() => expect(getAppointmentDashboardStats).toHaveBeenCalledTimes(2));
+  });
+
+  it('Issue B: the Status dropdown lists Marked Received and Pending Job Creation alongside the real statuses', async () => {
+    mockCapabilities([], true);
+    vi.mocked(listAppointments).mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    renderPage();
+    await waitFor(() => expect(listAppointments).toHaveBeenCalled());
+
+    const select = screen.getByLabelText('Status') as HTMLSelectElement;
+    const optionLabels = Array.from(select.options).map((o) => o.textContent);
+    expect(optionLabels).toContain('Marked Received');
+    expect(optionLabels).toContain('Pending Job Creation');
+  });
+
+  it('Issue B/C: the Status column shows the resolved sub-stage, not a generic "Collected to WS", for a row the backend marked effectiveStatus on', async () => {
+    mockCapabilities([], true);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-ws',
+          appointmentNumber: 'APT-0009',
+          status: 'COLLECTED_TO_WS',
+          effectiveStatus: 'PENDING_JOB_CREATION',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+
+    const row = (await screen.findByText('APT-0009')).closest('tr')!;
+    expect(within(row).getByText('PENDING JOB CREATION')).toBeInTheDocument();
+    expect(within(row).queryByText('COLLECTED TO WS')).not.toBeInTheDocument();
+  });
+
+  it('Issue D: clicking a glance tile sets the Status filter, updates the URL, and refetches the list with that status', async () => {
+    mockCapabilities([], true);
+    vi.mocked(listAppointments).mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
+    renderPage();
+    await screen.findByText('Completed');
+
+    fireEvent.click(screen.getByText('Completed'));
+
+    await waitFor(() =>
+      expect(vi.mocked(listAppointments)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'COMPLETED' }),
+      ),
+    );
+    const select = screen.getByLabelText('Status') as HTMLSelectElement;
+    expect(select.value).toBe('COMPLETED');
+  });
+
+  it('Issue D: clicking the same glance tile again clears the filter back to "All"', async () => {
+    mockCapabilities([], true);
+    vi.mocked(listAppointments).mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
+    renderPage();
+    await screen.findByText('Completed');
+
+    fireEvent.click(screen.getByText('Completed'));
+    await waitFor(() =>
+      expect(vi.mocked(listAppointments)).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'COMPLETED' })),
+    );
+
+    fireEvent.click(screen.getByText('Completed'));
+
+    await waitFor(() =>
+      expect(vi.mocked(listAppointments)).toHaveBeenLastCalledWith(expect.objectContaining({ status: undefined })),
+    );
+    const select = screen.getByLabelText('Status') as HTMLSelectElement;
+    expect(select.value).toBe('');
+  });
+
+  it('Issue D: picking a status from the dropdown also drives the glance widget\'s active tile and the "Clear filter" chip', async () => {
+    mockCapabilities([], true);
+    vi.mocked(listAppointments).mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    vi.mocked(getAppointmentDashboardStats).mockResolvedValue(makeAppointmentDashboardStats());
+    renderPage();
+    await screen.findByText('Completed');
+
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'CANCELLED' } });
+
+    await waitFor(() =>
+      expect(vi.mocked(listAppointments)).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'CANCELLED' })),
+    );
+    expect(await screen.findByText(/Clear filter/)).toBeInTheDocument();
+  });
+});
+
+// req.txt Issue E - Previous/Today/Next Day quick-nav buttons next to the From/To date
+// pickers; each sets BOTH dates to the same computed day and re-runs the query (same
+// setPage(1)+setFilters pattern every other filter control already uses).
+describe('SchedulePage - req.txt Issue E: date quick-nav buttons', () => {
+  beforeEach(() => {
+    // Only Date is faked (not setTimeout/setInterval) - React Query's internals and RTL's
+    // own waitFor/findBy* polling both rely on real timers, and faking those too just hangs
+    // every async assertion below until the 5s test timeout.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('"Today" sets both From and To to today\'s date and refetches with it', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    renderPage();
+    await screen.findByText('No appointments match these filters yet.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(listAppointments)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ dateFrom: '2026-09-17', dateTo: '2026-09-17' }),
+      ),
+    );
+    expect(screen.getByLabelText('From')).toHaveValue('2026-09-17');
+    expect(screen.getByLabelText('To')).toHaveValue('2026-09-17');
+  });
+
+  it('"Next ▶" steps From/To one day forward from whatever From is currently set to', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    renderPage();
+    await screen.findByText('No appointments match these filters yet.');
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+    await waitFor(() => expect(screen.getByLabelText('From')).toHaveValue('2026-09-17'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next ▶' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(listAppointments)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ dateFrom: '2026-09-18', dateTo: '2026-09-18' }),
+      ),
+    );
+  });
+
+  it('"◀ Prev" steps one day back, defaulting off today when no date filter is set yet', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    renderPage();
+    await screen.findByText('No appointments match these filters yet.');
+
+    fireEvent.click(screen.getByRole('button', { name: '◀ Prev' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(listAppointments)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ dateFrom: '2026-09-16', dateTo: '2026-09-16' }),
+      ),
+    );
+    expect(screen.getByLabelText('From')).toHaveValue('2026-09-16');
+    expect(screen.getByLabelText('To')).toHaveValue('2026-09-16');
+  });
+});
+
+// req.txt Issue F - a workshop-intake row (Marked Received or Pending Job Creation) with no
+// Job Card yet gets a "+ Create Job" pill linking straight into Job Cards, pre-filled via
+// ?appointmentId=; it disappears once a Job Card exists or for any unrelated status.
+describe('SchedulePage - req.txt Issue F: "+ Create Job" pill', () => {
+  it('shows the pill for a Marked Received row with no Job Card yet, linking to Job Cards pre-filled with the appointment', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-mr-1',
+          appointmentNumber: 'APT-0400',
+          status: 'COLLECTED_TO_WS',
+          effectiveStatus: 'MARKED_RECEIVED',
+          jobCard: null,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+
+    const row = (await screen.findByText('APT-0400')).closest('tr')!;
+    const pill = within(row).getByRole('link', { name: '+ Create Job' });
+    expect(pill).toHaveAttribute('href', '/job-cards?appointmentId=appt-mr-1');
+  });
+
+  it('shows the pill for a Pending Job Creation row too', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-pjc-1',
+          appointmentNumber: 'APT-0401',
+          status: 'COLLECTED_TO_WS',
+          effectiveStatus: 'PENDING_JOB_CREATION',
+          jobCard: null,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+
+    const row = (await screen.findByText('APT-0401')).closest('tr')!;
+    expect(within(row).getByRole('link', { name: '+ Create Job' })).toBeInTheDocument();
+  });
+
+  it('hides the pill once a Job Card already exists, even if effectiveStatus is still a pending sub-stage', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-has-jc',
+          appointmentNumber: 'APT-0402',
+          status: 'COLLECTED_TO_WS',
+          effectiveStatus: 'PENDING_JOB_CREATION',
+          jobCard: { id: 'jc-9', jobCardNumber: 'JC-0009' },
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+
+    const row = (await screen.findByText('APT-0402')).closest('tr')!;
+    expect(within(row).queryByRole('link', { name: '+ Create Job' })).not.toBeInTheDocument();
+  });
+
+  it('does not show the pill for an unrelated status (e.g. SCHEDULED)', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-sched', appointmentNumber: 'APT-0403', status: 'SCHEDULED', jobCard: null })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+
+    const row = (await screen.findByText('APT-0403')).closest('tr')!;
+    expect(within(row).queryByRole('link', { name: '+ Create Job' })).not.toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ import { ServiceCentre } from '../master-data/entities/service-centre.entity';
 import { User } from '../auth/entities/user.entity';
 import { AuditLog } from '../auth/entities/audit-log.entity';
 import { JobCard } from '../job-cards/entities/job-card.entity';
+import { WorkshopIntake } from '../workshop-intake/entities/workshop-intake.entity';
 import { MasterDataModule } from '../master-data/master-data.module';
 import { AuthModule } from '../auth/auth.module';
 import { InventoryModule } from '../inventory/inventory.module';
@@ -16,8 +17,10 @@ import { InventoryModule } from '../inventory/inventory.module';
     // JobCard is registered directly here (not by importing JobCardsModule) purely for
     // Mobile Phase 5's reassignment guardrail below - JobCardsModule already imports
     // AppointmentsModule, so importing it back here would be a circular module dependency.
-    // Same entity-only-repo pattern TechnicianModule uses for the same reason.
-    TypeOrmModule.forFeature([Appointment, ServiceCentre, User, AuditLog, JobCard]),
+    // Same entity-only-repo pattern TechnicianModule uses for the same reason. WorkshopIntake
+    // is registered the same way and for the same reason (WorkshopIntakeModule imports
+    // AppointmentsModule) - see AppointmentsService.attachEffectiveStatuses().
+    TypeOrmModule.forFeature([Appointment, ServiceCentre, User, AuditLog, JobCard, WorkshopIntake]),
     MasterDataModule,
     AuthModule,
     // Mobile Phase 5: the reassignment guardrail in update() below calls

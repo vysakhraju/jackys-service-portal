@@ -11,6 +11,9 @@ vi.mock('../../lib/workshopIntakeApi', () => ({
   captureWorkshopSerialNumber: vi.fn(),
   captureWorkshopFaultSymptom: vi.fn(),
 }));
+vi.mock('../../lib/masterDataApi', () => ({
+  listFaultSymptoms: vi.fn(),
+}));
 
 import {
   captureWorkshopFaultSymptom,
@@ -18,7 +21,24 @@ import {
   getWorkshopIntake,
   markWorkshopReceived,
 } from '../../lib/workshopIntakeApi';
+import { listFaultSymptoms } from '../../lib/masterDataApi';
 import { WorkshopIntakeModal } from './WorkshopIntakeModal';
+
+function makeFaultSymptom(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 'fs-1',
+    faultCode: 'F002',
+    faultDescription: 'Not draining',
+    symptomCode: 'S002',
+    symptomDescription: 'Water remains in drum',
+    category: 'WASHING_MACHINE',
+    requiresWorkshop: true,
+    isActive: true,
+    createdAt: '2026-09-01T00:00:00Z',
+    updatedAt: '2026-09-01T00:00:00Z',
+    ...overrides,
+  };
+}
 
 function makeIntake(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -57,6 +77,8 @@ beforeEach(() => {
   vi.mocked(markWorkshopReceived).mockReset();
   vi.mocked(captureWorkshopSerialNumber).mockReset();
   vi.mocked(captureWorkshopFaultSymptom).mockReset();
+  vi.mocked(listFaultSymptoms).mockReset();
+  vi.mocked(listFaultSymptoms).mockResolvedValue([makeFaultSymptom()]);
 });
 
 describe('WorkshopIntakeModal', () => {
@@ -127,7 +149,7 @@ describe('WorkshopIntakeModal', () => {
     expect(screen.queryByRole('link', { name: /Continue to Job Cards/ })).not.toBeInTheDocument();
   });
 
-  it('records fault/symptom once S/N has been captured', async () => {
+  it('records fault/symptom once S/N has been captured, picked from the Fault & Symptoms master', async () => {
     vi.mocked(getWorkshopIntake).mockResolvedValue(makeIntake({ serialNumber: 'SN990000', warrantyStatus: 'IW' }));
     vi.mocked(captureWorkshopFaultSymptom).mockResolvedValue(
       makeIntake({ serialNumber: 'SN990000', warrantyStatus: 'IW', faultCode: 'F002', symptomCode: 'S002' }),
@@ -135,10 +157,24 @@ describe('WorkshopIntakeModal', () => {
     renderModal();
 
     const user = userEvent.setup();
-    await user.type(await screen.findByLabelText('Fault code'), 'F002');
-    await user.type(screen.getByLabelText('Symptom code'), 'S002');
+    const select = await screen.findByLabelText('Fault / symptom');
+    // Option text is built from the master row - proves the dropdown is sourced from
+    // listFaultSymptoms(), not a free-text box a user could type an invalid code into.
+    // findBy* (not getBy*) since the select starts disabled/"Loading…" until the query
+    // resolves.
+    const option = await screen.findByRole('option', { name: /F002 — Not draining \/ Water remains in drum/ });
+    await user.selectOptions(select, option);
     await user.click(screen.getByRole('button', { name: 'Capture' }));
 
     await waitFor(() => expect(captureWorkshopFaultSymptom).toHaveBeenCalledWith('appt-1', { faultCode: 'F002', symptomCode: 'S002' }));
+  });
+
+  it('shows a fetch error instead of a free-text box if the Fault & Symptoms master fails to load', async () => {
+    vi.mocked(getWorkshopIntake).mockResolvedValue(makeIntake({ serialNumber: 'SN990000', warrantyStatus: 'IW' }));
+    vi.mocked(listFaultSymptoms).mockRejectedValue(new Error('network error'));
+    renderModal();
+
+    await screen.findByText(/Step 3/);
+    await waitFor(() => expect(screen.queryByLabelText('Fault / symptom')).not.toBeInTheDocument());
   });
 });

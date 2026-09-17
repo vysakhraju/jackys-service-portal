@@ -74,7 +74,7 @@ describe('ReportsService', () => {
 
   describe('columnForJobCard', () => {
     it.each([
-      [JobCardStatus.OPEN, null, null, KanbanColumn.SCHEDULED],
+      [JobCardStatus.OPEN, null, null, KanbanColumn.OPEN],
       [JobCardStatus.SN_VALIDATED, null, null, KanbanColumn.SCHEDULED],
       [JobCardStatus.RWR, null, null, KanbanColumn.APPROVAL_PENDING],
       [JobCardStatus.SECTION_ASSIGNED, JobCardSection.ON_SITE_REPAIR, null, KanbanColumn.ON_SITE],
@@ -99,15 +99,21 @@ describe('ReportsService', () => {
         baseJob({ id: '2', status: JobCardStatus.SPARE_PENDING }),
         baseJob({ id: '3', status: JobCardStatus.QC_PASSED, deliveryId: 'dlv-1' }),
         baseJob({ id: '4', status: JobCardStatus.CANCELLED }),
+        baseJob({ id: '5', status: JobCardStatus.SN_VALIDATED }),
       ];
       jobCardRepo.find.mockResolvedValue(jobs);
       deliveryRepo.find.mockResolvedValue([{ id: 'dlv-1', deliveryNumber: 'DLV-0001' }]);
 
       const board = await service.getKanbanBoard();
 
-      expect(board.totalActiveJobs).toBe(3);
+      expect(board.totalActiveJobs).toBe(4);
+      // A freshly created (OPEN) job card gets its own column, not folded into SCHEDULED.
+      const open = board.columns.find((c) => c.key === KanbanColumn.OPEN)!;
+      expect(open.count).toBe(1);
+      expect(open.jobCards[0].jobCardId).toBe('1');
       const scheduled = board.columns.find((c) => c.key === KanbanColumn.SCHEDULED)!;
       expect(scheduled.count).toBe(1);
+      expect(scheduled.jobCards[0].jobCardId).toBe('5');
       const outForDelivery = board.columns.find((c) => c.key === KanbanColumn.OUT_FOR_DELIVERY)!;
       expect(outForDelivery.jobCards[0].deliveryNumber).toBe('DLV-0001');
       // CANCELLED never appears in any bucket

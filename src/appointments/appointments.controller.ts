@@ -13,7 +13,7 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
-import { AppointmentsService } from './appointments.service';
+import { AppointmentsService, EffectiveAppointmentStatus } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
@@ -65,7 +65,12 @@ export class AppointmentsController {
   @ApiOperation({ summary: 'Get all appointments with filters' })
   @ApiQuery({ name: 'serviceCentreId', required: false, type: String })
   @ApiQuery({ name: 'technicianId', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, enum: AppointmentStatus })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    description:
+      'A real AppointmentStatus, or one of the two synthetic COLLECTED_TO_WS sub-statuses MARKED_RECEIVED / PENDING_JOB_CREATION (see AppointmentsService.attachEffectiveStatuses)',
+  })
   @ApiQuery({ name: 'type', required: false, enum: AppointmentType })
   @ApiQuery({ name: 'channel', required: false, enum: AppointmentChannel })
   @ApiQuery({ name: 'dateFrom', required: false, type: String, description: 'ISO date string' })
@@ -78,7 +83,7 @@ export class AppointmentsController {
   async findAll(
     @Query('serviceCentreId') serviceCentreId?: string,
     @Query('technicianId') technicianId?: string,
-    @Query('status') status?: AppointmentStatus,
+    @Query('status') status?: EffectiveAppointmentStatus,
     @Query('type') type?: AppointmentType,
     @Query('channel') channel?: AppointmentChannel,
     @Query('dateFrom') dateFrom?: string,

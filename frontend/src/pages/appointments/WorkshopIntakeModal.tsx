@@ -13,14 +13,20 @@ import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { captureWorkshopFaultSymptom, captureWorkshopSerialNumber, getWorkshopIntake, markWorkshopReceived } from '../../lib/workshopIntakeApi';
+import { listFaultSymptoms } from '../../lib/masterDataApi';
 import type { Appointment } from '../../lib/appointmentsTypes';
 
 export function WorkshopIntakeModal({ appointment, onClose }: { appointment: Appointment | null; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [serialNumber, setSerialNumber] = useState('');
   const [brand, setBrand] = useState(appointment?.brand ?? '');
-  const [faultCode, setFaultCode] = useState('');
-  const [symptomCode, setSymptomCode] = useState('');
+  // Fault/symptom is picked from the Fault & Symptoms master, not typed - the backend
+  // rejects any code that isn't a real row there (findFaultByCode/findSymptomByCode both
+  // 404), and a free-text box just meant every real user hit that 404. One <select> since
+  // each master row IS one fault+symptom pair (faultCode/symptomCode are both unique on
+  // the same row, never mixed-and-matched) - mirrors the mobile app's FaultSymptomPicker,
+  // which already worked this way.
+  const [selectedFaultSymptomId, setSelectedFaultSymptomId] = useState('');
 
   const {
     data: intake,
@@ -31,6 +37,18 @@ export function WorkshopIntakeModal({ appointment, onClose }: { appointment: App
     queryFn: () => getWorkshopIntake(appointment!.id),
     enabled: !!appointment,
   });
+
+  const {
+    data: faultSymptoms,
+    error: faultSymptomsError,
+    isLoading: faultSymptomsLoading,
+  } = useQuery({
+    queryKey: ['fault-symptoms'],
+    queryFn: () => listFaultSymptoms(),
+    enabled: !!appointment && !!intake?.serialNumber,
+    staleTime: 5 * 60 * 1000,
+  });
+  const selectedFaultSymptom = faultSymptoms?.find((fs) => fs.id === selectedFaultSymptomId);
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: ['workshop-intake', appointment?.id] });
@@ -46,8 +64,15 @@ export function WorkshopIntakeModal({ appointment, onClose }: { appointment: App
     onSuccess: invalidate,
   });
   const faultMutation = useMutation({
-    mutationFn: () => captureWorkshopFaultSymptom(appointment!.id, { faultCode, symptomCode }),
-    onSuccess: invalidate,
+    mutationFn: () =>
+      captureWorkshopFaultSymptom(appointment!.id, {
+        faultCode: selectedFaultSymptom!.faultCode,
+        symptomCode: selectedFaultSymptom!.symptomCode,
+      }),
+    onSuccess: () => {
+      setSelectedFaultSymptomId('');
+      invalidate();
+    },
   });
 
   if (!appointment) return null;
@@ -127,16 +152,27 @@ export function WorkshopIntakeModal({ appointment, onClose }: { appointment: App
             <ErrorNotice error={faultMutation.error} />
             {!intake.serialNumber ? (
               <p className="text-xs text-slate-400">Capture the serial number first — the backend blocks this until then.</p>
+            ) : faultSymptomsError ? (
+              <ErrorNotice error={faultSymptomsError} />
             ) : (
               <div className="flex flex-wrap items-end gap-2">
-                <Field label="Fault code">
-                  <input className={`${inputClass} w-32`} value={faultCode} onChange={(e) => setFaultCode(e.target.value)} placeholder="F001" />
-                </Field>
-                <Field label="Symptom code">
-                  <input className={`${inputClass} w-32`} value={symptomCode} onChange={(e) => setSymptomCode(e.target.value)} placeholder="S001" />
+                <Field label="Fault / symptom">
+                  <select
+                    className={`${inputClass} w-72`}
+                    value={selectedFaultSymptomId}
+                    onChange={(e) => setSelectedFaultSymptomId(e.target.value)}
+                    disabled={faultSymptomsLoading}
+                  >
+                    <option value="">{faultSymptomsLoading ? 'Loading…' : 'Select a fault / symptom…'}</option>
+                    {faultSymptoms?.map((fs) => (
+                      <option key={fs.id} value={fs.id}>
+                        {fs.faultCode} — {fs.faultDescription} / {fs.symptomDescription}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
                 <button
-                  disabled={!faultCode || !symptomCode || faultMutation.isPending}
+                  disabled={!selectedFaultSymptom || faultMutation.isPending}
                   onClick={() => faultMutation.mutate()}
                   className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                 >

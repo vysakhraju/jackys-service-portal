@@ -13,6 +13,7 @@ describe('AppointmentsService', () => {
   let userRepository: any;
   let auditLogRepository: any;
   let jobCardRepository: any;
+  let workshopIntakeRepository: any;
   let inventoryService: any;
 
   const buildQb = (overrides: Partial<Record<string, any>> = {}) => ({
@@ -60,6 +61,7 @@ describe('AppointmentsService', () => {
     userRepository = { findOne: jest.fn(), find: jest.fn() };
     auditLogRepository = { create: jest.fn((d: any) => d), save: jest.fn().mockResolvedValue(undefined) };
     jobCardRepository = { findOne: jest.fn().mockResolvedValue(null) };
+    workshopIntakeRepository = { find: jest.fn().mockResolvedValue([]) };
     inventoryService = { hasActiveReservationInCustody: jest.fn().mockResolvedValue(false) };
 
     service = new AppointmentsService(
@@ -68,6 +70,7 @@ describe('AppointmentsService', () => {
       userRepository,
       auditLogRepository,
       jobCardRepository,
+      workshopIntakeRepository,
       inventoryService,
     );
   });
@@ -204,7 +207,104 @@ describe('AppointmentsService', () => {
       expect(qb.andWhere).toHaveBeenCalledWith('apt.channel = :channel', { channel: AppointmentChannel.WHATSAPP });
       expect(qb.skip).toHaveBeenCalledWith(10);
       expect(qb.take).toHaveBeenCalledWith(10);
-      expect(result).toEqual({ data: [appointment()], total: 1, page: 2, limit: 10 });
+      expect(result).toEqual({
+        data: [{ ...appointment(), effectiveStatus: AppointmentStatus.SCHEDULED }],
+        total: 1,
+        page: 2,
+        limit: 10,
+      });
+    });
+
+    // req.txt Issue B/C - MARKED_RECEIVED and PENDING_JOB_CREATION aren't real
+    // AppointmentStatus values; both filter to COLLECTED_TO_WS rows and then split on
+    // whether that row's WorkshopIntake has captured a serial number yet.
+    it('status=MARKED_RECEIVED: filters to COLLECTED_TO_WS rows whose intake has no serial number captured yet', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ status: 'MARKED_RECEIVED' });
+
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.status = :collectedStatus', {
+        collectedStatus: AppointmentStatus.COLLECTED_TO_WS,
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        expect.stringContaining('"serialNumberCapturedAt" IS NULL'),
+      );
+    });
+
+    it('status=PENDING_JOB_CREATION: filters to COLLECTED_TO_WS rows whose intake already has a serial number captured', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ status: 'PENDING_JOB_CREATION' });
+
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.status = :collectedStatus', {
+        collectedStatus: AppointmentStatus.COLLECTED_TO_WS,
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        expect.stringContaining('"serialNumberCapturedAt" IS NOT NULL'),
+      );
+    });
+
+    // Bug reported 2026-09-17: clicking the plain "Collected to WS" glance tile returned
+    // MARKED_RECEIVED/PENDING_JOB_CREATION rows mixed in, because this branch used to fall
+    // through to the generic `apt.status = :status` filter, which can't distinguish the sub-
+    // stages since the raw column is identical across all three. Must stay mutually exclusive.
+    it('status=COLLECTED_TO_WS: filters to COLLECTED_TO_WS rows with no WorkshopIntake row at all (excludes MARKED_RECEIVED/PENDING_JOB_CREATION)', async () => {
+      const qb = buildQb();
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ status: AppointmentStatus.COLLECTED_TO_WS });
+
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.status = :collectedStatus', {
+        collectedStatus: AppointmentStatus.COLLECTED_TO_WS,
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        expect.stringContaining('NOT EXISTS (SELECT 1 FROM workshop_intakes wi WHERE wi."appointmentId" = apt.id)'),
+      );
+    });
+
+    it('attaches effectiveStatus: COLLECTED_TO_WS with no WorkshopIntake row reads as COLLECTED_TO_WS', async () => {
+      const qb = buildQb({ getManyAndCount: [[appointment({ status: AppointmentStatus.COLLECTED_TO_WS })], 1] });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+      workshopIntakeRepository.find.mockResolvedValue([]);
+
+      const result = await service.findAll({});
+
+      expect(result.data[0].effectiveStatus).toBe(AppointmentStatus.COLLECTED_TO_WS);
+    });
+
+    it('attaches effectiveStatus: COLLECTED_TO_WS with an intake row and no serialNumberCapturedAt reads as MARKED_RECEIVED', async () => {
+      const qb = buildQb({ getManyAndCount: [[appointment({ status: AppointmentStatus.COLLECTED_TO_WS })], 1] });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+      workshopIntakeRepository.find.mockResolvedValue([
+        { appointmentId: 'apt-1', serialNumberCapturedAt: null },
+      ]);
+
+      const result = await service.findAll({});
+
+      expect(result.data[0].effectiveStatus).toBe('MARKED_RECEIVED');
+    });
+
+    it('attaches effectiveStatus: COLLECTED_TO_WS with a captured serial number reads as PENDING_JOB_CREATION', async () => {
+      const qb = buildQb({ getManyAndCount: [[appointment({ status: AppointmentStatus.COLLECTED_TO_WS })], 1] });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+      workshopIntakeRepository.find.mockResolvedValue([
+        { appointmentId: 'apt-1', serialNumberCapturedAt: new Date('2026-09-17T10:00:00Z') },
+      ]);
+
+      const result = await service.findAll({});
+
+      expect(result.data[0].effectiveStatus).toBe('PENDING_JOB_CREATION');
+    });
+
+    it('does not query WorkshopIntake at all when no row in the page is COLLECTED_TO_WS', async () => {
+      const qb = buildQb({ getManyAndCount: [[appointment({ status: AppointmentStatus.SCHEDULED })], 1] });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({});
+
+      expect(workshopIntakeRepository.find).not.toHaveBeenCalled();
     });
 
     // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2): apt.city/apt.applianceModel
@@ -1211,7 +1311,39 @@ describe('AppointmentsService', () => {
   });
 
   describe('getDashboardStats', () => {
-    it('buckets today and week appointments by status', async () => {
+    // Live-tested bug fix (2026-09-17, 3rd round on this widget): "today"'s buckets used to
+    // filter by `scheduledAt` falling inside today's calendar window, so an appointment
+    // scheduled for a FUTURE day that gets completed today (real example: APT-20260917-0001,
+    // scheduledAt tomorrow 15:15, walked to COMPLETED the same day it was created) never
+    // showed up in the Completed tile at all. Confirmed with the user this should instead be
+    // a live, unfiltered snapshot of current status counts (their explicit choice over
+    // keeping a "due today" + new completedAt/cancelledAt timestamp approach) - every bucket
+    // now counts by current status only, with no scheduledAt window.
+    it('counts every appointment currently in each status, regardless of its scheduledAt date (no date window any more)', async () => {
+      appointmentRepository.find
+        .mockResolvedValueOnce([
+          appointment({ status: AppointmentStatus.SCHEDULED, scheduledAt: new Date('2026-09-10T08:00:00Z') }),
+          // The exact regression case: scheduled for a future day, already Completed.
+          appointment({ status: AppointmentStatus.COMPLETED, scheduledAt: new Date('2026-09-18T15:15:00Z') }),
+          appointment({ status: AppointmentStatus.CANCELLED, scheduledAt: new Date('2099-01-01T00:00:00Z') }),
+        ])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.getDashboardStats('sc-1');
+
+      expect(result.today).toEqual({
+        scheduled: 1,
+        confirmed: 0,
+        onSite: 0,
+        completed: 1,
+        cancelled: 1,
+        collectedToWs: 0,
+        markedReceived: 0,
+        pendingJobCreation: 0,
+      });
+    });
+
+    it('buckets current status counts and week appointments by status', async () => {
       appointmentRepository.find
         .mockResolvedValueOnce([
           appointment({ status: AppointmentStatus.SCHEDULED }),
@@ -1224,12 +1356,43 @@ describe('AppointmentsService', () => {
 
       const result = await service.getDashboardStats('sc-1');
 
-      expect(result.today).toEqual({ scheduled: 1, confirmed: 0, onSite: 0, completed: 1, cancelled: 0 });
+      expect(result.today).toEqual({
+        scheduled: 1,
+        confirmed: 0,
+        onSite: 0,
+        completed: 1,
+        cancelled: 0,
+        collectedToWs: 0,
+        markedReceived: 0,
+        pendingJobCreation: 0,
+      });
       expect(result.week.total).toBe(2);
       expect(result.week.byStatus).toEqual({
         [AppointmentStatus.SCHEDULED]: 1,
         [AppointmentStatus.CANCELLED]: 1,
       });
+    });
+
+    // req.txt Issue A/C - the three COLLECTED_TO_WS sub-stages must show up in the widget's
+    // count too, split the same way the list's Status column splits them.
+    it('splits currently-COLLECTED_TO_WS appointments into collectedToWs / markedReceived / pendingJobCreation', async () => {
+      appointmentRepository.find
+        .mockResolvedValueOnce([
+          appointment({ id: 'apt-1', status: AppointmentStatus.COLLECTED_TO_WS }), // no intake yet
+          appointment({ id: 'apt-2', status: AppointmentStatus.COLLECTED_TO_WS }), // received, no S/N yet
+          appointment({ id: 'apt-3', status: AppointmentStatus.COLLECTED_TO_WS }), // received + S/N captured
+        ])
+        .mockResolvedValueOnce([]);
+      workshopIntakeRepository.find.mockResolvedValue([
+        { appointmentId: 'apt-2', serialNumberCapturedAt: null },
+        { appointmentId: 'apt-3', serialNumberCapturedAt: new Date('2026-09-17T10:00:00Z') },
+      ]);
+
+      const result = await service.getDashboardStats('sc-1');
+
+      expect(result.today.collectedToWs).toBe(1);
+      expect(result.today.markedReceived).toBe(1);
+      expect(result.today.pendingJobCreation).toBe(1);
     });
   });
 

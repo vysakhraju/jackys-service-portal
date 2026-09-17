@@ -2,7 +2,7 @@
 // (src/appointments/entities/appointment.entity.ts, src/appointments/dto/*, and
 // src/technician/entities/technician-visit.entity.ts, src/technician/dto/*).
 
-export const APPOINTMENT_TYPES = ['WARRANTY', 'OUT_OF_WARRANTY', 'AMC', 'PREVENTIVE', 'DISMANTLING'] as const;
+export const APPOINTMENT_TYPES = ['WARRANTY', 'OUT_OF_WARRANTY', 'AMC', 'PREVENTIVE', 'DISMANTLING','ACTIVITY'] as const;
 export type AppointmentTypeValue = (typeof APPOINTMENT_TYPES)[number];
 
 export const APPOINTMENT_STATUSES = [
@@ -21,6 +21,34 @@ export const APPOINTMENT_STATUSES = [
   'RESCHEDULED',
 ] as const;
 export type AppointmentStatusValue = (typeof APPOINTMENT_STATUSES)[number];
+
+// Appointment Scheduling page fixes (2026-09-17, req.txt Issues A-D) - COLLECTED_TO_WS is
+// one raw status covering three real workshop stages (backend: see
+// AppointmentsService.attachEffectiveStatuses's doc comment for exactly how these are
+// derived from a WorkshopIntake row - never stored as their own AppointmentStatus). These
+// two are never returned as `Appointment.status`, only ever as `Appointment.effectiveStatus`
+// and as `?status=` filter values the backend understands in addition to a real status.
+export const WORKSHOP_SUB_STATUSES = ['MARKED_RECEIVED', 'PENDING_JOB_CREATION'] as const;
+export type EffectiveAppointmentStatusValue = AppointmentStatusValue | (typeof WORKSHOP_SUB_STATUSES)[number];
+
+// Single source of truth for the "Today at a Glance" widget's 8 tiles (req.txt Issue C) -
+// also reused by SchedulePage's Status filter dropdown for the two synthetic sub-statuses'
+// labels, so the glance box and the dropdown option can never say something different for
+// the same underlying value.
+export const GLANCE_TILES: readonly {
+  key: 'scheduled' | 'confirmed' | 'onSite' | 'completed' | 'cancelled' | 'collectedToWs' | 'markedReceived' | 'pendingJobCreation';
+  label: string;
+  statusValue: EffectiveAppointmentStatusValue;
+}[] = [
+  { key: 'scheduled', label: 'Scheduled', statusValue: 'SCHEDULED' },
+  { key: 'confirmed', label: 'Confirmed', statusValue: 'CONFIRMED' },
+  { key: 'onSite', label: 'On Site', statusValue: 'ON_SITE' },
+  { key: 'completed', label: 'Completed', statusValue: 'COMPLETED' },
+  { key: 'cancelled', label: 'Cancelled', statusValue: 'CANCELLED' },
+  { key: 'collectedToWs', label: 'Collected to WS', statusValue: 'COLLECTED_TO_WS' },
+  { key: 'markedReceived', label: 'Marked Received', statusValue: 'MARKED_RECEIVED' },
+  { key: 'pendingJobCreation', label: 'Pending Job Creation', statusValue: 'PENDING_JOB_CREATION' },
+];
 
 // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 1) - orthogonal to
 // AppointmentTypeValue (coverage: Warranty/AMC/etc), mirrors the new JobType enum on the
@@ -126,6 +154,13 @@ export interface Appointment {
   amcContractId: string | null;
   createdAt: string;
   updatedAt: string;
+  // Appointment Scheduling page fixes (2026-09-17) - attached by the backend's findAll()
+  // (AppointmentsService.attachEffectiveStatuses) alongside the raw `status` above. Equal to
+  // `status` for every status except COLLECTED_TO_WS, where it further resolves to
+  // MARKED_RECEIVED or PENDING_JOB_CREATION once the workshop has started intake. Optional
+  // because older/mocked Appointment objects in this app (tests, other endpoints that return
+  // a plain Appointment) don't set it - fall back to `status` wherever it's read.
+  effectiveStatus?: EffectiveAppointmentStatusValue;
 }
 
 // Matches CreateAppointmentDto exactly - every optional field here is optional there too.
@@ -168,7 +203,7 @@ export interface CreateAppointmentInput {
 export interface AppointmentListFilters {
   serviceCentreId?: string;
   technicianId?: string;
-  status?: AppointmentStatusValue;
+  status?: EffectiveAppointmentStatusValue;
   type?: AppointmentTypeValue;
   channel?: AppointmentChannelValue;
   dateFrom?: string;
@@ -197,7 +232,19 @@ export interface AppointmentListResult {
 // Sun-Sat). The dashboard-stats widget deliberately labels this "Last 7 days", not "This
 // week", so the number matches what a reader would get counting it by hand.
 export interface AppointmentDashboardStats {
-  today: { scheduled: number; confirmed: number; onSite: number; completed: number; cancelled: number };
+  today: {
+    scheduled: number;
+    confirmed: number;
+    onSite: number;
+    completed: number;
+    cancelled: number;
+    // Appointment Scheduling page fixes (2026-09-17, req.txt Issue A/C) - the three
+    // COLLECTED_TO_WS sub-stages, split the same way `effectiveStatus` splits them on each
+    // Appointment row (see AppointmentsService.attachEffectiveStatuses's doc comment).
+    collectedToWs: number;
+    markedReceived: number;
+    pendingJobCreation: number;
+  };
   week: { total: number; byStatus: Record<string, number> };
 }
 

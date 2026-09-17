@@ -13,6 +13,12 @@ export const COLOR_BY_STATUS: Record<string, string> = {
   // WS" lands here, distinct from ON_SITE/COMPLETED so it reads as its own real state
   // (awaiting the workshop's Mark Received step, Phase 4) rather than looking finished.
   COLLECTED_TO_WS: 'bg-violet-50 text-violet-700',
+  // Appointment Scheduling page fixes (2026-09-17, req.txt Issue B/C) - synthetic
+  // sub-statuses only, never a real AppointmentStatus (see appointmentsTypes.ts's
+  // EffectiveAppointmentStatusValue). Shown wherever an appointment row's effectiveStatus
+  // is rendered instead of its raw status.
+  MARKED_RECEIVED: 'bg-purple-50 text-purple-700',
+  PENDING_JOB_CREATION: 'bg-orange-50 text-orange-700',
   COMPLETED: 'bg-emerald-50 text-emerald-700',
   CANCELLED: 'bg-red-50 text-red-600',
   NO_SHOW: 'bg-red-50 text-red-600',

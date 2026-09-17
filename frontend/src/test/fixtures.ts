@@ -589,6 +589,7 @@ export function makeKanbanBoard(overrides: Partial<KanbanBoard> = {}): KanbanBoa
   return {
     asOf: '2026-09-01T09:00:05Z',
     columns: [
+      { key: 'OPEN', label: 'Open', count: 0, jobCards: [] },
       { key: 'SCHEDULED', label: 'Scheduled', count: 0, jobCards: [] },
       { key: 'ON_SITE', label: 'On-Site', count: 0, jobCards: [] },
       { key: 'WIP', label: 'WIP', count: 1, jobCards: [makeKanbanCard()] },
@@ -672,7 +673,7 @@ export function makeDashboardOverview(overrides: Partial<DashboardOverview> = {}
 
 export function makeAppointmentDashboardStats(overrides: Partial<AppointmentDashboardStats> = {}): AppointmentDashboardStats {
   return {
-    today: { scheduled: 2, confirmed: 3, onSite: 1, completed: 4, cancelled: 0 },
+    today: { scheduled: 2, confirmed: 3, onSite: 1, completed: 4, cancelled: 0, collectedToWs: 0, markedReceived: 0, pendingJobCreation: 0 },
     week: { total: 20, byStatus: { SCHEDULED: 2, CONFIRMED: 3, ON_SITE: 1, COMPLETED: 13, CANCELLED: 1 } },
     ...overrides,
   };

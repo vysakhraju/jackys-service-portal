@@ -46,6 +46,11 @@ export enum AppointmentType {
   AMC = 'AMC',
   PREVENTIVE = 'PREVENTIVE',
   DISMANTLING = 'DISMANTLING',
+  // Added 2026-09-17 to match the frontend's APPOINTMENT_TYPES list
+  // (appointmentsTypes.ts) - this enum, not that array, is what
+  // CreateAppointmentDto's @IsEnum(AppointmentType) actually validates against,
+  // and what the `type` column's Postgres enum type is generated from.
+  ACTIVITY = 'ACTIVITY',
 }
 
 // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 1a: what work is being

@@ -19,8 +19,24 @@ import { AuditAction } from '../auth/entities/audit-log.entity';
 // Entity-only import, not JobCardsModule - see AppointmentsModule's doc comment on why
 // (JobCardsModule already imports this module, so the reverse would be a cycle).
 import { JobCard } from '../job-cards/entities/job-card.entity';
+// Same entity-only-repo pattern as JobCard above, same reason: WorkshopIntakeModule already
+// imports AppointmentsModule (to read the appointment being received against), so importing
+// WorkshopIntakeModule back here would be a cycle. Needed below purely to tell a bare
+// COLLECTED_TO_WS appointment apart from one that's actually been received/intake-processed
+// at the workshop - see attachEffectiveStatuses()'s doc comment.
+import { WorkshopIntake } from '../workshop-intake/entities/workshop-intake.entity';
 import { InventoryService } from '../inventory/inventory.service';
 import { buildSchedulingGrid, SchedulingGridResult } from './appointment-scheduling-grid.util';
+
+// Appointment Scheduling page fixes (2026-09-17, user-reported req.txt Issues A-D) -
+// COLLECTED_TO_WS is one raw AppointmentStatus value covering three real operational
+// stages the CCE/workshop actually care about (a unit in transit to the workshop vs. one
+// that's physically arrived vs. one that's fully intake-processed and just waiting on Job
+// Card creation) - see WorkshopIntake's own doc comment for why that's a separate entity
+// rather than a richer AppointmentStatus enum. These two synthetic values are never stored
+// anywhere; they only exist as ?status= filter values and as the `effectiveStatus` field
+// attached to list/dashboard-stats responses by attachEffectiveStatuses() below.
+export type EffectiveAppointmentStatus = AppointmentStatus | 'MARKED_RECEIVED' | 'PENDING_JOB_CREATION';
 
 interface CapacityCheckResult {
   available: boolean;
@@ -96,8 +112,52 @@ export class AppointmentsService {
     private auditLogRepository: Repository<AuditLog>,
     @InjectRepository(JobCard)
     private jobCardRepository: Repository<JobCard>,
+    @InjectRepository(WorkshopIntake)
+    private workshopIntakeRepository: Repository<WorkshopIntake>,
     private inventoryService: InventoryService,
   ) {}
+
+  // Appointment Scheduling page fixes (2026-09-17, req.txt Issues B/C) - resolves each
+  // COLLECTED_TO_WS appointment to which of the three real workshop stages it's actually
+  // in, by checking whether it has a WorkshopIntake row yet and, if so, whether the serial
+  // number step on it is done:
+  //   no WorkshopIntake row at all       -> 'COLLECTED_TO_WS' (in transit / not yet arrived)
+  //   row exists, serialNumberCapturedAt is null -> 'MARKED_RECEIVED' (arrived, S/N not captured)
+  //   row exists, serialNumberCapturedAt is set  -> 'PENDING_JOB_CREATION' (intake done, just needs a Job Card)
+  // Every other AppointmentStatus passes through unchanged. A single batched
+  // find({ appointmentId: In(...) }) covers the whole list, not one query per row.
+  private async attachEffectiveStatuses<T extends Appointment>(
+    appointments: T[],
+  ): Promise<(T & { effectiveStatus: EffectiveAppointmentStatus })[]> {
+    const collectedIds = appointments
+      .filter((a) => a.status === AppointmentStatus.COLLECTED_TO_WS)
+      .map((a) => a.id);
+
+    const intakeByAppointmentId = new Map<string, WorkshopIntake>();
+    if (collectedIds.length) {
+      const intakes = await this.workshopIntakeRepository.find({
+        where: { appointmentId: In(collectedIds) },
+      });
+      for (const intake of intakes) {
+        intakeByAppointmentId.set(intake.appointmentId, intake);
+      }
+    }
+
+    return appointments.map((a) => {
+      let effectiveStatus: EffectiveAppointmentStatus = a.status;
+      if (a.status === AppointmentStatus.COLLECTED_TO_WS) {
+        const intake = intakeByAppointmentId.get(a.id);
+        if (!intake) {
+          effectiveStatus = AppointmentStatus.COLLECTED_TO_WS;
+        } else if (!intake.serialNumberCapturedAt) {
+          effectiveStatus = 'MARKED_RECEIVED';
+        } else {
+          effectiveStatus = 'PENDING_JOB_CREATION';
+        }
+      }
+      return { ...a, effectiveStatus };
+    });
+  }
 
   private async generateAppointmentNumber(): Promise<string> {
     const today = new Date();
@@ -197,7 +257,10 @@ export class AppointmentsService {
   async findAll(filters?: {
     serviceCentreId?: string;
     technicianId?: string;
-    status?: AppointmentStatus;
+    // Appointment Scheduling page fixes (req.txt Issue B) - accepts the two synthetic
+    // sub-statuses below in addition to a real AppointmentStatus; see the status filter
+    // block below and attachEffectiveStatuses()'s doc comment for what they mean.
+    status?: EffectiveAppointmentStatus;
     type?: AppointmentType;
     channel?: AppointmentChannel;
     dateFrom?: Date;
@@ -214,7 +277,12 @@ export class AppointmentsService {
     // ILIKE-escaping comment below for why the wildcard characters are escaped. Also matches
     // serialNumber since 2026-09-16 Phase 2 (the New Appointment popup's customer lookup).
     q?: string;
-  }): Promise<{ data: Appointment[]; total: number; page: number; limit: number }> {
+  }): Promise<{
+    data: (Appointment & { effectiveStatus: EffectiveAppointmentStatus })[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
     const query = this.appointmentRepository
       .createQueryBuilder('apt')
       .leftJoinAndSelect('apt.serviceCentre', 'sc')
@@ -251,7 +319,32 @@ export class AppointmentsService {
       query.andWhere('apt.technicianId IS NULL');
     }
 
-    if (filters?.status) {
+    // Appointment Scheduling page fixes (req.txt Issue B) - 'MARKED_RECEIVED' and
+    // 'PENDING_JOB_CREATION' aren't real AppointmentStatus values (see
+    // attachEffectiveStatuses()'s doc comment); both narrow to the underlying
+    // COLLECTED_TO_WS rows and then split on whether that row's WorkshopIntake has had its
+    // serial number captured yet. A plain EXISTS subquery keeps LIMIT/OFFSET pagination and
+    // the `total` count correct - filtering in JS after the page was already fetched would
+    // silently give a wrong `total` and a short page.
+    if (
+      filters?.status === 'MARKED_RECEIVED' ||
+      filters?.status === 'PENDING_JOB_CREATION' ||
+      filters?.status === AppointmentStatus.COLLECTED_TO_WS
+    ) {
+      query.andWhere('apt.status = :collectedStatus', { collectedStatus: AppointmentStatus.COLLECTED_TO_WS });
+      query.andWhere(
+        filters.status === 'MARKED_RECEIVED'
+          ? 'EXISTS (SELECT 1 FROM workshop_intakes wi WHERE wi."appointmentId" = apt.id AND wi."serialNumberCapturedAt" IS NULL)'
+          : filters.status === 'PENDING_JOB_CREATION'
+            ? 'EXISTS (SELECT 1 FROM workshop_intakes wi WHERE wi."appointmentId" = apt.id AND wi."serialNumberCapturedAt" IS NOT NULL)'
+            // Plain COLLECTED_TO_WS (the raw status, e.g. from the glance tile click) must
+            // stay mutually exclusive with the two sub-statuses above - otherwise clicking
+            // "Collected to WS" showed Pending Job Creation/Marked Received rows mixed in,
+            // since the raw column is identical across all three sub-stages (bug reported
+            // 2026-09-17 against the fix just above).
+            : 'NOT EXISTS (SELECT 1 FROM workshop_intakes wi WHERE wi."appointmentId" = apt.id)',
+      );
+    } else if (filters?.status) {
       query.andWhere('apt.status = :status', { status: filters.status });
     }
 
@@ -296,7 +389,12 @@ export class AppointmentsService {
 
     const [data, total] = await query.getManyAndCount();
 
-    return { data, total, page, limit };
+    // req.txt Issue C/D - the Status column and the "Today at a Glance" click-to-filter
+    // both need to show the real sub-stage for a COLLECTED_TO_WS row, not just the raw
+    // status. See attachEffectiveStatuses()'s doc comment.
+    const dataWithEffectiveStatus = await this.attachEffectiveStatuses(data);
+
+    return { data: dataWithEffectiveStatus, total, page, limit };
   }
 
   async findById(id: string): Promise<Appointment> {
@@ -1007,9 +1105,43 @@ export class AppointmentsService {
   }
 
   async getDashboardStats(serviceCentreId?: string): Promise<{
-    today: { scheduled: number; confirmed: number; onSite: number; completed: number; cancelled: number };
+    today: {
+      scheduled: number;
+      confirmed: number;
+      onSite: number;
+      completed: number;
+      cancelled: number;
+      // req.txt Issue A/C - the three COLLECTED_TO_WS sub-stages, split out the same way
+      // attachEffectiveStatuses() splits them for the list/Status column, so this widget
+      // and the table below always agree on what each bucket contains.
+      collectedToWs: number;
+      markedReceived: number;
+      pendingJobCreation: number;
+    };
     week: { total: number; byStatus: Record<string, number> };
   }> {
+    // "Today at a Glance" redefinition (live-tested 2026-09-17, 3rd round on this exact
+    // widget): it used to bucket by `scheduledAt` falling inside today's calendar window -
+    // meaning an appointment scheduled for tomorrow that gets walked all the way to
+    // COMPLETED *today* (real example: APT-20260917-0001, scheduledAt tomorrow 15:15,
+    // completed today) never showed up anywhere on the widget, even though it was very
+    // much "today's" activity from the CCE's point of view. Confirmed with the user this
+    // was the actual bug, not just sparse data (the two earlier rounds on this widget - see
+    // MODIFICATION_REQUESTS.md's Issue A history - really were just sparse test data, but
+    // this round exposed a real design flaw: scheduledAt-based bucketing).
+    //
+    // Fix (per the user's explicit choice - "Live snapshot, no date filter"): every bucket
+    // below is now a live, unfiltered count of appointments CURRENTLY in that status/
+    // sub-status, with no scheduledAt window at all - the same "what does the board look
+    // like right now" semantics every other status board in this app already uses (Job
+    // Status Kanban, Workshop Queue). `today.completed` means "currently Completed",
+    // `today.scheduled` means "currently Scheduled", etc., regardless of which calendar day
+    // any of them were scheduled for. The `today` key name is kept (not renamed) purely so
+    // the frontend/API contract doesn't change - DashboardStatsWidget's tile labels already
+    // read fine either way ("Completed" doesn't claim "completed today").
+    //
+    // `week` below is intentionally UNCHANGED (still scheduledAt-bounded, last 7 days) -
+    // it's a separate "recent schedule volume" stat, not one of the tiles this fix is about.
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -1020,20 +1152,25 @@ export class AppointmentsService {
 
     const whereBase = serviceCentreId ? { serviceCentreId } : {};
 
-    const todayAppointments = await this.appointmentRepository.find({
-      where: { ...whereBase, scheduledAt: Between(today, tomorrow) },
-    });
+    const allAppointments = await this.appointmentRepository.find({ where: whereBase });
 
     const weekAppointments = await this.appointmentRepository.find({
       where: { ...whereBase, scheduledAt: Between(weekStart, tomorrow) },
     });
 
+    const collectedNow = await this.attachEffectiveStatuses(
+      allAppointments.filter((a) => a.status === AppointmentStatus.COLLECTED_TO_WS),
+    );
+
     const todayStats = {
-      scheduled: todayAppointments.filter((a) => a.status === AppointmentStatus.SCHEDULED).length,
-      confirmed: todayAppointments.filter((a) => a.status === AppointmentStatus.CONFIRMED).length,
-      onSite: todayAppointments.filter((a) => a.status === AppointmentStatus.ON_SITE).length,
-      completed: todayAppointments.filter((a) => a.status === AppointmentStatus.COMPLETED).length,
-      cancelled: todayAppointments.filter((a) => a.status === AppointmentStatus.CANCELLED).length,
+      scheduled: allAppointments.filter((a) => a.status === AppointmentStatus.SCHEDULED).length,
+      confirmed: allAppointments.filter((a) => a.status === AppointmentStatus.CONFIRMED).length,
+      onSite: allAppointments.filter((a) => a.status === AppointmentStatus.ON_SITE).length,
+      completed: allAppointments.filter((a) => a.status === AppointmentStatus.COMPLETED).length,
+      cancelled: allAppointments.filter((a) => a.status === AppointmentStatus.CANCELLED).length,
+      collectedToWs: collectedNow.filter((a) => a.effectiveStatus === AppointmentStatus.COLLECTED_TO_WS).length,
+      markedReceived: collectedNow.filter((a) => a.effectiveStatus === 'MARKED_RECEIVED').length,
+      pendingJobCreation: collectedNow.filter((a) => a.effectiveStatus === 'PENDING_JOB_CREATION').length,
     };
 
     const byStatus: Record<string, number> = {};

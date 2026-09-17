@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import type { AxiosError } from 'axios';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
@@ -34,9 +34,12 @@ import {
   APPOINTMENT_STATUSES,
   APPOINTMENT_TYPES,
   CUSTOMER_TYPES,
+  GLANCE_TILES,
   JOB_TYPES,
+  WORKSHOP_SUB_STATUSES,
   type Appointment,
   type AppointmentStatusValue,
+  type EffectiveAppointmentStatusValue,
   type CreateAppointmentInput,
 } from '../../lib/appointmentsTypes';
 import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
@@ -119,6 +122,16 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// req.txt Issue E - Previous/Next Day quick-nav buttons shift off a reference date (parsed
+// as local midnight, not UTC, so a day shift near midnight in any timezone still lands on
+// the calendar day the user sees) rather than off `Date.now()`, so repeated clicks step one
+// full day at a time from wherever the filter currently points.
+function shiftIsoDate(iso: string, days: number): string {
+  const base = iso ? new Date(`${iso}T00:00:00`) : new Date();
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
 // Mirrors the exact status-transition guards in AppointmentsService, so we don't render a
 // button that the backend will just 400 - see confirmAppointment/markOnSite/
 // completeAppointment/assignTechnician/markCollectedToWorkshop for the source of these
@@ -182,10 +195,17 @@ export function SchedulePage() {
   const { has } = useMyCapabilities();
   const canManage = has('SCHEDULE_CCE_MANAGE');
 
+  // req.txt Issue D - the Status filter is shareable via URL (?status=Completed etc.), so
+  // a link into "just today's cancellations" works for whoever opens it. searchParams is
+  // read once for the initial filters state below; setStatusFilter() (below the appointments
+  // query) is the one place that ever changes it again, keeping the URL and filters.status
+  // from drifting apart.
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const [filters, setFilters] = useState({
     serviceCentreId: '',
     technicianId: '',
-    status: '',
+    status: (searchParams.get('status') || '') as EffectiveAppointmentStatusValue | '',
     type: '',
     channel: '',
     dateFrom: '',
@@ -221,7 +241,7 @@ export function SchedulePage() {
       listAppointments({
         serviceCentreId: filters.serviceCentreId || undefined,
         technicianId: filters.technicianId || undefined,
-        status: (filters.status || undefined) as AppointmentStatusValue | undefined,
+        status: (filters.status || undefined) as EffectiveAppointmentStatusValue | undefined,
         type: (filters.type || undefined) as CreateAppointmentInput['type'] | undefined,
         channel: (filters.channel || undefined) as CreateAppointmentInput['channel'] | undefined,
         dateFrom: filters.dateFrom || undefined,
@@ -298,6 +318,39 @@ export function SchedulePage() {
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: ['appointments'] });
+    // req.txt Issue A - "Today at a Glance" must recount after every create/update/delete,
+    // not just on its own 60s poll. Every mutation below already funnels success through
+    // this one function (or calls it directly as onSuccess), so this single line covers all
+    // of them rather than repeating it at each mutation's onSuccess.
+    queryClient.invalidateQueries({ queryKey: ['appointment-dashboard-stats'] });
+  }
+
+  // req.txt Issue D - the one place filters.status ever changes: keeps the dropdown, the
+  // glance widget's active tile, and the URL's ?status= all in sync. Passed to both the
+  // Status <select> below and DashboardStatsWidget's onSelectStatus.
+  // req.txt Issue E - Previous/Next Day/Today buttons set From AND To to the same computed
+  // date (a single-day view), stepping off whichever of dateFrom/dateTo is already set so
+  // repeated clicks walk one day at a time; 'today' ignores the current filter entirely.
+  function applyQuickDate(delta: number | 'today') {
+    setPage(1);
+    setFilters((f) => {
+      const next = delta === 'today' ? todayIsoDate() : shiftIsoDate(f.dateFrom || f.dateTo || todayIsoDate(), delta);
+      return { ...f, dateFrom: next, dateTo: next };
+    });
+  }
+
+  function setStatusFilter(status: EffectiveAppointmentStatusValue | '') {
+    setPage(1);
+    setFilters((f) => ({ ...f, status }));
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (status) next.set('status', status);
+        else next.delete('status');
+        return next;
+      },
+      { replace: true },
+    );
   }
 
   function closeForm() {
@@ -511,7 +564,10 @@ export function SchedulePage() {
     // shipped, matching the DB column's own default.
     { key: 'jobType', label: 'Job Type', render: (r) => (r.jobType || 'REPAIR').replaceAll('_', ' ') },
     { key: 'channel', label: 'Channel', render: (r) => <span className="text-xs text-slate-600">{r.channel.replaceAll('_', ' ')}</span> },
-    { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
+    // req.txt Issue B/C - shows the resolved sub-stage (Marked Received / Pending Job
+    // Creation) for a COLLECTED_TO_WS row instead of the same generic badge for all of them;
+    // falls back to the raw status for any row a caller/mock didn't attach effectiveStatus to.
+    { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.effectiveStatus ?? r.status} /> },
     { key: 'centre', label: 'Service Centre', render: (r) => r.serviceCentre?.name ?? r.serviceCentreId },
     { key: 'technician', label: 'Technician', render: (r) => (r.technician ? `${r.technician.firstName} ${r.technician.lastName}` : '—') },
     { key: 'scheduledAt', label: 'Scheduled', render: (r) => new Date(r.scheduledAt).toLocaleString() },
@@ -519,7 +575,11 @@ export function SchedulePage() {
 
   return (
     <div className="space-y-4">
-      <DashboardStatsWidget serviceCentreId={filters.serviceCentreId || undefined} />
+      <DashboardStatsWidget
+        serviceCentreId={filters.serviceCentreId || undefined}
+        activeStatus={filters.status}
+        onSelectStatus={setStatusFilter}
+      />
 
       <div className="flex flex-wrap items-end justify-between gap-4">
         <p className="max-w-2xl text-sm text-slate-500">
@@ -549,50 +609,62 @@ export function SchedulePage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4">
+      {/* req.txt Issue E - was `flex flex-wrap items-end gap-3`: `items-end` bottom-aligns
+          each field's *column* to its own content height, so any field with a taller label/
+          hint (or, before Issue B/C's Channel fix, a lone hint line) throws its control out
+          of line with its neighbors - a class of bug a flex row keeps reintroducing one field
+          at a time. A grid with a fixed column template sizes every cell the same regardless
+          of its content, so this can't recur; every control below is `w-full` to actually
+          fill that cell (the old per-field `w-36`/`w-40`/`w-48` classes sized them for the
+          flex row and would otherwise leave dead space in a wider grid column). */}
+      <div
+        className="rounded-lg border border-slate-200 bg-white p-4"
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}
+      >
         <Field label="Service centre">
-          <div className="w-48">
-            <NamePicker
-              value={filters.serviceCentreId || null}
-              options={serviceCentreOptions}
-              onChange={(id) => { setPage(1); setFilters((f) => ({ ...f, serviceCentreId: id ?? '' })); }}
-            />
-          </div>
+          <NamePicker
+            value={filters.serviceCentreId || null}
+            options={serviceCentreOptions}
+            onChange={(id) => { setPage(1); setFilters((f) => ({ ...f, serviceCentreId: id ?? '' })); }}
+          />
         </Field>
         <Field label="Technician" hint={!technicianOptions.accessible ? 'paste uuid - name list needs Team Leader access' : undefined}>
-          <div className="w-48">
-            {technicianOptions.accessible ? (
-              <NamePicker
-                value={filters.technicianId || null}
-                options={technicianOptions.options}
-                loading={technicianOptions.loading}
-                onChange={(id) => { setPage(1); setFilters((f) => ({ ...f, technicianId: id ?? '' })); }}
-              />
-            ) : (
-              <input
-                className={inputClass}
-                placeholder="paste uuid"
-                value={filters.technicianId}
-                onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, technicianId: e.target.value })); }}
-              />
-            )}
-          </div>
+          {technicianOptions.accessible ? (
+            <NamePicker
+              value={filters.technicianId || null}
+              options={technicianOptions.options}
+              loading={technicianOptions.loading}
+              onChange={(id) => { setPage(1); setFilters((f) => ({ ...f, technicianId: id ?? '' })); }}
+            />
+          ) : (
+            <input
+              className={inputClass}
+              placeholder="paste uuid"
+              value={filters.technicianId}
+              onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, technicianId: e.target.value })); }}
+            />
+          )}
         </Field>
         <Field label="Status">
           <select
-            className={`${inputClass} w-40`}
+            className={`${inputClass} w-full`}
             value={filters.status}
-            onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, status: e.target.value })); }}
+            onChange={(e) => setStatusFilter(e.target.value as EffectiveAppointmentStatusValue | '')}
           >
             <option value="">All</option>
             {APPOINTMENT_STATUSES.map((s) => (
               <option key={s} value={s}>{s.replaceAll('_', ' ')}</option>
             ))}
+            {/* req.txt Issue B - the two COLLECTED_TO_WS sub-statuses, listed by the same
+                labels GLANCE_TILES uses so the dropdown and the glance widget never disagree. */}
+            {WORKSHOP_SUB_STATUSES.map((s) => (
+              <option key={s} value={s}>{GLANCE_TILES.find((t) => t.statusValue === s)!.label}</option>
+            ))}
           </select>
         </Field>
         <Field label="Type">
           <select
-            className={`${inputClass} w-36`}
+            className={`${inputClass} w-full`}
             value={filters.type}
             onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, type: e.target.value })); }}
           >
@@ -602,9 +674,9 @@ export function SchedulePage() {
             ))}
           </select>
         </Field>
-        <Field label="Channel" hint="Service Desk triage - how the request came in">
+        <Field label="Channel">
           <select
-            className={`${inputClass} w-36`}
+            className={`${inputClass} w-full`}
             value={filters.channel}
             onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, channel: e.target.value })); }}
           >
@@ -615,9 +687,13 @@ export function SchedulePage() {
           </select>
         </Field>
         <Field label="From">
+          {/* Native calendar icon: inputClass has no `appearance-none`/icon-hiding rule, so
+              the browser's built-in icon is already visible and clickable here - nothing to
+              fix. `w-full` (in place of the old fixed `w-36`) just lets it fill its grid cell
+              like every other control in this row. */}
           <input
             type="date"
-            className={`${inputClass} w-36`}
+            className={`${inputClass} w-full`}
             value={filters.dateFrom}
             onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, dateFrom: e.target.value })); }}
           />
@@ -625,11 +701,46 @@ export function SchedulePage() {
         <Field label="To">
           <input
             type="date"
-            className={`${inputClass} w-36`}
+            className={`${inputClass} w-full`}
             value={filters.dateTo}
             onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, dateTo: e.target.value })); }}
           />
         </Field>
+        {/* Deliberately NOT a <Field> here: Field wraps its children in a single <label>,
+            which is fine for one input but breaks accessible-name computation for a group of
+            several buttons - the first button ends up "labelled" by the label's ENTIRE text
+            content (its own text plus its siblings' and the hint's), while the others somehow
+            keep their own (caught by the new Issue E tests below: the "◀ Prev" button's
+            accessible name came back as "Quick nav Today Next ▶ Sets From and To to the same
+            day" once it briefly used Field). This reproduces Field's visual classes by hand
+            instead, with a plain <span> caption. */}
+        <div className="block">
+          <span className="mb-1 block text-sm font-medium text-slate-700">Quick nav</span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => applyQuickDate(-1)}
+              className="flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              ◀ Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => applyQuickDate('today')}
+              className="flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              onClick={() => applyQuickDate(1)}
+              className="flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              Next ▶
+            </button>
+          </div>
+          <span className="mt-1 block text-xs text-slate-400">Sets From and To to the same day</span>
+        </div>
       </div>
 
       {actionError ? <ErrorNotice error={actionError} /> : null}
@@ -689,6 +800,30 @@ export function SchedulePage() {
                 >
                   Mark Received →
                 </button>
+              )}
+              {/* req.txt Issue F - a workshop-intake row (Marked Received or Pending Job
+                  Creation) with no Job Card yet gets a visual cue and a direct shortcut into
+                  Job Cards, rather than relying on the CCE to remember it's still pending.
+                  Links into the exact same screen WorkshopIntakeModal's own Step 4 hands off
+                  to (JobCardsPage reads ?appointmentId=, looks the appointment up, and shows
+                  a single "Create Job Card" button once intake is complete - see that page's
+                  Gate 1/FR-05 check for what "complete" means) rather than a new inline form:
+                  the backend has no separate fields to pre-fill (createJobCard only ever
+                  takes { appointmentId }, deriving customer/service centre/job type from the
+                  appointment server-side), so that page already IS the pre-filled form.
+                  No separate "Job Created" badge state needed either: once the Job Card is
+                  created the backend auto-completes the appointment (completeFromJobCardCreation),
+                  row.jobCard becomes non-null, and effectiveStatus moves off MARKED_RECEIVED/
+                  PENDING_JOB_CREATION - so this pill simply stops rendering on the next
+                  refetch (the spec's "...or hide it" option). */}
+              {(row.effectiveStatus === 'MARKED_RECEIVED' || row.effectiveStatus === 'PENDING_JOB_CREATION') && !row.jobCard && (
+                <Link
+                  to={`/job-cards?appointmentId=${row.id}`}
+                  className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                  title="Open Job Cards, pre-filled with this appointment, to create its Job Card"
+                >
+                  + Create Job
+                </Link>
               )}
               {a.canCompleteAmcVisit && (
                 <Link

@@ -17,8 +17,17 @@ import { Appointment } from '../appointments/entities/appointment.entity';
  * Job Card search/filters), and READY_FOR_QC is folded into WIP (see columnForJobCard()
  * below) rather than getting its own column, since the BRD's list has no "Awaiting QC"
  * bucket distinct from "WIP" - a documented simplification, not an oversight.
+ *
+ * OPEN added as its own leading column (2026-09-16, live-tested finding): a freshly
+ * created Job Card (status OPEN, before its S/N is even validated) used to be folded
+ * into SCHEDULED alongside SN_VALIDATED, so it never showed up as a distinct, visible
+ * bucket on either the Live Job Status Board or the Dashboard's "Jobs by Status" chart
+ * - a brand-new job looked like it hadn't registered anywhere. Both consumers render
+ * columns generically off this list, so this one enum/order/label change is the whole
+ * fix; nothing in ReportsPage.tsx or DashboardWidgets.tsx needed touching.
  */
 export enum KanbanColumn {
+  OPEN = 'OPEN',
   SCHEDULED = 'SCHEDULED',
   ON_SITE = 'ON_SITE',
   WIP = 'WIP',
@@ -30,6 +39,7 @@ export enum KanbanColumn {
 }
 
 export const KANBAN_COLUMN_ORDER: KanbanColumn[] = [
+  KanbanColumn.OPEN,
   KanbanColumn.SCHEDULED,
   KanbanColumn.ON_SITE,
   KanbanColumn.WIP,
@@ -41,6 +51,7 @@ export const KANBAN_COLUMN_ORDER: KanbanColumn[] = [
 ];
 
 const KANBAN_COLUMN_LABELS: Record<KanbanColumn, string> = {
+  [KanbanColumn.OPEN]: 'Open',
   [KanbanColumn.SCHEDULED]: 'Scheduled',
   [KanbanColumn.ON_SITE]: 'On-Site',
   [KanbanColumn.WIP]: 'WIP',
@@ -186,6 +197,7 @@ export class ReportsService {
       case JobCardStatus.CANCELLED:
         return null;
       case JobCardStatus.OPEN:
+        return KanbanColumn.OPEN;
       case JobCardStatus.SN_VALIDATED:
         return KanbanColumn.SCHEDULED;
       case JobCardStatus.RWR:

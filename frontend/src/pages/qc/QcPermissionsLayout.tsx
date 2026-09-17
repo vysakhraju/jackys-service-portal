@@ -1,11 +1,24 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { useAuth } from '../../lib/auth';
 
-const TABS: { label: string; path: string }[] = [
+// Mirrors PERMISSION_ADMIN_ROLES in PermissionsPage.tsx / permissions.controller.ts exactly.
+// Live-tested finding (2026-09-16): a Customer Care Executive could see the "Permissions"
+// tab and click into it, only to be shown PermissionsPage's own restricted-access notice -
+// every endpoint behind that screen is admin-only server-side, so a non-admin user was
+// never going to be able to do anything there. Filtering the tab out here means that
+// notice is never reached in normal navigation, instead of being shown and then blocking.
+const PERMISSION_ADMIN_ROLES = ['SUPER_ADMIN', 'SERVICE_HEAD'];
+
+const ALL_TABS: { label: string; path: string; adminOnly?: boolean }[] = [
   { label: 'QC', path: '/qc-permissions/qc' },
-  { label: 'Permissions', path: '/qc-permissions/permissions' },
+  { label: 'Permissions', path: '/qc-permissions/permissions', adminOnly: true },
 ];
 
 export function QcPermissionsLayout() {
+  const { user } = useAuth();
+  const isAdmin = !!user && PERMISSION_ADMIN_ROLES.includes(user.role.name);
+  const tabs = ALL_TABS.filter((tab) => !tab.adminOnly || isAdmin);
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-slate-200 bg-white px-8 pt-6">
@@ -19,7 +32,7 @@ export function QcPermissionsLayout() {
           require - deliberately not tied to a fixed role, so any user can be assigned.
         </p>
         <nav className="mt-4 -mb-px flex flex-wrap gap-1 overflow-x-auto">
-          {TABS.map((tab) => (
+          {tabs.map((tab) => (
             <NavLink
               key={tab.path}
               to={tab.path}
