@@ -2,7 +2,7 @@
 // overridable per-test via a Partial<> merge. Keeps individual test files from having to
 // restate every field of these fairly large backend-mirrored shapes.
 import type { Appointment } from '../lib/appointmentsTypes';
-import type { JobCard } from '../lib/jobCardsTypes';
+import type { EligibleAppointmentForJobCard, JobCard } from '../lib/jobCardsTypes';
 import type { Estimate } from '../lib/estimatesTypes';
 import type { InventoryReservation, InventoryReservationWithAge } from '../lib/inventoryTypes';
 import type { WorkshopState } from '../lib/workshopTypes';
@@ -86,6 +86,22 @@ export function makeAppointment(overrides: Partial<Appointment> = {}): Appointme
     amcContractId: null,
     createdAt: '2026-08-01T08:00:00Z',
     updatedAt: '2026-08-01T08:00:00Z',
+    ...overrides,
+  };
+}
+
+// GET /job-cards/eligible-appointments row (2026-09-17) - backs JobCardsPage's
+// EligibleAppointmentPicker.
+export function makeEligibleAppointmentForJobCard(
+  overrides: Partial<EligibleAppointmentForJobCard> = {},
+): EligibleAppointmentForJobCard {
+  return {
+    id: 'appt-55',
+    appointmentNumber: 'APT-0055',
+    customerName: 'Rashid Khan',
+    customerPhone: '+971501112222',
+    status: 'COMPLETED',
+    scheduledAt: '2026-09-10T10:00:00.000Z',
     ...overrides,
   };
 }

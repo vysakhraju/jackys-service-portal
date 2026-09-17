@@ -11,10 +11,12 @@ describe('JobCardsService', () => {
   let taskPauseRepository: any;
   let crewHelperRepository: any;
   let userRepository: any;
+  let appointmentRepository: any;
   let appointmentsService: any;
   let technicianService: any;
   let workshopIntakeService: any;
   let queryBuilder: any;
+  let eligibleAppointmentsQueryBuilder: any;
 
   const appointment = (overrides: any = {}) => ({
     id: 'apt-1',
@@ -103,6 +105,18 @@ describe('JobCardsService', () => {
     userRepository = {
       findOne: jest.fn(),
     };
+    eligibleAppointmentsQueryBuilder = {
+      leftJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    appointmentRepository = {
+      createQueryBuilder: jest.fn(() => eligibleAppointmentsQueryBuilder),
+    };
     appointmentsService = {
       findById: jest.fn(),
       completeFromJobCardCreation: jest.fn().mockResolvedValue(undefined),
@@ -119,10 +133,89 @@ describe('JobCardsService', () => {
       taskPauseRepository,
       crewHelperRepository,
       userRepository,
+      appointmentRepository,
       appointmentsService,
       technicianService,
       workshopIntakeService,
     );
+  });
+
+  describe('findEligibleForJobCardCreation', () => {
+    // Job Cards page (requested 2026-09-17) - see the service method's own doc comment.
+    // These tests guard the query SHAPE (which tables/columns/params get wired into the
+    // query builder) since a mock can't execute the real SQL - the actual filtering logic
+    // (no existing Job Card, invoice present, S/N+warranty+fault/symptom captured via
+    // workshop_intakes for COLLECTED_TO_WS or technician_visits otherwise) is the same
+    // gate create() below already exercises against real data.
+
+    it('excludes appointments that already have a Job Card via a LEFT JOIN ... IS NULL', async () => {
+      await service.findEligibleForJobCardCreation();
+
+      expect(appointmentRepository.createQueryBuilder).toHaveBeenCalledWith('apt');
+      expect(eligibleAppointmentsQueryBuilder.leftJoin).toHaveBeenCalledWith(
+        'job_cards',
+        'jc',
+        'jc."appointmentId" = apt.id',
+      );
+      expect(eligibleAppointmentsQueryBuilder.where).toHaveBeenCalledWith('jc.id IS NULL');
+    });
+
+    it('requires an invoice number on file', async () => {
+      await service.findEligibleForJobCardCreation();
+
+      expect(eligibleAppointmentsQueryBuilder.andWhere).toHaveBeenCalledWith('apt."invoiceNumber" IS NOT NULL');
+    });
+
+    it('checks workshop_intakes for a COLLECTED_TO_WS appointment and technician_visits otherwise, in one query', async () => {
+      await service.findEligibleForJobCardCreation();
+
+      const calls = eligibleAppointmentsQueryBuilder.andWhere.mock.calls;
+      const gateCall = calls.find((c: any[]) => typeof c[0] === 'string' && c[0].includes('EXISTS'));
+      expect(gateCall).toBeDefined();
+      expect(gateCall[0]).toContain('workshop_intakes');
+      expect(gateCall[0]).toContain('technician_visits');
+      expect(gateCall[1]).toEqual({ collectedStatus: 'COLLECTED_TO_WS' });
+    });
+
+    it('does not add a free-text filter when q is omitted or blank - the blank-query short-circuit is deliberately NOT applied here (unlike JobCardJourneyService.search)', async () => {
+      await service.findEligibleForJobCardCreation();
+      await service.findEligibleForJobCardCreation('   ');
+
+      const calls = eligibleAppointmentsQueryBuilder.andWhere.mock.calls;
+      const likeCall = calls.find((c: any[]) => typeof c[0] === 'string' && c[0].includes('ILIKE'));
+      expect(likeCall).toBeUndefined();
+      // Both calls still queried (no early return to []), unlike a blank-query search.
+      expect(eligibleAppointmentsQueryBuilder.getMany).toHaveBeenCalledTimes(2);
+    });
+
+    it('adds an escaped ILIKE filter across appointment number/customer name/phone when q is given', async () => {
+      await service.findEligibleForJobCardCreation('50% off_er');
+
+      const calls = eligibleAppointmentsQueryBuilder.andWhere.mock.calls;
+      const likeCall = calls.find((c: any[]) => typeof c[0] === 'string' && c[0].includes('ILIKE'));
+      expect(likeCall).toBeDefined();
+      expect(likeCall[0]).toContain('apt."appointmentNumber" ILIKE :like');
+      expect(likeCall[0]).toContain('apt."customerName" ILIKE :like');
+      expect(likeCall[0]).toContain('apt."customerPhone" ILIKE :like');
+      // '%' and '_' typed by the user must be escaped literal characters, not wildcards.
+      expect(likeCall[1]).toEqual({ like: '%50\\% off\\_er%' });
+    });
+
+    it('orders by most recently scheduled first and caps at 30 rows', async () => {
+      await service.findEligibleForJobCardCreation();
+
+      expect(eligibleAppointmentsQueryBuilder.orderBy).toHaveBeenCalledWith('apt.scheduledAt', 'DESC');
+      expect(eligibleAppointmentsQueryBuilder.limit).toHaveBeenCalledWith(30);
+    });
+
+    it('returns whatever the query resolves', async () => {
+      const rows = [{ id: 'apt-9', appointmentNumber: 'APT-0009', customerName: 'Ahmed', customerPhone: '0501112222', status: 'ON_SITE', scheduledAt: new Date('2026-09-17T10:00:00Z') }];
+      eligibleAppointmentsQueryBuilder.getMany.mockResolvedValue(rows);
+
+      const result = await service.findEligibleForJobCardCreation();
+
+      expect(result).toEqual(rows);
+    });
   });
 
   describe('create', () => {

@@ -83,6 +83,19 @@ export interface CreateJobCardInput {
   appointmentId: string;
 }
 
+// GET /job-cards/eligible-appointments (requested 2026-09-17) - backs the Job Cards
+// page's "eligible for Job Card creation" picker. Just enough per row for that picker,
+// not the full Appointment shape - see JobCardsService.findEligibleForJobCardCreation's
+// own doc comment for exactly which appointments this includes.
+export interface EligibleAppointmentForJobCard {
+  id: string;
+  appointmentNumber: string;
+  customerName: string;
+  customerPhone: string;
+  status: string;
+  scheduledAt: string;
+}
+
 export interface ValidateSnInput {
   matches: boolean;
   notes?: string;

@@ -12,6 +12,7 @@ import type {
   AssignSectionInput,
   CancelJobCardInput,
   CreateJobCardInput,
+  EligibleAppointmentForJobCard,
   JobCard,
   JobCardTaskPause,
   PauseTaskInput,
@@ -23,6 +24,20 @@ import type {
 const BASE = '/job-cards';
 
 export const createJobCard = (data: CreateJobCardInput) => api.post<JobCard>(BASE, data).then((r) => r.data);
+
+// Job Cards page (requested 2026-09-17): "instead now user copy paste appointment number
+// for job creation" - lists exactly the appointments create() above would accept right
+// now, so the page can offer them directly rather than the user hunting one down first
+// (e.g. from the Schedule page's own "+ Create Job" pill). `q` narrows by appointment
+// number/customer name/phone; omitted or blank returns the full eligible pool, same as
+// leaving the search box empty on the Job Card Journey page's search - except here that
+// deliberately shows the whole list rather than nothing, since browsing IS the point.
+export const getEligibleAppointmentsForJobCard = (q?: string) => {
+  const trimmed = q?.trim();
+  return api
+    .get<EligibleAppointmentForJobCard[]>(`${BASE}/eligible-appointments`, { params: trimmed ? { q: trimmed } : {} })
+    .then((r) => r.data);
+};
 
 export const getJobCard = (id: string) => api.get<JobCard>(`${BASE}/${id}`).then((r) => r.data);
 

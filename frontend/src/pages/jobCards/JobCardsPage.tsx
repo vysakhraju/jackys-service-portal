@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -6,15 +6,14 @@ import type { AxiosError } from 'axios';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
 import { StatusBadge } from '../../components/StatusBadge';
-import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
-import { getAppointment, searchAppointments } from '../../lib/appointmentsApi';
-import type { Appointment } from '../../lib/appointmentsTypes';
+import { getAppointment } from '../../lib/appointmentsApi';
 import {
   approveCustomer,
   assignSection,
   cancelJobCard,
   createJobCard,
+  getEligibleAppointmentsForJobCard,
   getJobCardByAppointment,
   getTaskPauses,
   pauseTask,
@@ -23,6 +22,7 @@ import {
   warrantyOverride,
 } from '../../lib/jobCardsApi';
 import type {
+  EligibleAppointmentForJobCard,
   JobCard,
   JobCardSectionValue,
   JobCardLaneValue,
@@ -188,12 +188,102 @@ function JobCardProgressStepper({ jobCard }: { jobCard: Pick<JobCard, 'status' |
   );
 }
 
-function renderAppointmentOption(item: Appointment) {
+// --- Eligible-appointment picker ------------------------------------------------------
+// Modification request (2026-09-17): "provide type to search similar to that of Job Card
+// Journey, also list all appointments that fulfilled the criteria for job creation,
+// instead now user copy paste appointment number for job creation." Two gaps in the old
+// AsyncSearchPicker<Appointment>-based picker this replaces: (1) it searched EVERY
+// appointment (searchAppointments), not just ones create() would actually accept right
+// now; (2) AsyncSearchPicker never shows a result until the user types >= minChars - there
+// was no way to just browse what's eligible. This component fixes both: it always queries
+// GET /job-cards/eligible-appointments (backed by
+// JobCardsService.findEligibleForJobCardCreation, which mirrors create()'s own FR-05 +
+// TechnicianVisit/WorkshopIntake gates exactly), with the typed query as an optional
+// narrowing filter rather than a precondition for showing anything - a blank box shows the
+// full eligible pool, same list-then-narrow feel as Job Card Journey's search, but without
+// Journey's "blank query returns nothing" behavior, since browsing IS the point here.
+function EligibleAppointmentPicker({
+  onSelect,
+  selectedLabel,
+  onClear,
+}: {
+  onSelect: (item: EligibleAppointmentForJobCard) => void;
+  /** When set, shows this as the current selection instead of the search box + list. */
+  selectedLabel?: string | null;
+  onClear?: () => void;
+}) {
+  const [queryInput, setQueryInput] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(queryInput.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [queryInput]);
+
+  const eligibleQuery = useQuery({
+    queryKey: ['job-cards', 'eligible-appointments', debouncedQuery],
+    queryFn: () => getEligibleAppointmentsForJobCard(debouncedQuery || undefined),
+  });
+
+  if (selectedLabel != null) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className={`${inputClass} flex items-center`}>{selectedLabel}</span>
+        {onClear && (
+          <button type="button" className="text-xs text-slate-500 hover:text-slate-700 hover:underline" onClick={onClear}>
+            Change
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div>
-      <div className="font-medium text-slate-900">{item.appointmentNumber}</div>
-      <div className="text-xs text-slate-500">
-        {item.customerName} · {item.status.replace(/_/g, ' ')}
+    <div className="space-y-2">
+      <input
+        type="text"
+        className={inputClass}
+        value={queryInput}
+        onChange={(e) => setQueryInput(e.target.value)}
+        placeholder="Search by appointment #, customer name, or phone… (leave blank to see all)"
+        data-testid="eligible-appointment-search-input"
+      />
+      <div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white" data-testid="eligible-appointment-list">
+        {eligibleQuery.isLoading ? (
+          <p className="px-3 py-2 text-sm text-slate-400">Loading eligible appointments…</p>
+        ) : eligibleQuery.error ? (
+          <div className="p-3">
+            <ErrorNotice error={eligibleQuery.error} />
+          </div>
+        ) : eligibleQuery.data && eligibleQuery.data.length > 0 ? (
+          <ul className="divide-y divide-slate-100">
+            {eligibleQuery.data.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(item)}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                >
+                  <span>
+                    <span className="font-medium text-slate-900">{item.appointmentNumber}</span>
+                    <span className="ml-2 text-slate-500">
+                      {item.customerName} · {item.customerPhone}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs text-slate-400">
+                    {new Date(item.scheduledAt).toLocaleDateString()}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="px-3 py-2 text-sm text-slate-400">
+            {debouncedQuery
+              ? `No eligible appointments match "${debouncedQuery}".`
+              : 'No appointments are ready for Job Card creation right now.'}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -250,24 +340,22 @@ export function JobCardsPage() {
       <div>
         <h1 className="text-lg font-semibold text-slate-900">Job Cards</h1>
         <p className="mt-1 max-w-2xl text-sm text-slate-500">
-          There's no list here - the backend has no "list all Job Cards" endpoint, only
-          look-up by appointment. Enter the appointment's number (from the Schedule tab, or
-          the link on a completed appointment's detail view) to find or start its Job Card.
+          There's no "list all Job Cards" screen - the backend has no such endpoint, only
+          look-up by appointment. But the picker below already shows every appointment
+          that's ready for Job Card creation right now (invoice on file, plus S/N, warranty
+          check, fault, and symptom all captured) - pick one directly, or type an
+          appointment #, customer name, or phone to narrow it down.
         </p>
       </div>
 
-      <div className="max-w-sm">
+      <div className="max-w-md">
         <Field label="Appointment">
-          <AsyncSearchPicker<Appointment>
-            search={searchAppointments}
+          <EligibleAppointmentPicker
+            selectedLabel={selectedLabel}
             onSelect={(item) => {
-              setPickedLabel(item.appointmentNumber);
+              setPickedLabel(`${item.appointmentNumber} — ${item.customerName}`);
               setActiveAppointmentId(item.id);
             }}
-            renderOption={renderAppointmentOption}
-            getOptionLabel={(item) => `${item.appointmentNumber} — ${item.customerName}`}
-            placeholder="Search by appointment #, customer name, or phone…"
-            selectedLabel={selectedLabel}
             onClear={() => {
               setPickedLabel(null);
               setActiveAppointmentId('');

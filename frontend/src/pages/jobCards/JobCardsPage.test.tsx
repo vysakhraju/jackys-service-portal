@@ -2,18 +2,18 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { makeAppointment, makeJobCard } from '../../test/fixtures';
+import { makeAppointment, makeEligibleAppointmentForJobCard, makeJobCard } from '../../test/fixtures';
 
 vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/appointmentsApi', () => ({
   getAppointment: vi.fn(),
-  searchAppointments: vi.fn(),
 }));
 vi.mock('../../lib/jobCardsApi', () => ({
   approveCustomer: vi.fn(),
   assignSection: vi.fn(),
   cancelJobCard: vi.fn(),
   createJobCard: vi.fn(),
+  getEligibleAppointmentsForJobCard: vi.fn(),
   getJobCardByAppointment: vi.fn(),
   getTaskPauses: vi.fn(),
   pauseTask: vi.fn(),
@@ -23,8 +23,8 @@ vi.mock('../../lib/jobCardsApi', () => ({
 }));
 
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
-import { getAppointment, searchAppointments } from '../../lib/appointmentsApi';
-import { getJobCardByAppointment, getTaskPauses } from '../../lib/jobCardsApi';
+import { getAppointment } from '../../lib/appointmentsApi';
+import { getEligibleAppointmentsForJobCard, getJobCardByAppointment, getTaskPauses } from '../../lib/jobCardsApi';
 import { JobCardsPage } from './JobCardsPage';
 
 // 2026-09-14: canWarrantyOverride now gates on the real capability (useMyCapabilities)
@@ -55,69 +55,96 @@ function renderPage() {
 beforeEach(() => {
   mockCapabilities([]);
   vi.mocked(getAppointment).mockReset();
-  vi.mocked(searchAppointments).mockReset();
+  vi.mocked(getEligibleAppointmentsForJobCard).mockReset().mockResolvedValue([]);
   vi.mocked(getJobCardByAppointment).mockReset();
   vi.mocked(getTaskPauses).mockReset().mockResolvedValue([]);
 });
 
-// #218 pre-mortem follow-up (2026-09-14): the "paste the appointment's id" input is now an
-// AsyncSearchPicker backed by a real GET /appointments?q= search (searchAppointments()) -
-// narrows on partial input by appointment #, customer name, or phone, same as every other
-// #218 picker. It used to wrap an exact-by-number-only lookup (GET /appointments/number/:n),
-// which was the one picker in the whole conversion that didn't narrow on partial typing - a
-// pre-mortem flagged that inconsistency as likely to read as "the search is broken" to a
-// CCE used to every other picker suggesting-as-you-type; this endpoint change is the fix.
-describe('JobCardsPage - #218 name-based appointment picker', () => {
-  it('finds a matching appointment on partial input and loads its job card', async () => {
+// Modification request (2026-09-17): "provide type to search similar to that of Job Card
+// Journey, also list all appointments that fulfilled the criteria for job creation,
+// instead now user copy paste appointment number for job creation." Replaces the old
+// AsyncSearchPicker<Appointment> (which searched every appointment, and showed nothing
+// until 2+ chars were typed) with EligibleAppointmentPicker, backed by GET
+// /job-cards/eligible-appointments - it fetches on mount with no query (showing the whole
+// eligible pool) and re-fetches with the typed value as an optional narrowing filter.
+describe('JobCardsPage - eligible-appointment picker (2026-09-17)', () => {
+  it('shows every eligible appointment on load, with no query typed', async () => {
+    const eligible = makeEligibleAppointmentForJobCard();
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([eligible]);
+
+    renderPage();
+
+    expect(await screen.findByText('APT-0055')).toBeInTheDocument();
+    await waitFor(() => expect(getEligibleAppointmentsForJobCard).toHaveBeenCalledWith(undefined));
+  });
+
+  it('narrows the eligible list as the user types', async () => {
+    const eligible = makeEligibleAppointmentForJobCard();
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValueOnce([]).mockResolvedValueOnce([eligible]);
+
+    renderPage();
+    await waitFor(() => expect(getEligibleAppointmentsForJobCard).toHaveBeenCalledWith(undefined));
+
+    fireEvent.change(screen.getByTestId('eligible-appointment-search-input'), { target: { value: 'APT-005' } });
+
+    await waitFor(() => expect(getEligibleAppointmentsForJobCard).toHaveBeenCalledWith('APT-005'));
+    expect(await screen.findByText('APT-0055')).toBeInTheDocument();
+  });
+
+  it('selecting an eligible appointment loads its job card', async () => {
+    const eligible = makeEligibleAppointmentForJobCard({ customerName: 'Rashid Khan' });
     const appointment = makeAppointment({ id: 'appt-55', appointmentNumber: 'APT-0055', customerName: 'Rashid Khan' });
-    vi.mocked(searchAppointments).mockResolvedValue([appointment]);
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([eligible]);
     vi.mocked(getAppointment).mockResolvedValue(appointment);
     vi.mocked(getJobCardByAppointment).mockResolvedValue(makeJobCard({ appointmentId: 'appt-55' }));
 
     renderPage();
-
-    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
-    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-005' } });
     fireEvent.click(await screen.findByText('APT-0055'));
 
-    await waitFor(() => expect(searchAppointments).toHaveBeenCalledWith('APT-005'));
     await waitFor(() => expect(getJobCardByAppointment).toHaveBeenCalledWith('appt-55'));
     expect(await screen.findByText(/Rashid Khan/)).toBeInTheDocument();
+    // Selecting collapses the picker back to a "Change" summary, same as the old picker.
+    expect(screen.queryByTestId('eligible-appointment-search-input')).not.toBeInTheDocument();
   });
 
-  it('shows no matches when the search comes back empty', async () => {
-    vi.mocked(searchAppointments).mockResolvedValue([]);
+  it('shows a pool-wide empty message when nothing is eligible yet, distinct from a query-specific no-matches message', async () => {
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([]);
 
     renderPage();
 
-    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
-    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'zzz-no-such-thing' } });
-
-    expect(await screen.findByText('No matches.')).toBeInTheDocument();
+    expect(await screen.findByText('No appointments are ready for Job Card creation right now.')).toBeInTheDocument();
   });
 
-  it('shows the search-failed error state (not "No matches.") when the search request itself fails, e.g. a 500', async () => {
-    vi.mocked(searchAppointments).mockRejectedValue({ response: { status: 500 } });
+  it('shows a query-specific no-matches message when a typed search comes back empty', async () => {
+    const eligible = makeEligibleAppointmentForJobCard();
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValueOnce([eligible]).mockResolvedValueOnce([]);
+
+    renderPage();
+    await screen.findByText('APT-0055');
+
+    fireEvent.change(screen.getByTestId('eligible-appointment-search-input'), { target: { value: 'zzz-no-such-thing' } });
+
+    expect(await screen.findByText('No eligible appointments match "zzz-no-such-thing".')).toBeInTheDocument();
+  });
+
+  it('shows the request-failed error state, not a no-matches message, when the lookup itself fails', async () => {
+    vi.mocked(getEligibleAppointmentsForJobCard).mockRejectedValue({ response: { status: 500 }, message: 'Request failed' });
 
     renderPage();
 
-    fireEvent.focus(screen.getByTestId('async-search-picker-input'));
-    fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-0055' } });
-
-    expect(await screen.findByText('Search failed - try again.')).toBeInTheDocument();
-    expect(screen.queryByText('No matches.')).not.toBeInTheDocument();
+    expect(await screen.findByText('Request failed')).toBeInTheDocument();
+    expect(screen.queryByText('No appointments are ready for Job Card creation right now.')).not.toBeInTheDocument();
   });
 });
 
 async function loadJobCard(jobCard: ReturnType<typeof makeJobCard> = makeJobCard({ appointmentId: 'appt-55' })) {
+  const eligible = makeEligibleAppointmentForJobCard();
   const appointment = makeAppointment({ id: 'appt-55', appointmentNumber: 'APT-0055' });
-  vi.mocked(searchAppointments).mockResolvedValue([appointment]);
+  vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([eligible]);
   vi.mocked(getAppointment).mockResolvedValue(appointment);
   vi.mocked(getJobCardByAppointment).mockResolvedValue(jobCard);
 
   renderPage();
-  fireEvent.focus(screen.getByTestId('async-search-picker-input'));
-  fireEvent.change(screen.getByTestId('async-search-picker-input'), { target: { value: 'APT-0055' } });
   fireEvent.click(await screen.findByText('APT-0055'));
   await waitFor(() => expect(getJobCardByAppointment).toHaveBeenCalledWith('appt-55'));
 }

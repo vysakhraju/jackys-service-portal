@@ -9,11 +9,33 @@ vi.mock('./api', () => ({
 }));
 
 import { api } from './api';
-import { getTaskPauses, pauseTask, qcApprove, qcReject, resumeTask } from './jobCardsApi';
+import { getEligibleAppointmentsForJobCard, getTaskPauses, pauseTask, qcApprove, qcReject, resumeTask } from './jobCardsApi';
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
   vi.mocked(api.post).mockReset();
+});
+
+// Modification request (2026-09-17): backs the Job Cards page's eligible-appointment
+// picker - see JobCardsPage.tsx's EligibleAppointmentPicker.
+describe('jobCardsApi - eligible-appointments (2026-09-17)', () => {
+  it('gets /job-cards/eligible-appointments with no params when q is omitted', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await getEligibleAppointmentsForJobCard();
+    expect(api.get).toHaveBeenCalledWith('/job-cards/eligible-appointments', { params: {} });
+  });
+
+  it('gets /job-cards/eligible-appointments with no params when q is a blank string', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await getEligibleAppointmentsForJobCard('   ');
+    expect(api.get).toHaveBeenCalledWith('/job-cards/eligible-appointments', { params: {} });
+  });
+
+  it('gets /job-cards/eligible-appointments with q as a query param when provided', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await getEligibleAppointmentsForJobCard('APT-005');
+    expect(api.get).toHaveBeenCalledWith('/job-cards/eligible-appointments', { params: { q: 'APT-005' } });
+  });
 });
 
 describe('jobCardsApi - QC (Frontend Phase 7)', () => {

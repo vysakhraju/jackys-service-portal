@@ -6,6 +6,7 @@ import { JobCard } from './entities/job-card.entity';
 import { JobCardTaskPause } from './entities/job-card-task-pause.entity';
 import { JobCardCrewHelper } from './entities/job-card-crew-helper.entity';
 import { User } from '../auth/entities/user.entity';
+import { Appointment } from '../appointments/entities/appointment.entity';
 import { AppointmentsModule } from '../appointments/appointments.module';
 import { TechnicianModule } from '../technician/technician.module';
 import { AuthModule } from '../auth/auth.module';
@@ -19,7 +20,11 @@ import { WorkshopIntakeModule } from '../workshop-intake/workshop-intake.module'
     // directly here (rather than only through AuthModule) because
     // JobCardsService.addCrewHelper() injects the User repository itself to validate the
     // technician (existence + TECHNICIAN_WORKSHOP role) before writing the helper row.
-    TypeOrmModule.forFeature([JobCard, JobCardTaskPause, JobCardCrewHelper, User]),
+    // Appointment: JobCardsService.findEligibleForJobCardCreation() (2026-09-17) queries
+    // it directly for the Job Cards page's "eligible for job creation" picker - a filtered
+    // search across many rows, not a single lookup, so it doesn't fit AppointmentsModule's
+    // existing single-appointment-shaped methods.
+    TypeOrmModule.forFeature([JobCard, JobCardTaskPause, JobCardCrewHelper, User, Appointment]),
     AppointmentsModule,
     TechnicianModule,
     // Needed because JobCardsController's @UseInterceptors(AuditInterceptor) resolves

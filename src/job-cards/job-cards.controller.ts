@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards, UseInterceptors, ParseUUIDPipe, Request } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, UseInterceptors, ParseUUIDPipe, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { JobCardsService } from './job-cards.service';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
@@ -263,6 +263,19 @@ export class JobCardsController {
   @ApiResponse({ status: 200 })
   async getTaskPauses(@Param('id', ParseUUIDPipe) id: string) {
     return this.jobCardsService.getTaskPauses(id);
+  }
+
+  // Must stay ABOVE @Get(':id') below - that route's ParseUUIDPipe would otherwise 400
+  // on the literal path segment "eligible-appointments" before this handler ever ran
+  // (NestJS matches routes in declaration order; a bare `:id` matches any single segment).
+  @Get('eligible-appointments')
+  @RequiresCapability('JOB_CARD_MANAGE')
+  @ApiOperation({
+    summary: 'Appointments ready for Job Card creation right now (no Job Card yet, invoice + S/N/warranty/fault/symptom all captured)',
+  })
+  @ApiResponse({ status: 200 })
+  async findEligibleAppointments(@Query('q') q?: string) {
+    return this.jobCardsService.findEligibleForJobCardCreation(q);
   }
 
   @Get(':id')

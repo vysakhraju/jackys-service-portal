@@ -9,7 +9,7 @@ import { User } from '../auth/entities/user.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { getJobCardProgressFields, JobCardProgressFields } from './job-card-progress.util';
 import { AppointmentsService } from '../appointments/appointments.service';
-import { AppointmentStatus } from '../appointments/entities/appointment.entity';
+import { Appointment, AppointmentStatus } from '../appointments/entities/appointment.entity';
 import { TechnicianService } from '../technician/technician.service';
 import { WorkshopIntakeService } from '../workshop-intake/workshop-intake.service';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
@@ -45,6 +45,12 @@ export class JobCardsService {
     private crewHelperRepository: Repository<JobCardCrewHelper>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    // Job Cards page (2026-09-17): read-only listing for findEligibleForJobCardCreation()
+    // below, straight off the Appointment table rather than through AppointmentsService -
+    // this is a filtered SEARCH across many rows, not a single lookup, so it doesn't fit
+    // that service's existing single-appointment-shaped methods.
+    @InjectRepository(Appointment)
+    private appointmentRepository: Repository<Appointment>,
     private appointmentsService: AppointmentsService,
     private technicianService: TechnicianService,
     private workshopIntakeService: WorkshopIntakeService,
@@ -216,6 +222,91 @@ export class JobCardsService {
       where: { deliveryId: In(deliveryIds) },
       relations: { appointment: true },
     });
+  }
+
+  /**
+   * Job Cards page (requested 2026-09-17): "instead now user copy paste appointment
+   * number for job creation" - the page had a type-to-search box, but it searched EVERY
+   * appointment, so the user still had to already know (from the Schedule page's own
+   * "+ Create Job" pill, or by memory) which appointment number was actually ready. This
+   * lists exactly the appointments create() below would accept right now, so the picker
+   * can show them directly instead of the user hunting one down first.
+   *
+   * Mirrors create()'s own two gates exactly (kept in sync by hand - there's no shared
+   * "is this appointment ready" helper today since create() reads the full
+   * visit/intake record for its OTHER fields too, not just a yes/no):
+   *   1. No Job Card already exists for the appointment (LEFT JOIN ... IS NULL).
+   *   2. `invoiceNumber` is on file.
+   *   3. Its S/N + warranty + fault/symptom capture is complete - from `workshop_intakes`
+   *      for a COLLECTED_TO_WS appointment (Mark Received flow), or from
+   *      `technician_visits` for every other status (field visit flow) - via a raw EXISTS
+   *      subquery rather than TechnicianService/WorkshopIntakeService's own
+   *      single-appointment getters, so this stays one query regardless of how many
+   *      candidates there are, not one extra round-trip per row.
+   *
+   * `q` (optional) narrows by appointment number/customer name/phone, same ILIKE-escaped
+   * pattern as JobCardJourneyService.search() - but unlike that search, a blank/absent
+   * `q` deliberately does NOT short-circuit to an empty list: the whole point here is to
+   * browse the eligible pool, not just look up one you already know by name.
+   */
+  async findEligibleForJobCardCreation(q?: string): Promise<
+    Array<Pick<Appointment, 'id' | 'appointmentNumber' | 'customerName' | 'customerPhone' | 'status' | 'scheduledAt'>>
+  > {
+    const qb = this.appointmentRepository
+      .createQueryBuilder('apt')
+      .leftJoin('job_cards', 'jc', 'jc."appointmentId" = apt.id')
+      .where('jc.id IS NULL')
+      .andWhere('apt."invoiceNumber" IS NOT NULL')
+      .andWhere(
+        `(
+          (apt.status = :collectedStatus AND EXISTS (
+            SELECT 1 FROM workshop_intakes wi
+            WHERE wi."appointmentId" = apt.id
+              AND wi."serialNumber" IS NOT NULL
+              AND wi."warrantyStatus" IS NOT NULL
+              AND wi."faultCode" IS NOT NULL
+              AND wi."symptomCode" IS NOT NULL
+          ))
+          OR
+          (apt.status != :collectedStatus AND EXISTS (
+            SELECT 1 FROM technician_visits tv
+            WHERE tv."appointmentId" = apt.id
+              AND tv."serialNumber" IS NOT NULL
+              AND tv."warrantyStatus" IS NOT NULL
+              AND tv."faultCode" IS NOT NULL
+              AND tv."symptomCode" IS NOT NULL
+          ))
+        )`,
+        { collectedStatus: AppointmentStatus.COLLECTED_TO_WS },
+      );
+
+    const trimmed = q?.trim();
+    if (trimmed) {
+      // Same escaping as JobCardJourneyService.search() - see its own doc comment for why
+      // a literal '%'/'_'/'\' in the typed query must be escaped rather than left to act
+      // as an ILIKE wildcard.
+      const escaped = trimmed.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const like = `%${escaped}%`;
+      qb.andWhere(
+        `(apt."appointmentNumber" ILIKE :like ESCAPE '\\' OR apt."customerName" ILIKE :like ESCAPE '\\' OR apt."customerPhone" ILIKE :like ESCAPE '\\')`,
+        { like },
+      );
+    }
+
+    const rows = await qb
+      .select([
+        'apt.id',
+        'apt.appointmentNumber',
+        'apt.customerName',
+        'apt.customerPhone',
+        'apt.status',
+        'apt.scheduledAt',
+      ])
+      .orderBy('apt.scheduledAt', 'DESC')
+      .limit(30)
+      .getMany();
+
+    return rows;
   }
 
   /**
