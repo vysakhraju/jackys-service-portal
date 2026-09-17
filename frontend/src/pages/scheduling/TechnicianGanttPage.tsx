@@ -244,12 +244,33 @@ export function TechnicianGanttPage() {
       }
     },
     onSuccess: (_data, action) => {
+      // TEMP DIAGNOSTIC (2026-09-17, drag-reassign investigation) - remove once the FT2->FT1
+      // drop bug is confirmed fixed. Logs the SERVER'S OWN RESPONSE (_data), not just the
+      // outgoing action - found via this exact gap in an earlier version of this log: a
+      // prior test showed the mutation "succeeding" while a live-DB check right after showed
+      // the row's technicianId had NOT actually moved (root cause fixed server-side in
+      // appointments.service.ts - see its own doc comment). Logging what the server actually
+      // returned confirms the fix from the client's own vantage point, not just the DB.
+      // eslint-disable-next-line no-console
+      console.log('[DND-DEBUG] drop mutation succeeded - server returned', {
+        sentAction: action,
+        serverTechnicianId: (_data as any)?.technicianId,
+        serverScheduledAt: (_data as any)?.scheduledAt,
+        fullResponse: _data,
+      });
       const title =
         action.kind === 'appointment-assign' || action.kind === 'jobcard-assign' ? 'Technician assigned' : 'Reassigned';
       push({ title, description: action.label });
       invalidateBoard();
     },
     onError: (error: any) => {
+      // TEMP DIAGNOSTIC (2026-09-17, drag-reassign investigation) - see onSuccess above.
+      // eslint-disable-next-line no-console
+      console.error('[DND-DEBUG] drop mutation FAILED', {
+        status: error?.response?.status,
+        message: error?.response?.data?.message,
+        error,
+      });
       push({
         title: 'Could not complete the drop',
         description: error?.response?.data?.message ?? 'Something went wrong.',
@@ -264,7 +285,15 @@ export function TechnicianGanttPage() {
   });
 
   function handleRowDragEnter(e: DragEvent<HTMLDivElement>, targetRow: TechnicianScheduleRow) {
-    setDragOverInfo(evaluateDragOver(e, targetRow, date));
+    const info = evaluateDragOver(e, targetRow, date);
+    // Some browsers (notably Firefox) decide whether a row will accept a drop off the very
+    // first dragenter, not just the dragover events that follow - without this, a fast drag
+    // straight from a source row onto a NEW row could have its first dragenter ignored and
+    // the drop rejected even though every subsequent dragover on the same row is valid.
+    if (info.valid) {
+      e.preventDefault();
+    }
+    setDragOverInfo(info);
   }
 
   function handleRowDragOver(e: DragEvent<HTMLDivElement>, targetRow: TechnicianScheduleRow) {
@@ -293,6 +322,18 @@ export function TechnicianGanttPage() {
     setDragOverInfo(null);
     const appointmentRaw = e.dataTransfer.getData(APPOINTMENT_MIME);
     const jobCardRaw = e.dataTransfer.getData(JOBCARD_MIME);
+    // TEMP DIAGNOSTIC (2026-09-17, drag-reassign investigation) - fires on EVERY native drop
+    // that reaches this row, before any early return. If dragging FT2 -> FT1 never prints this
+    // line at all, the browser rejected the drop natively (dragover never called
+    // preventDefault) and the bug is in evaluateDragOver()/handleRowDragOver(), not in
+    // anything below this line.
+    // eslint-disable-next-line no-console
+    console.log('[DND-DEBUG] native drop event fired on row', {
+      targetTechnicianId: targetRow.technicianId,
+      targetRole: targetRow.role,
+      hasAppointmentMime: !!appointmentRaw,
+      hasJobCardMime: !!jobCardRaw,
+    });
     let payload: DragPayload;
     try {
       if (appointmentRaw) payload = JSON.parse(appointmentRaw);
@@ -304,6 +345,8 @@ export function TechnicianGanttPage() {
 
     if (payload.entityType === 'appointment') {
       if (targetRow.role !== 'TECHNICIAN_FIELD') {
+        // eslint-disable-next-line no-console
+        console.log('[DND-DEBUG] rejected: target row is not TECHNICIAN_FIELD', targetRow);
         push({
           title: 'Wrong technician type',
           description: `${payload.label} is a field appointment - drop it on a field technician's row.`,
@@ -312,11 +355,21 @@ export function TechnicianGanttPage() {
       }
       const rect = e.currentTarget.getBoundingClientRect();
       const scheduledAt = computeDropTime(date, e.clientX, rect);
-      dropMutation.mutate(
-        payload.currentTechnicianId
-          ? { kind: 'appointment-reassign', id: payload.id, technicianId: targetRow.technicianId, scheduledAt, label: payload.label }
-          : { kind: 'appointment-assign', id: payload.id, technicianId: targetRow.technicianId, scheduledAt, label: payload.label },
-      );
+      const action: DropAction = payload.currentTechnicianId
+        ? { kind: 'appointment-reassign', id: payload.id, technicianId: targetRow.technicianId, scheduledAt, label: payload.label }
+        : { kind: 'appointment-assign', id: payload.id, technicianId: targetRow.technicianId, scheduledAt, label: payload.label };
+      // TEMP DIAGNOSTIC (2026-09-17, drag-reassign investigation) - see dropMutation's
+      // onSuccess/onError for why. This log confirms the drop event fired and handleDrop
+      // decided to call the mutation at all, with exactly what it's about to send - if a
+      // failing drag never prints this line, the bug is upstream (dragover rejecting the
+      // drop before it ever reaches here), not in the update()/assignTechnician() call.
+      // eslint-disable-next-line no-console
+      console.log('[DND-DEBUG] handleDrop dispatching', {
+        fromTechnicianId: payload.currentTechnicianId,
+        toTechnicianId: targetRow.technicianId,
+        action,
+      });
+      dropMutation.mutate(action);
       return;
     }
 

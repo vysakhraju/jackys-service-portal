@@ -464,7 +464,51 @@ describe('AppointmentsService', () => {
       expect(appointmentRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ technicianId: 'tech-2' }),
       );
-      expect(result).toEqual(appointment({ technicianId: 'tech-2' }));
+      // Also carries the synced `technician` relation object now (see the stale-relation
+      // regression test above) - this is the fixed, correct shape, not an artifact.
+      expect(result).toEqual(
+        appointment({ technicianId: 'tech-2', technician: { id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } } } as any),
+      );
+    });
+
+    // Regression (Technician Assignment Board drag-and-drop reassign-to-a-different-tech
+    // bug report): update() is the drag-reassign path (assignTechnician() only handles the
+    // very first assignment, from the Unassigned panel). A drag that changes BOTH
+    // technicianId and scheduledAt together - the normal case, since the drop position on
+    // the timeline computes the new time - re-checks capacity (service-centre-wide) AND the
+    // new technician's own availability, but until now neither call excluded this
+    // appointment's own row. Its own row still has the OLD technicianId/scheduledAt at query
+    // time (not yet saved), so this exact appointment's row would only ever double-count
+    // itself if the drop time or target technician landed close enough to its own current
+    // slot to fall inside the checks' own +/-15-30 min windows - assignTechnician() already
+    // guarded against exactly this for the first-assign path; update() must too, for the
+    // reassign path drag-and-drop actually uses.
+    it("excludes the appointment's own id from both the capacity and technician-availability checks when dragging it to a new technician and time together", async () => {
+      appointmentRepository.findOne.mockResolvedValue(
+        appointment({ technicianId: 'tech-1', scheduledAt: new Date('2026-08-25T13:00:00Z') }),
+      );
+      userRepository.findOne.mockResolvedValue({ id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } });
+      serviceCentreRepository.findOne.mockResolvedValue(
+        serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 10 } }),
+      );
+      const capacityQb = buildQb({ getCount: 0 });
+      const availabilityQb = buildQb({ getCount: 0 });
+      appointmentRepository.createQueryBuilder
+        .mockReturnValueOnce(capacityQb) // checkCapacity
+        .mockReturnValueOnce(availabilityQb); // checkTechnicianAvailability
+
+      await service.update(
+        'apt-1',
+        { technicianId: 'tech-2', scheduledAt: '2026-08-25T13:15:00Z' } as any,
+        'user-1',
+      );
+
+      expect(capacityQb.andWhere).toHaveBeenCalledWith('apt.id != :excludeAppointmentId', {
+        excludeAppointmentId: 'apt-1',
+      });
+      expect(availabilityQb.andWhere).toHaveBeenCalledWith('apt.id != :excludeAppointmentId', {
+        excludeAppointmentId: 'apt-1',
+      });
     });
 
     // Technician Assignment Board drag-and-drop (2026-09-09, the-fool pre-mortem finding):
@@ -521,6 +565,35 @@ describe('AppointmentsService', () => {
       },
     );
 
+    // --- Technician Assignment Board drag-reassign silently not persisting (found
+    // 2026-09-17 via live [DND-DEBUG] logging + a live-DB check: the drop reported success,
+    // but the row's technicianId in Postgres never moved off the OLD technician) ------------
+    //
+    // Appointment declares BOTH `@ManyToOne() @JoinColumn({name:'technicianId'}) technician:
+    // User` and a separate `@Column() technicianId: string` mapped to that same physical
+    // column. findById() (which loads the `appointment` this method mutates) eager-loads
+    // `technician`, so on a real TypeORM save() the still-attached, never-updated relation
+    // object wins and its `.id` gets written back to the join column - silently reverting
+    // the scalar `technicianId` change `update()` just made. This mock-based suite can't
+    // reproduce TypeORM's own column-vs-relation precedence directly (jest's `save` mock
+    // just echoes back whatever object it's called with), so the regression this test
+    // actually guards is one level up: that `update()` keeps `appointment.technician` and
+    // `appointment.technicianId` in lock-step whenever it changes the technician, so no
+    // stale relation object is ever left on the entity handed to `save()` for TypeORM to
+    // resolve inconsistently.
+    it('syncs the technician relation object (not just the technicianId scalar) when reassigning to a different technician', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ technicianId: 'tech-1' }));
+      const newTechnician = { id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } };
+      userRepository.findOne.mockResolvedValue(newTechnician);
+      appointmentRepository.createQueryBuilder.mockReturnValueOnce(buildQb({ getCount: 0 }));
+
+      await service.update('apt-1', { technicianId: 'tech-2' } as any, 'user-1');
+
+      const saved = appointmentRepository.save.mock.calls[0][0];
+      expect(saved.technicianId).toBe('tech-2');
+      expect(saved.technician).toEqual(newTechnician);
+    });
+
     // --- Mobile Phase 5 reassignment guardrail (the-fool pre-mortem finding) -----------
 
     it('blocks reassignment with ConflictException when the outgoing technician holds an open reservation on the linked Job Card', async () => {
@@ -546,7 +619,11 @@ describe('AppointmentsService', () => {
 
       const result = await service.update('apt-1', { technicianId: 'tech-2' } as any, 'user-1');
 
-      expect(result).toEqual(appointment({ technicianId: 'tech-2' }));
+      // Also carries the synced `technician` relation object now (see the stale-relation
+      // regression test above) - this is the fixed, correct shape, not an artifact.
+      expect(result).toEqual(
+        appointment({ technicianId: 'tech-2', technician: { id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } } } as any),
+      );
     });
 
     it('skips the guardrail entirely when the appointment has no Job Card yet', async () => {
@@ -666,6 +743,24 @@ describe('AppointmentsService', () => {
       expect(appointmentRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ technicianId: 'tech-1', status: AppointmentStatus.TECHNICIAN_ASSIGNED }),
       );
+    });
+
+    // Same TypeORM relation/scalar desync bug as update()'s own regression test above (see
+    // its doc comment) - this is the Technician Assignment Board's drag-ASSIGN path rather
+    // than drag-REASSIGN, but findById() eager-loads `technician` here too, so re-assigning
+    // an appointment that already has a DIFFERENT technician hits the exact same stale-
+    // relation-object risk on save().
+    it('syncs the technician relation object (not just the technicianId scalar) when reassigning from a different technician', async () => {
+      appointmentRepository.findOne.mockResolvedValue(appointment({ technicianId: 'tech-1' }));
+      const newTechnician = { id: 'tech-2', role: { name: 'TECHNICIAN_FIELD' } };
+      userRepository.findOne.mockResolvedValue(newTechnician);
+      appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+
+      await service.assignTechnician('apt-1', 'tech-2', 'user-1');
+
+      const saved = appointmentRepository.save.mock.calls[0][0];
+      expect(saved.technicianId).toBe('tech-2');
+      expect(saved.technician).toEqual(newTechnician);
     });
 
     it('throws BadRequestException for an appointment status that cannot take assignment', async () => {
@@ -818,6 +913,28 @@ describe('AppointmentsService', () => {
 
       expect(result.available).toBe(false);
       expect(result.message).toContain('at capacity');
+    });
+
+    it('adds an id-exclusion clause to the query when excludeAppointmentId is passed', async () => {
+      serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({}));
+      const qb = buildQb({ getCount: 0 });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.checkCapacity('sc-1', new Date('2026-08-25T09:00:00Z'), 60, 'apt-1');
+
+      expect(qb.andWhere).toHaveBeenCalledWith('apt.id != :excludeAppointmentId', {
+        excludeAppointmentId: 'apt-1',
+      });
+    });
+
+    it('does not add the id-exclusion clause when excludeAppointmentId is omitted', async () => {
+      serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({}));
+      const qb = buildQb({ getCount: 0 });
+      appointmentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.checkCapacity('sc-1', new Date('2026-08-25T09:00:00Z'));
+
+      expect(qb.andWhere).not.toHaveBeenCalledWith('apt.id != :excludeAppointmentId', expect.anything());
     });
   });
 

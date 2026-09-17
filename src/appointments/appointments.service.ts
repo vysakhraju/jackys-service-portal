@@ -451,7 +451,7 @@ export class AppointmentsService {
       const duration = updateAppointmentDto.estimatedDurationMinutes || appointment.estimatedDurationMinutes || 60;
       const scId = updateAppointmentDto.serviceCentreId || appointment.serviceCentreId;
 
-      const capacityCheck = await this.checkCapacity(scId, newDate, duration);
+      const capacityCheck = await this.checkCapacity(scId, newDate, duration, id);
       if (!capacityCheck.available) {
         throw new ConflictException(capacityCheck.message || 'Service centre at capacity for new time slot');
       }
@@ -492,10 +492,35 @@ export class AppointmentsService {
       }
       const newDate = updateAppointmentDto.scheduledAt ? new Date(updateAppointmentDto.scheduledAt) : appointment.scheduledAt;
       const duration = updateAppointmentDto.estimatedDurationMinutes || appointment.estimatedDurationMinutes || 60;
-      const techAvailable = await this.checkTechnicianAvailability(updateAppointmentDto.technicianId, newDate, duration);
+      // Exclude this appointment's own row from the conflict count - see checkTechnicianAvailability()'s
+      // own doc comment. assignTechnician() already passed this; update() was missing it, which meant a
+      // drag-reassign that lands this appointment back near a time window its own (not-yet-saved) row
+      // still occupies could spuriously self-conflict.
+      const techAvailable = await this.checkTechnicianAvailability(updateAppointmentDto.technicianId, newDate, duration, id);
       if (!techAvailable) {
         throw new ConflictException('Technician not available at this time');
       }
+
+      // Root cause of the Technician Assignment Board's "drag to a different technician
+      // silently doesn't move it" bug (found 2026-09-17 via [DND-DEBUG] console logging +
+      // a live-DB check after a drag reported success but the row's technicianId hadn't
+      // moved): `appointment` was loaded by findById() with its `technician` relation
+      // EAGERLY JOINED (still holding the OLD technician's full User row). Object.assign()
+      // below only overwrites the plain `technicianId` scalar column - it never touches
+      // this now-stale `technician` relation object still sitting on the entity. Appointment
+      // has both `@ManyToOne() @JoinColumn({name:'technicianId'}) technician: User` AND a
+      // separate `@Column() technicianId: string` mapped to that SAME physical column - a
+      // known TypeORM footgun: on save(), the loaded relation object wins and its `.id` gets
+      // written back to the join column, silently reverting the scalar change you just made.
+      // The reassignment therefore looked like it worked (200 OK, no thrown error, `update()`
+      // returns fine) while the database quietly kept the appointment on its original
+      // technician - exactly "works dropped on the same technician, not on a different one",
+      // since a same-technician drag never enters this block and never disturbs the relation
+      // at all. Fix: keep the relation object in lock-step with the scalar whenever this
+      // block actually changes it, using the very same `technician` entity already fetched
+      // and validated two lines up - not a second query.
+      appointment.technician = technician;
+      appointment.technicianId = technician.id;
     }
 
     Object.assign(appointment, updateAppointmentDto);
@@ -600,7 +625,7 @@ export class AppointmentsService {
     const duration = appointment.estimatedDurationMinutes || 60;
 
     if (scheduledAt) {
-      const capacityCheck = await this.checkCapacity(appointment.serviceCentreId, effectiveScheduledAt, duration);
+      const capacityCheck = await this.checkCapacity(appointment.serviceCentreId, effectiveScheduledAt, duration, id);
       if (!capacityCheck.available) {
         throw new ConflictException(capacityCheck.message || 'Service centre at capacity for new time slot');
       }
@@ -612,6 +637,14 @@ export class AppointmentsService {
     }
 
     const oldValues = { technicianId: appointment.technicianId, status: appointment.status, scheduledAt: appointment.scheduledAt };
+    // Same relation/scalar desync fix as update() above - see its doc comment for the full
+    // TypeORM explanation. findById() eager-loads the `technician` relation; on a REASSIGN
+    // (appointment.technician already held the previous technician's full User row) that
+    // stale relation object would win on save() and silently write the OLD technicianId
+    // back to the join column even though this line correctly set the new one. Keeping both
+    // in sync here means this method's own reassignment path (drag-assign to a technician
+    // who already had a DIFFERENT technician on this appointment) actually persists.
+    appointment.technician = technician;
     appointment.technicianId = technicianId;
     appointment.status = AppointmentStatus.TECHNICIAN_ASSIGNED;
     if (scheduledAt) {
@@ -636,6 +669,7 @@ export class AppointmentsService {
     serviceCentreId: string,
     scheduledAt: Date,
     durationMinutes: number = 60,
+    excludeAppointmentId?: string,
   ): Promise<CapacityCheckResult> {
     const serviceCentre = await this.serviceCentreRepository.findOne({
       where: { id: serviceCentreId },
@@ -651,14 +685,24 @@ export class AppointmentsService {
     const end = new Date(scheduledAt);
     end.setMinutes(end.getMinutes() + durationMinutes + 30); // duration + 30 min buffer after
 
-    const currentBookings = await this.appointmentRepository
+    const query = this.appointmentRepository
       .createQueryBuilder('apt')
       .where('apt.serviceCentreId = :serviceCentreId', { serviceCentreId })
       .andWhere('apt.status IN (:...statuses)', {
         statuses: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED],
       })
-      .andWhere('apt.scheduledAt BETWEEN :start AND :end', { start, end })
-      .getCount();
+      .andWhere('apt.scheduledAt BETWEEN :start AND :end', { start, end });
+
+    // Reassigning/rescheduling an appointment that's already sitting in this exact window
+    // (e.g. the Technician Assignment Board's drag-and-drop dropping it back near its own
+    // current time) would otherwise count itself as one of the "current bookings" it's
+    // being checked against - the same self-conflict checkTechnicianAvailability() below
+    // already guards against via this same parameter. Exclude it explicitly.
+    if (excludeAppointmentId) {
+      query.andWhere('apt.id != :excludeAppointmentId', { excludeAppointmentId });
+    }
+
+    const currentBookings = await query.getCount();
 
     // Capacity is defined per weekday in ServiceCentre.schedule (jsonb); fall back to 10/day if unset.
     const dayKey = new Date(scheduledAt)
