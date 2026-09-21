@@ -267,6 +267,38 @@ describe('MasterDataService', () => {
       faultSymptomRepository.findOne.mockResolvedValue(null);
       await expect(service.findSymptomByCode('NOPE')).rejects.toThrow(NotFoundException);
     });
+
+    it('finds a fault/symptom by id', async () => {
+      faultSymptomRepository.findOne.mockResolvedValue({ id: '1', faultCode: 'F1' });
+      const result = await service.findFaultSymptomById('1');
+      expect(result).toEqual({ id: '1', faultCode: 'F1' });
+    });
+
+    it('throws NotFoundException when updating/deleting an unknown fault/symptom id', async () => {
+      faultSymptomRepository.findOne.mockResolvedValue(null);
+      await expect(service.findFaultSymptomById('nope')).rejects.toThrow(NotFoundException);
+      await expect(service.updateFaultSymptom('nope', { faultDescription: 'x' })).rejects.toThrow(NotFoundException);
+      await expect(service.deleteFaultSymptom('nope')).rejects.toThrow(NotFoundException);
+    });
+
+    it('updates a fault/symptom by id and returns the refreshed row', async () => {
+      faultSymptomRepository.findOne
+        .mockResolvedValueOnce({ id: '1', faultDescription: 'Old' })
+        .mockResolvedValueOnce({ id: '1', faultDescription: 'New' });
+
+      const result = await service.updateFaultSymptom('1', { faultDescription: 'New' });
+
+      expect(faultSymptomRepository.update).toHaveBeenCalledWith('1', { faultDescription: 'New' });
+      expect(result).toEqual({ id: '1', faultDescription: 'New' });
+    });
+
+    it('soft-deletes (deactivates) a fault/symptom rather than removing the row', async () => {
+      faultSymptomRepository.findOne.mockResolvedValue({ id: '1', faultCode: 'F1' });
+
+      await service.deleteFaultSymptom('1');
+
+      expect(faultSymptomRepository.update).toHaveBeenCalledWith('1', { isActive: false });
+    });
   });
 
   describe('Spare Parts', () => {

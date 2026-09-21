@@ -43,11 +43,23 @@ export const updateServiceCentre = (id: string, data: Partial<CreateServiceCentr
 export const deleteServiceCentre = (id: string) =>
   api.delete(`${BASE}/service-centres/${id}`).then((r) => r.data);
 
-// === Fault & Symptoms (create + list; no update/delete in the backend) ===
+// === Fault & Symptoms (full CRUD, #301 follow-up + bulk CSV import) ===
 export const listFaultSymptoms = (category?: string) =>
   api.get<FaultSymptom[]>(`${BASE}/fault-symptoms`, { params: category ? { category } : {} }).then((r) => r.data);
 export const createFaultSymptom = (data: CreateFaultSymptomInput) =>
   api.post<FaultSymptom>(`${BASE}/fault-symptoms`, data).then((r) => r.data);
+export const updateFaultSymptom = (id: string, data: Partial<CreateFaultSymptomInput>) =>
+  api.put<FaultSymptom>(`${BASE}/fault-symptoms/${id}`, data).then((r) => r.data);
+export const deleteFaultSymptom = (id: string) =>
+  api.delete(`${BASE}/fault-symptoms/${id}`).then((r) => r.data);
+
+// Generic bulk-import route (POST /master-data/bulk-import/:entityType) - backend accepts
+// an already-parsed array of row objects for any master type; this wrapper is scoped to
+// fault-symptom rows since that's the only screen with an import UI so far.
+export const bulkImportFaultSymptoms = (rows: Partial<CreateFaultSymptomInput>[]) =>
+  api
+    .post<{ success: number; errors: string[] }>(`${BASE}/bulk-import/fault-symptom`, rows)
+    .then((r) => r.data);
 
 // === Spare Parts (create + list/filter + link-to-model; no update/delete) ===
 export const listSpareParts = (filters: { category?: string; brand?: string; active?: boolean }) =>

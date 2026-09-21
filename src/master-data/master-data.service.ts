@@ -166,6 +166,30 @@ export class MasterDataService {
     return fault;
   }
 
+  async findFaultSymptomById(id: string): Promise<FaultSymptom> {
+    const fault = await this.faultSymptomRepository.findOne({ where: { id } });
+    if (!fault) {
+      throw new NotFoundException(`Fault/symptom not found`);
+    }
+    return fault;
+  }
+
+  // #301 follow-up: this master previously had no edit path at all - a typo needed a
+  // direct DB fix. Same shape as City/Cancellation Reason/Appliance Model's update above:
+  // partial update by id, re-fetch to return the current row. faultCode stays the real
+  // unique key (unenforced here, same as the rest of this file - a duplicate on update
+  // surfaces as the DB's own unique-index error, not a pre-check).
+  async updateFaultSymptom(id: string, data: Partial<FaultSymptom>): Promise<FaultSymptom> {
+    await this.findFaultSymptomById(id);
+    await this.faultSymptomRepository.update(id, data);
+    return this.findFaultSymptomById(id);
+  }
+
+  async deleteFaultSymptom(id: string): Promise<void> {
+    await this.findFaultSymptomById(id);
+    await this.faultSymptomRepository.update(id, { isActive: false });
+  }
+
   // Spare Parts
   async createSparePart(data: Partial<SparePart>): Promise<SparePart> {
     const existing = await this.sparePartRepository.findOne({ where: { code: data.code } });

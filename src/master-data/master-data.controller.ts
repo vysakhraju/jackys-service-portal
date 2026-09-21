@@ -13,7 +13,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { MasterDataService } from './master-data.service';
 import { CreateServiceCentreDto, UpdateServiceCentreDto } from './dto/create-service-centre.dto';
-import { CreateFaultSymptomDto } from './dto/create-fault-symptom.dto';
+import { CreateFaultSymptomDto, UpdateFaultSymptomDto } from './dto/create-fault-symptom.dto';
 import { CreateSparePartDto } from './dto/create-spare-part.dto';
 import { CreateSparePartModelDto } from './dto/create-spare-part-model.dto';
 import { LinkSparePartModelDto } from './dto/link-spare-part-model.dto';
@@ -172,6 +172,29 @@ export class MasterDataController {
   @ApiResponse({ status: 200, type: FaultSymptom })
   findSymptomByCode(@Param('symptomCode') symptomCode: string) {
     return this.masterDataService.findSymptomByCode(symptomCode);
+  }
+
+  // #301 follow-up: previously create+list only - a typo needed a direct DB fix and
+  // there was no way to retire a row at all. Same MANAGE/SUPER_ADMIN split as City/
+  // Cancellation Reason/Appliance Model above: full edit via MANAGE, soft-delete
+  // hardcoded to Super Admin (deactivate is the same operation via PUT with
+  // isActive:false, for anyone holding MASTER_DATA_FAULT_SYMPTOM_MANAGE).
+  @Put('fault-symptoms/:id')
+  @RequiresCapability('MASTER_DATA_FAULT_SYMPTOM_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.UPDATE, entityType: 'FaultSymptom', getEntityId: (args) => args.params?.id })
+  @ApiOperation({ summary: 'Update a fault/symptom (also used to reactivate one)' })
+  @ApiBody({ type: UpdateFaultSymptomDto })
+  @ApiResponse({ status: 200, type: FaultSymptom })
+  updateFaultSymptom(@Param('id') id: string, @Body() data: UpdateFaultSymptomDto) {
+    return this.masterDataService.updateFaultSymptom(id, data);
+  }
+
+  @Delete('fault-symptoms/:id')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Delete a fault/symptom (soft)' })
+  deleteFaultSymptom(@Param('id') id: string) {
+    return this.masterDataService.deleteFaultSymptom(id);
   }
 
   // === Spare Parts ===

@@ -1,4 +1,4 @@
-﻿import { ApiProperty } from '@nestjs/swagger';
+﻿import { ApiProperty, PartialType } from '@nestjs/swagger';
 import { IsString, IsEnum, IsOptional, IsBoolean, IsInt, Min, MaxLength } from 'class-validator';
 import { ApplianceCategory } from '../entities/fault-symptom.entity';
 
@@ -45,3 +45,5 @@ export class CreateFaultSymptomDto {
   @IsBoolean()
   isActive?: boolean;
 }
+
+export class UpdateFaultSymptomDto extends PartialType(CreateFaultSymptomDto) {}
