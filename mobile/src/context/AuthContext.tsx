@@ -1,4 +1,4 @@
-// Mirrors the web app's src/lib/auth.tsx AuthProvider/useAuth shape exactly, so anyone
+﻿// Mirrors the web app's src/lib/auth.tsx AuthProvider/useAuth shape exactly, so anyone
 // who has worked on the web app already knows this file. The one real difference:
 // session expiry here is driven by api.ts's onSessionExpired callback (registered
 // below) rather than a raw window.location.href redirect, since expo-router's
@@ -30,16 +30,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const token = await getAccessToken();
-      if (!token) {
-        if (!cancelled) setIsLoading(false);
-        return;
-      }
       try {
+        const token = await getAccessToken();
+        if (!token) {
+          return;
+        }
         const response = await api.get<User>('/auth/profile');
         if (!cancelled) setUser(response.data);
       } catch {
-        await clearTokens();
+        await clearTokens().catch(() => undefined);
         if (!cancelled) setUser(null);
       } finally {
         if (!cancelled) setIsLoading(false);
