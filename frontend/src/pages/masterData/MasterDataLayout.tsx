@@ -13,6 +13,9 @@ const MASTER_DATA_CAPABILITIES = [
   'MASTER_DATA_VIEW',
   'MASTER_DATA_SERVICE_CENTRE_CREATE',
   'MASTER_DATA_SERVICE_CENTRE_UPDATE',
+  'MASTER_DATA_CITY_MANAGE',
+  'MASTER_DATA_CANCELLATION_REASON_MANAGE',
+  'MASTER_DATA_APPLIANCE_MODEL_MANAGE',
   'MASTER_DATA_FAULT_SYMPTOM_MANAGE',
   'MASTER_DATA_SPARE_PARTS_MANAGE',
   'MASTER_DATA_PRICE_LIST_MANAGE',
@@ -25,6 +28,9 @@ const MASTER_DATA_CAPABILITIES = [
 
 const TABS: { label: string; path: string }[] = [
   { label: 'Service Centres', path: '/master-data/service-centres' },
+  { label: 'Cities', path: '/master-data/cities' },
+  { label: 'Cancellation Reasons', path: '/master-data/cancellation-reasons' },
+  { label: 'Appliance Models', path: '/master-data/appliance-models' },
   { label: 'Fault & Symptoms', path: '/master-data/fault-symptoms' },
   { label: 'Spare Parts', path: '/master-data/spare-parts' },
   { label: 'Spare Part Models', path: '/master-data/spare-part-models' },

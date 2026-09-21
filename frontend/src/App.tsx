@@ -11,6 +11,9 @@ import { MasterDataLayout } from './pages/masterData/MasterDataLayout';
 import { MasterDataHome } from './pages/masterData/MasterDataHome';
 import { ServiceCentresPage } from './pages/masterData/ServiceCentresPage';
 import { FaultSymptomsPage } from './pages/masterData/FaultSymptomsPage';
+import { CitiesPage } from './pages/masterData/CitiesPage';
+import { CancellationReasonsPage } from './pages/masterData/CancellationReasonsPage';
+import { ApplianceModelsPage } from './pages/masterData/ApplianceModelsPage';
 import { SparePartsPage } from './pages/masterData/SparePartsPage';
 import { SparePartModelsPage } from './pages/masterData/SparePartModelsPage';
 import { PriceListsPage } from './pages/masterData/PriceListsPage';
@@ -96,6 +99,9 @@ export function App() {
                 <Route path="/master-data" element={<MasterDataLayout />}>
                   <Route index element={<MasterDataHome />} />
                   <Route path="service-centres" element={<ServiceCentresPage />} />
+                  <Route path="cities" element={<CitiesPage />} />
+                  <Route path="cancellation-reasons" element={<CancellationReasonsPage />} />
+                  <Route path="appliance-models" element={<ApplianceModelsPage />} />
                   <Route path="fault-symptoms" element={<FaultSymptomsPage />} />
                   <Route path="spare-parts" element={<SparePartsPage />} />
                   <Route path="spare-part-models" element={<SparePartModelsPage />} />
