@@ -43,6 +43,7 @@ import {
   type CreateAppointmentInput,
 } from '../../lib/appointmentsTypes';
 import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
+import { getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 
@@ -255,6 +256,21 @@ export function SchedulePage() {
     // Query only swaps in new data once it lands, so an open modal isn't disturbed by it.
     refetchInterval: 20000,
   });
+
+  // "+ Create Job" pill (req.txt Issue F, widened 2026-09-21 to also cover on-site jobs):
+  // reuses JobCardsService.findEligibleForJobCardCreation() via the same endpoint the
+  // JobCardsPage picker already calls, rather than re-deriving the eligibility rule
+  // (invoice on file + S/N/warranty/fault/symptom captured, from workshop_intakes for a
+  // COLLECTED_TO_WS row or technician_visits for every other status) client-side. Blank
+  // query = full eligible pool (capped at 30 by that endpoint, same cap the JobCardsPage
+  // picker already lives with). Same 20s poll as the main list so the pill and the list
+  // never disagree for long.
+  const { data: eligibleForJobCard } = useQuery({
+    queryKey: ['job-cards', 'eligible-appointments'],
+    queryFn: () => getEligibleAppointmentsForJobCard(),
+    refetchInterval: 20000,
+  });
+  const eligibleAppointmentIds = new Set((eligibleForJobCard ?? []).map((a) => a.id));
 
   const [createOpen, setCreateOpen] = useState(false);
   // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 2b) - the same popup
@@ -801,9 +817,17 @@ export function SchedulePage() {
                   Mark Received →
                 </button>
               )}
-              {/* req.txt Issue F - a workshop-intake row (Marked Received or Pending Job
-                  Creation) with no Job Card yet gets a visual cue and a direct shortcut into
-                  Job Cards, rather than relying on the CCE to remember it's still pending.
+              {/* req.txt Issue F - a row that's actually ready for Job Card creation (per
+                  JobCardsService.findEligibleForJobCardCreation(), fetched into
+                  eligibleAppointmentIds above) with no Job Card yet gets a visual cue and a
+                  direct shortcut into Job Cards, rather than relying on the CCE to remember
+                  it's still pending. Widened 2026-09-21: originally gated on
+                  effectiveStatus MARKED_RECEIVED/PENDING_JOB_CREATION only (workshop-intake
+                  sub-stages), which meant an on-site job with a fully captured field visit
+                  never got the pill even though create() would already accept it. Now gated
+                  on the same eligible-set the backend itself would honor, so both the
+                  workshop (Collected to WS -> Marked Received -> Pending Job Creation) and
+                  on-site (field visit S/N/warranty/fault-symptom captured) paths show it.
                   Links into the exact same screen WorkshopIntakeModal's own Step 4 hands off
                   to (JobCardsPage reads ?appointmentId=, looks the appointment up, and shows
                   a single "Create Job Card" button once intake is complete - see that page's
@@ -813,10 +837,10 @@ export function SchedulePage() {
                   appointment server-side), so that page already IS the pre-filled form.
                   No separate "Job Created" badge state needed either: once the Job Card is
                   created the backend auto-completes the appointment (completeFromJobCardCreation),
-                  row.jobCard becomes non-null, and effectiveStatus moves off MARKED_RECEIVED/
-                  PENDING_JOB_CREATION - so this pill simply stops rendering on the next
-                  refetch (the spec's "...or hide it" option). */}
-              {(row.effectiveStatus === 'MARKED_RECEIVED' || row.effectiveStatus === 'PENDING_JOB_CREATION') && !row.jobCard && (
+                  row.jobCard becomes non-null and the row drops out of the eligible set on
+                  the next refetch - so this pill simply stops rendering (the spec's "...or
+                  hide it" option). */}
+              {eligibleAppointmentIds.has(row.id) && !row.jobCard && (
                 <Link
                   to={`/job-cards?appointmentId=${row.id}`}
                   className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"

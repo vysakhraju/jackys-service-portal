@@ -30,6 +30,12 @@ vi.mock('../../lib/masterDataApi', () => ({
   listCities: vi.fn(),
   listApplianceModels: vi.fn(),
 }));
+// req.txt Issue F "+ Create Job" pill (widened 2026-09-21) - now backed by the same
+// eligible-appointments endpoint JobCardsPage's picker already calls, instead of
+// effectiveStatus alone.
+vi.mock('../../lib/jobCardsApi', () => ({
+  getEligibleAppointmentsForJobCard: vi.fn(),
+}));
 vi.mock('../../lib/technicianScheduleApi', () => ({
   getGanttBoard: vi.fn(),
 }));
@@ -56,6 +62,7 @@ import {
   updateAppointment,
 } from '../../lib/appointmentsApi';
 import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
+import { getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { getWorkshopIntake } from '../../lib/workshopIntakeApi';
 import { SchedulePage } from './SchedulePage';
@@ -131,6 +138,7 @@ beforeEach(() => {
   vi.mocked(listServiceCentres).mockReset().mockResolvedValue([{ id: 'sc-1', name: 'Dubai Service Centre' }] as any);
   vi.mocked(listCities).mockReset().mockResolvedValue([{ id: 'city-1', name: 'Dubai' }] as any);
   vi.mocked(listApplianceModels).mockReset().mockResolvedValue([{ id: 'model-1', brand: 'Samsung', model: 'WA80J5710' }] as any);
+  vi.mocked(getEligibleAppointmentsForJobCard).mockReset().mockResolvedValue([]);
   vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
     date: '2026-09-09',
     rows: [],
@@ -1065,9 +1073,12 @@ describe('SchedulePage - req.txt Issue E: date quick-nav buttons', () => {
   });
 });
 
-// req.txt Issue F - a workshop-intake row (Marked Received or Pending Job Creation) with no
-// Job Card yet gets a "+ Create Job" pill linking straight into Job Cards, pre-filled via
-// ?appointmentId=; it disappears once a Job Card exists or for any unrelated status.
+// req.txt Issue F - a row JobCardsService.findEligibleForJobCardCreation() would accept
+// (fetched via getEligibleAppointmentsForJobCard, same endpoint JobCardsPage's own picker
+// uses) with no Job Card yet gets a "+ Create Job" pill linking straight into Job Cards,
+// pre-filled via ?appointmentId=; it disappears once a Job Card exists or the row isn't in
+// the eligible set. Widened 2026-09-21 from an effectiveStatus-only check (workshop sub-
+// stages only) to the shared eligible-set check, so on-site jobs get the pill too.
 describe('SchedulePage - req.txt Issue F: "+ Create Job" pill', () => {
   it('shows the pill for a Marked Received row with no Job Card yet, linking to Job Cards pre-filled with the appointment', async () => {
     vi.mocked(listAppointments).mockResolvedValue({
@@ -1084,6 +1095,9 @@ describe('SchedulePage - req.txt Issue F: "+ Create Job" pill', () => {
       page: 1,
       limit: 20,
     });
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([
+      { id: 'appt-mr-1', appointmentNumber: 'APT-0400', customerName: 'Ali', customerPhone: '0500000000', status: 'COLLECTED_TO_WS', scheduledAt: '2026-09-17T09:00:00Z' },
+    ] as any);
     renderPage();
 
     const row = (await screen.findByText('APT-0400')).closest('tr')!;
@@ -1106,13 +1120,46 @@ describe('SchedulePage - req.txt Issue F: "+ Create Job" pill', () => {
       page: 1,
       limit: 20,
     });
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([
+      { id: 'appt-pjc-1', appointmentNumber: 'APT-0401', customerName: 'Ali', customerPhone: '0500000000', status: 'COLLECTED_TO_WS', scheduledAt: '2026-09-17T09:00:00Z' },
+    ] as any);
     renderPage();
 
     const row = (await screen.findByText('APT-0401')).closest('tr')!;
     expect(within(row).getByRole('link', { name: '+ Create Job' })).toBeInTheDocument();
   });
 
-  it('hides the pill once a Job Card already exists, even if effectiveStatus is still a pending sub-stage', async () => {
+  it('shows the pill for an on-site row too, once its field visit is fully captured and no Job Card exists yet', async () => {
+    // Real gap this closes: an on-site appointment never gets rewritten to MARKED_RECEIVED/
+    // PENDING_JOB_CREATION (those are COLLECTED_TO_WS-only synthetic sub-stages), so under
+    // the old effectiveStatus-only check this row never got the pill even though
+    // JobCardsService.create() would already accept it (technician_visits fully captured +
+    // invoice on file). It's eligible per the backend's own rule - eligibleAppointmentIds
+    // is what now decides this, not the appointment's real/effective status.
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-onsite-1',
+          appointmentNumber: 'APT-0404',
+          status: 'COMPLETED',
+          jobCard: null,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([
+      { id: 'appt-onsite-1', appointmentNumber: 'APT-0404', customerName: 'Sara', customerPhone: '0500000001', status: 'COMPLETED', scheduledAt: '2026-09-17T09:00:00Z' },
+    ] as any);
+    renderPage();
+
+    const row = (await screen.findByText('APT-0404')).closest('tr')!;
+    const pill = within(row).getByRole('link', { name: '+ Create Job' });
+    expect(pill).toHaveAttribute('href', '/job-cards?appointmentId=appt-onsite-1');
+  });
+
+  it('hides the pill once a Job Card already exists, even if the row is still in the eligible set', async () => {
     vi.mocked(listAppointments).mockResolvedValue({
       data: [
         makeAppointment({
@@ -1127,19 +1174,23 @@ describe('SchedulePage - req.txt Issue F: "+ Create Job" pill', () => {
       page: 1,
       limit: 20,
     });
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([
+      { id: 'appt-has-jc', appointmentNumber: 'APT-0402', customerName: 'Ali', customerPhone: '0500000000', status: 'COLLECTED_TO_WS', scheduledAt: '2026-09-17T09:00:00Z' },
+    ] as any);
     renderPage();
 
     const row = (await screen.findByText('APT-0402')).closest('tr')!;
     expect(within(row).queryByRole('link', { name: '+ Create Job' })).not.toBeInTheDocument();
   });
 
-  it('does not show the pill for an unrelated status (e.g. SCHEDULED)', async () => {
+  it('does not show the pill for a row that is not in the eligible set (e.g. still SCHEDULED, nothing captured yet)', async () => {
     vi.mocked(listAppointments).mockResolvedValue({
       data: [makeAppointment({ id: 'appt-sched', appointmentNumber: 'APT-0403', status: 'SCHEDULED', jobCard: null })],
       total: 1,
       page: 1,
       limit: 20,
     });
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([]);
     renderPage();
 
     const row = (await screen.findByText('APT-0403')).closest('tr')!;
