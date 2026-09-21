@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+﻿import { readFileSync, readdirSync } from 'fs';
+import { join, dirname, relative } from 'path';
 
 /**
  * Static regression guard for the 2026-09-03 production outage: GlLedgerModule used
@@ -51,8 +51,8 @@ describe('Every module using RolesGuard imports AuthModule', () => {
   expect(controllerFiles.length).toBeGreaterThan(15); // sanity: the scan actually found the app
 
   for (const controllerFile of controllerFiles) {
-    const dir = controllerFile.slice(0, controllerFile.lastIndexOf('/'));
-    const relLabel = controllerFile.replace(srcDir + '/', 'src/');
+    const dir = dirname(controllerFile);
+    const relLabel = join('src', relative(srcDir, controllerFile));
 
     it(`${relLabel}`, () => {
       const controllerSource = readFileSync(controllerFile, 'utf-8');
