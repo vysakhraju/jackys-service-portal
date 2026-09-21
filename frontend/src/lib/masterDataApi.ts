@@ -153,3 +153,12 @@ export const updateApplianceModel = (id: string, data: Partial<CreateApplianceMo
   api.put<ApplianceModel>(`${BASE}/appliance-models/${id}`, data).then((r) => r.data);
 export const deleteApplianceModel = (id: string) =>
   api.delete(`${BASE}/appliance-models/${id}`).then((r) => r.data);
+
+// Generic bulk-import route (POST /master-data/bulk-import/:entityType), same one
+// Fault & Symptom's import screen uses - bulkImportFromCsv's 'appliance-model' case
+// already existed server-side (calls createApplianceModel(row) per row), just never
+// had a frontend wrapper until this screen needed it.
+export const bulkImportApplianceModels = (rows: Partial<CreateApplianceModelInput>[]) =>
+  api
+    .post<{ success: number; errors: string[] }>(`${BASE}/bulk-import/appliance-model`, rows)
+    .then((r) => r.data);

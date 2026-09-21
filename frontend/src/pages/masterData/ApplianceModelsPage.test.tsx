@@ -8,6 +8,7 @@ vi.mock('../../lib/masterDataApi', () => ({
   createApplianceModel: vi.fn(),
   updateApplianceModel: vi.fn(),
   deleteApplianceModel: vi.fn(),
+  bulkImportApplianceModels: vi.fn(),
 }));
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
@@ -17,10 +18,11 @@ import {
   createApplianceModel,
   updateApplianceModel,
   deleteApplianceModel,
+  bulkImportApplianceModels,
 } from '../../lib/masterDataApi';
 import { useAuth } from '../../lib/auth';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
-import { ApplianceModelsPage } from './ApplianceModelsPage';
+import { ApplianceModelsPage, parseApplianceModelCsv } from './ApplianceModelsPage';
 
 function mockUser(roleName: string) {
   vi.mocked(useAuth).mockReturnValue({
@@ -80,6 +82,7 @@ beforeEach(() => {
   vi.mocked(createApplianceModel).mockReset();
   vi.mocked(updateApplianceModel).mockReset();
   vi.mocked(deleteApplianceModel).mockReset();
+  vi.mocked(bulkImportApplianceModels).mockReset();
   mockUser('SUPER_ADMIN');
   mockCapabilities([], true);
 });
@@ -111,6 +114,23 @@ describe('ApplianceModelsPage - action visibility by capability/role', () => {
 
     await screen.findByText('LG');
     expect(screen.getByText('Delete')).toBeInTheDocument();
+  });
+
+  it('shows Import CSV once MASTER_DATA_BULK_IMPORT is granted', async () => {
+    mockUser('CCE');
+    mockCapabilities(['MASTER_DATA_BULK_IMPORT']);
+    renderPage();
+
+    expect(await screen.findByText('Import CSV')).toBeInTheDocument();
+  });
+
+  it('hides Import CSV without MASTER_DATA_BULK_IMPORT', async () => {
+    mockUser('CCE');
+    mockCapabilities([]);
+    renderPage();
+
+    await screen.findByText('LG');
+    expect(screen.queryByText('Import CSV')).not.toBeInTheDocument();
   });
 });
 
@@ -185,5 +205,91 @@ describe('ApplianceModelsPage - create/edit/delete', () => {
     fireEvent.click(await screen.findByText('Delete'));
 
     expect(deleteApplianceModel).not.toHaveBeenCalled();
+  });
+});
+
+function csvFile(text: string) {
+  return new File([text], 'models.csv', { type: 'text/csv' });
+}
+
+describe('ApplianceModelsPage - CSV import', () => {
+  it('previews parsed rows from a valid CSV and imports them on click', async () => {
+    vi.mocked(bulkImportApplianceModels).mockResolvedValue({ success: 2, errors: [] });
+    renderPage();
+
+    fireEvent.click(await screen.findByText('Import CSV'));
+    const csv =
+      'Brand,Model,Category,Description,Active\n' +
+      'LG,WM-3001,Washing Machine,Front loader,Y\n' +
+      'Samsung,RF-700,,,N';
+    fireEvent.change(screen.getByTestId('csv-file-input'), { target: { files: [csvFile(csv)] } });
+
+    expect(await screen.findByText('2 row(s) ready to import.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Import 2 row(s)'));
+
+    await waitFor(() =>
+      expect(bulkImportApplianceModels).toHaveBeenCalledWith([
+        { brand: 'LG', model: 'WM-3001', category: 'WASHING_MACHINE', description: 'Front loader', isActive: true },
+        { brand: 'Samsung', model: 'RF-700', category: undefined, description: undefined, isActive: false },
+      ]),
+    );
+    expect(await screen.findByText(/Imported 2 row\(s\)/)).toBeInTheDocument();
+  });
+
+  it('shows per-row errors for bad rows and does not block importing the still-valid ones', async () => {
+    renderPage();
+    fireEvent.click(screen.getByText('Import CSV'));
+
+    const csv =
+      'Brand,Model,Category,Active\n' +
+      'LG,,WASHING_MACHINE,Y\n' +
+      'Samsung,RF-700,NOT_A_CATEGORY,Y\n' +
+      'Bosch,DW-100,DISHWASHER,Y';
+    fireEvent.change(screen.getByTestId('csv-file-input'), { target: { files: [csvFile(csv)] } });
+
+    expect(await screen.findByText('2 row(s) skipped:')).toBeInTheDocument();
+    expect(screen.getByText(/Brand and Model are both required/)).toBeInTheDocument();
+    expect(screen.getByText(/unknown category "NOT_A_CATEGORY"/)).toBeInTheDocument();
+    expect(screen.getByText('1 row(s) ready to import.')).toBeInTheDocument();
+  });
+
+  it('disables the Import button when the CSV is missing a required column', async () => {
+    renderPage();
+    fireEvent.click(screen.getByText('Import CSV'));
+
+    fireEvent.change(screen.getByTestId('csv-file-input'), {
+      target: { files: [csvFile('Model,Category\nWM-3001,WASHING_MACHINE')] },
+    });
+
+    expect(await screen.findByText(/Header row must include/)).toBeInTheDocument();
+    expect(screen.getByText('Import 0 row(s)').closest('button')).toBeDisabled();
+    expect(bulkImportApplianceModels).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseApplianceModelCsv (pure function)', () => {
+  it('defaults Active to Y (isActive: true) and leaves category/description undefined when omitted', () => {
+    const result = parseApplianceModelCsv('Brand,Model\nLG,WM-3001');
+    expect(result.errors).toEqual([]);
+    expect(result.rows).toEqual([
+      { brand: 'LG', model: 'WM-3001', category: undefined, description: undefined, isActive: true },
+    ]);
+  });
+
+  it('handles quoted fields containing commas', () => {
+    const result = parseApplianceModelCsv(
+      'Brand,Model,Description\nLG,WM-3001,"Front loader, 8kg capacity"',
+    );
+    expect(result.rows[0].description).toBe('Front loader, 8kg capacity');
+  });
+
+  it('normalizes a spaced/lowercase category to the enum form', () => {
+    const result = parseApplianceModelCsv('Brand,Model,Category\nLG,WM-3001,washing machine');
+    expect(result.rows[0].category).toBe('WASHING_MACHINE');
+  });
+
+  it('reports an empty-file error for a blank upload', () => {
+    expect(parseApplianceModelCsv('')).toEqual({ rows: [], errors: ['File is empty.'] });
   });
 });
