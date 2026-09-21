@@ -2,7 +2,7 @@
 // overridable per-test via a Partial<> merge. Keeps individual test files from having to
 // restate every field of these fairly large backend-mirrored shapes.
 import type { Appointment } from '../lib/appointmentsTypes';
-import type { EligibleAppointmentForJobCard, JobCard } from '../lib/jobCardsTypes';
+import type { BlockedAppointmentForJobCard, EligibleAppointmentForJobCard, JobCard } from '../lib/jobCardsTypes';
 import type { Estimate } from '../lib/estimatesTypes';
 import type { InventoryReservation, InventoryReservationWithAge } from '../lib/inventoryTypes';
 import type { WorkshopState } from '../lib/workshopTypes';
@@ -102,6 +102,23 @@ export function makeEligibleAppointmentForJobCard(
     customerPhone: '+971501112222',
     status: 'COMPLETED',
     scheduledAt: '2026-09-10T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+// GET /job-cards/blocked-appointments row (2026-09-21) - backs JobCardsPage's empty-state
+// "why" panel and SchedulePage's blocked-row badge.
+export function makeBlockedAppointmentForJobCard(
+  overrides: Partial<BlockedAppointmentForJobCard> = {},
+): BlockedAppointmentForJobCard {
+  return {
+    id: 'appt-60',
+    appointmentNumber: 'APT-0060',
+    customerName: 'Fatima Noor',
+    customerPhone: '+971501113333',
+    status: 'COLLECTED_TO_WS',
+    scheduledAt: '2026-09-21T09:00:00.000Z',
+    reason: 'MISSING_INVOICE_NUMBER',
     ...overrides,
   };
 }

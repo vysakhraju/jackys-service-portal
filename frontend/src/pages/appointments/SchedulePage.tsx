@@ -43,7 +43,8 @@ import {
   type CreateAppointmentInput,
 } from '../../lib/appointmentsTypes';
 import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
-import { getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
+import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
+import { blockedJobCardReasonText } from '../../lib/jobCardsTypes';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 
@@ -271,6 +272,19 @@ export function SchedulePage() {
     refetchInterval: 20000,
   });
   const eligibleAppointmentIds = new Set((eligibleForJobCard ?? []).map((a) => a.id));
+
+  // 2026-09-21 live finding: a row can look "ready" (Pending Job Creation, or an on-site
+  // visit fully captured) and still never get the pill above, with nothing on the row
+  // saying why (the mismatch is JobCardsService.findEligibleForJobCardCreation()'s own
+  // separate invoiceNumber gate - see that method's and findBlockedForJobCardCreation()'s
+  // doc comments). This surfaces the same "why" here as a small warning badge instead of
+  // the row just silently having no pill.
+  const { data: blockedForJobCard } = useQuery({
+    queryKey: ['job-cards', 'blocked-appointments'],
+    queryFn: () => getBlockedAppointmentsForJobCard(),
+    refetchInterval: 20000,
+  });
+  const blockedAppointmentReasons = new Map((blockedForJobCard ?? []).map((a) => [a.id, a.reason]));
 
   const [createOpen, setCreateOpen] = useState(false);
   // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2, req. 2b) - the same popup
@@ -848,6 +862,17 @@ export function SchedulePage() {
                 >
                   + Create Job
                 </Link>
+              )}
+              {/* 2026-09-21 live finding - see blockedAppointmentReasons above. A row that's
+                  captured but blocked (currently: no invoice number on file) gets this
+                  instead of the pill, so it's never just silently absent. */}
+              {blockedAppointmentReasons.has(row.id) && !row.jobCard && (
+                <span
+                  className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800"
+                  title={blockedJobCardReasonText(blockedAppointmentReasons.get(row.id)!)}
+                >
+                  Job card blocked ⓘ
+                </span>
               )}
               {a.canCompleteAmcVisit && (
                 <Link

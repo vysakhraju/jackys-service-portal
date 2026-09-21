@@ -10,6 +10,7 @@ import { api } from './api';
 import type {
   ApproveCustomerInput,
   AssignSectionInput,
+  BlockedAppointmentForJobCard,
   CancelJobCardInput,
   CreateJobCardInput,
   EligibleAppointmentForJobCard,
@@ -36,6 +37,17 @@ export const getEligibleAppointmentsForJobCard = (q?: string) => {
   const trimmed = q?.trim();
   return api
     .get<EligibleAppointmentForJobCard[]>(`${BASE}/eligible-appointments`, { params: trimmed ? { q: trimmed } : {} })
+    .then((r) => r.data);
+};
+
+// 2026-09-21 live finding (see BlockedAppointmentForJobCard's own doc comment): the
+// counterpart to getEligibleAppointmentsForJobCard above - same shape, same blank-q
+// behavior - but for rows that look ready (S/N/warranty/fault/symptom captured, no Job
+// Card yet) and are still excluded, plus why, so the empty state isn't a dead end.
+export const getBlockedAppointmentsForJobCard = (q?: string) => {
+  const trimmed = q?.trim();
+  return api
+    .get<BlockedAppointmentForJobCard[]>(`${BASE}/blocked-appointments`, { params: trimmed ? { q: trimmed } : {} })
     .then((r) => r.data);
 };
 

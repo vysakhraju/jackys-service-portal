@@ -310,6 +310,76 @@ export class JobCardsService {
   }
 
   /**
+   * Job Cards page (2026-09-21 live finding): a CCE reported an appointment showing
+   * "Pending Job Creation" on Appointment Scheduling but never appearing on this page's
+   * eligible-appointments picker, with no indication anywhere of why. Root cause: that
+   * badge only reflects WorkshopIntake/TechnicianVisit completeness, never the separate
+   * `invoiceNumber` gate findEligibleForJobCardCreation() (and create()'s own Gate 1,
+   * FR-05) also requires - so a row can be "ready" on one screen and correctly excluded
+   * on this one, with nothing surfacing the mismatch. This lists exactly those rows -
+   * S/N + warranty + fault/symptom fully captured, no Job Card yet, but invoiceNumber is
+   * still null - so the frontend can show a "why" instead of a silent absence. Only one
+   * reason exists today (MISSING_INVOICE_NUMBER); returning a `reason` field rather than
+   * a bare list leaves room for a second gate later without another endpoint.
+   */
+  async findBlockedForJobCardCreation(q?: string): Promise<
+    Array<Pick<Appointment, 'id' | 'appointmentNumber' | 'customerName' | 'customerPhone' | 'status' | 'scheduledAt'> & { reason: 'MISSING_INVOICE_NUMBER' }>
+  > {
+    const qb = this.appointmentRepository
+      .createQueryBuilder('apt')
+      .leftJoin('job_cards', 'jc', 'jc."appointmentId" = apt.id')
+      .where('jc.id IS NULL')
+      .andWhere('apt."invoiceNumber" IS NULL')
+      .andWhere(
+        `(
+          (apt.status = :collectedStatus AND EXISTS (
+            SELECT 1 FROM workshop_intakes wi
+            WHERE wi."appointmentId" = apt.id
+              AND wi."serialNumber" IS NOT NULL
+              AND wi."warrantyStatus" IS NOT NULL
+              AND wi."faultCode" IS NOT NULL
+              AND wi."symptomCode" IS NOT NULL
+          ))
+          OR
+          (apt.status != :collectedStatus AND EXISTS (
+            SELECT 1 FROM technician_visits tv
+            WHERE tv."appointmentId" = apt.id
+              AND tv."serialNumber" IS NOT NULL
+              AND tv."warrantyStatus" IS NOT NULL
+              AND tv."faultCode" IS NOT NULL
+              AND tv."symptomCode" IS NOT NULL
+          ))
+        )`,
+        { collectedStatus: AppointmentStatus.COLLECTED_TO_WS },
+      );
+
+    const trimmed = q?.trim();
+    if (trimmed) {
+      const escaped = trimmed.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const like = `%${escaped}%`;
+      qb.andWhere(
+        `(apt."appointmentNumber" ILIKE :like ESCAPE '\\' OR apt."customerName" ILIKE :like ESCAPE '\\' OR apt."customerPhone" ILIKE :like ESCAPE '\\')`,
+        { like },
+      );
+    }
+
+    const rows = await qb
+      .select([
+        'apt.id',
+        'apt.appointmentNumber',
+        'apt.customerName',
+        'apt.customerPhone',
+        'apt.status',
+        'apt.scheduledAt',
+      ])
+      .orderBy('apt.scheduledAt', 'DESC')
+      .limit(30)
+      .getMany();
+
+    return rows.map((r) => ({ ...r, reason: 'MISSING_INVOICE_NUMBER' as const }));
+  }
+
+  /**
    * Gate 1 (FR-05, AC-05): "no Job Card without invoice verification." Creation is
    * blocked unless the field visit is fully captured (S/N + warranty + fault/symptom)
    * AND the appointment already has an invoice number on file. The actual human

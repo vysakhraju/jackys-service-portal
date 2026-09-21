@@ -34,6 +34,7 @@ vi.mock('../../lib/masterDataApi', () => ({
 // eligible-appointments endpoint JobCardsPage's picker already calls, instead of
 // effectiveStatus alone.
 vi.mock('../../lib/jobCardsApi', () => ({
+  getBlockedAppointmentsForJobCard: vi.fn(),
   getEligibleAppointmentsForJobCard: vi.fn(),
 }));
 vi.mock('../../lib/technicianScheduleApi', () => ({
@@ -62,7 +63,7 @@ import {
   updateAppointment,
 } from '../../lib/appointmentsApi';
 import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
-import { getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
+import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { getWorkshopIntake } from '../../lib/workshopIntakeApi';
 import { SchedulePage } from './SchedulePage';
@@ -139,6 +140,7 @@ beforeEach(() => {
   vi.mocked(listCities).mockReset().mockResolvedValue([{ id: 'city-1', name: 'Dubai' }] as any);
   vi.mocked(listApplianceModels).mockReset().mockResolvedValue([{ id: 'model-1', brand: 'Samsung', model: 'WA80J5710' }] as any);
   vi.mocked(getEligibleAppointmentsForJobCard).mockReset().mockResolvedValue([]);
+  vi.mocked(getBlockedAppointmentsForJobCard).mockReset().mockResolvedValue([]);
   vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
     date: '2026-09-09',
     rows: [],
@@ -1195,5 +1197,35 @@ describe('SchedulePage - req.txt Issue F: "+ Create Job" pill', () => {
 
     const row = (await screen.findByText('APT-0403')).closest('tr')!;
     expect(within(row).queryByRole('link', { name: '+ Create Job' })).not.toBeInTheDocument();
+  });
+
+  // 2026-09-21 live finding: a row can be captured (Pending Job Creation, or on-site fully
+  // captured) and still never get the pill, with nothing on the row saying why. This is
+  // the fix - a "Job card blocked" badge with the reason, instead of a silent absence.
+  it('shows a "Job card blocked" badge with the reason, instead of the pill, for a row that is captured but blocked', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-blocked-1',
+          appointmentNumber: 'APT-0405',
+          status: 'COLLECTED_TO_WS',
+          effectiveStatus: 'PENDING_JOB_CREATION',
+          jobCard: null,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([]);
+    vi.mocked(getBlockedAppointmentsForJobCard).mockResolvedValue([
+      { id: 'appt-blocked-1', appointmentNumber: 'APT-0405', customerName: 'Fatima', customerPhone: '0500000002', status: 'COLLECTED_TO_WS', scheduledAt: '2026-09-21T09:00:00Z', reason: 'MISSING_INVOICE_NUMBER' },
+    ] as any);
+    renderPage();
+
+    const row = (await screen.findByText('APT-0405')).closest('tr')!;
+    expect(within(row).queryByRole('link', { name: '+ Create Job' })).not.toBeInTheDocument();
+    const badge = within(row).getByText('Job card blocked ⓘ');
+    expect(badge).toHaveAttribute('title', expect.stringContaining('Missing invoice number'));
   });
 });

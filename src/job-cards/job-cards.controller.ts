@@ -278,6 +278,17 @@ export class JobCardsController {
     return this.jobCardsService.findEligibleForJobCardCreation(q);
   }
 
+  // Must stay ABOVE @Get(':id') too, same reason as eligible-appointments above.
+  @Get('blocked-appointments')
+  @RequiresCapability('JOB_CARD_MANAGE')
+  @ApiOperation({
+    summary: 'Appointments with S/N/warranty/fault/symptom fully captured and no Job Card yet, but blocked from creation and why (currently: missing invoice number)',
+  })
+  @ApiResponse({ status: 200 })
+  async findBlockedAppointments(@Query('q') q?: string) {
+    return this.jobCardsService.findBlockedForJobCardCreation(q);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get a Job Card by id' })
   @ApiParam({ name: 'id', type: String })

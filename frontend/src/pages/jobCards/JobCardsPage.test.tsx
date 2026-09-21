@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { makeAppointment, makeEligibleAppointmentForJobCard, makeJobCard } from '../../test/fixtures';
+import { makeAppointment, makeBlockedAppointmentForJobCard, makeEligibleAppointmentForJobCard, makeJobCard } from '../../test/fixtures';
 
 vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 vi.mock('../../lib/appointmentsApi', () => ({
@@ -13,6 +13,7 @@ vi.mock('../../lib/jobCardsApi', () => ({
   assignSection: vi.fn(),
   cancelJobCard: vi.fn(),
   createJobCard: vi.fn(),
+  getBlockedAppointmentsForJobCard: vi.fn(),
   getEligibleAppointmentsForJobCard: vi.fn(),
   getJobCardByAppointment: vi.fn(),
   getTaskPauses: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock('../../lib/jobCardsApi', () => ({
 
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getAppointment } from '../../lib/appointmentsApi';
-import { getEligibleAppointmentsForJobCard, getJobCardByAppointment, getTaskPauses } from '../../lib/jobCardsApi';
+import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard, getJobCardByAppointment, getTaskPauses } from '../../lib/jobCardsApi';
 import { JobCardsPage } from './JobCardsPage';
 
 // 2026-09-14: canWarrantyOverride now gates on the real capability (useMyCapabilities)
@@ -56,6 +57,7 @@ beforeEach(() => {
   mockCapabilities([]);
   vi.mocked(getAppointment).mockReset();
   vi.mocked(getEligibleAppointmentsForJobCard).mockReset().mockResolvedValue([]);
+  vi.mocked(getBlockedAppointmentsForJobCard).mockReset().mockResolvedValue([]);
   vi.mocked(getJobCardByAppointment).mockReset();
   vi.mocked(getTaskPauses).mockReset().mockResolvedValue([]);
 });
@@ -113,6 +115,35 @@ describe('JobCardsPage - eligible-appointment picker (2026-09-17)', () => {
     renderPage();
 
     expect(await screen.findByText('No appointments are ready for Job Card creation right now.')).toBeInTheDocument();
+  });
+
+  // 2026-09-21 live finding: a CCE saw the empty message above with no explanation, while
+  // the exact same appointment showed "Pending Job Creation" on Appointment Scheduling.
+  // Root cause was a separate invoiceNumber gate the two screens don't share (see
+  // JobCardsService.findBlockedForJobCardCreation's own doc comment) - this is the fix,
+  // surfacing the blocked list and its reason alongside the empty message instead of
+  // leaving it a dead end.
+  it('shows blocked appointments and why, alongside the empty message, once the eligible list comes back empty', async () => {
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([]);
+    const blocked = makeBlockedAppointmentForJobCard({ appointmentNumber: 'APT-0060', customerName: 'Fatima Noor' });
+    vi.mocked(getBlockedAppointmentsForJobCard).mockResolvedValue([blocked]);
+
+    renderPage();
+
+    expect(await screen.findByText('No appointments are ready for Job Card creation right now.')).toBeInTheDocument();
+    expect(await screen.findByText(/APT-0060/)).toBeInTheDocument();
+    expect(screen.getByText(/Fatima Noor/)).toBeInTheDocument();
+    expect(screen.getByText(/Missing invoice number/)).toBeInTheDocument();
+  });
+
+  it('does not call the blocked-appointments endpoint at all when the eligible list already has results', async () => {
+    const eligible = makeEligibleAppointmentForJobCard();
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([eligible]);
+
+    renderPage();
+    await screen.findByText('APT-0055');
+
+    expect(getBlockedAppointmentsForJobCard).not.toHaveBeenCalled();
   });
 
   it('shows a query-specific no-matches message when a typed search comes back empty', async () => {

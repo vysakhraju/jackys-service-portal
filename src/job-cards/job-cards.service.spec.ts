@@ -218,6 +218,43 @@ describe('JobCardsService', () => {
     });
   });
 
+  describe('findBlockedForJobCardCreation', () => {
+    // 2026-09-21 live finding - see the service method's own doc comment. Mirrors
+    // findEligibleForJobCardCreation's query shape exactly except the invoice check is
+    // inverted (IS NULL, not IS NOT NULL) and the result carries a `reason`.
+
+    it('excludes appointments that already have a Job Card, same as the eligible query', async () => {
+      await service.findBlockedForJobCardCreation();
+
+      expect(eligibleAppointmentsQueryBuilder.where).toHaveBeenCalledWith('jc.id IS NULL');
+    });
+
+    it('requires invoiceNumber to be missing (the inverse of the eligible gate)', async () => {
+      await service.findBlockedForJobCardCreation();
+
+      expect(eligibleAppointmentsQueryBuilder.andWhere).toHaveBeenCalledWith('apt."invoiceNumber" IS NULL');
+    });
+
+    it('still requires S/N + warranty + fault/symptom fully captured, via the same workshop_intakes/technician_visits EXISTS check', async () => {
+      await service.findBlockedForJobCardCreation();
+
+      const calls = eligibleAppointmentsQueryBuilder.andWhere.mock.calls;
+      const gateCall = calls.find((c: any[]) => typeof c[0] === 'string' && c[0].includes('EXISTS'));
+      expect(gateCall).toBeDefined();
+      expect(gateCall[0]).toContain('workshop_intakes');
+      expect(gateCall[0]).toContain('technician_visits');
+    });
+
+    it('tags every returned row with reason MISSING_INVOICE_NUMBER', async () => {
+      const rows = [{ id: 'apt-21', appointmentNumber: 'APT-0021', customerName: 'Fatima', customerPhone: '0501112222', status: 'COLLECTED_TO_WS', scheduledAt: new Date('2026-09-21T09:00:00Z') }];
+      eligibleAppointmentsQueryBuilder.getMany.mockResolvedValue(rows);
+
+      const result = await service.findBlockedForJobCardCreation();
+
+      expect(result).toEqual([{ ...rows[0], reason: 'MISSING_INVOICE_NUMBER' }]);
+    });
+  });
+
   describe('create', () => {
     const dto = { appointmentId: 'apt-1' };
 

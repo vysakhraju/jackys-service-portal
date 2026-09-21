@@ -9,7 +9,7 @@ vi.mock('./api', () => ({
 }));
 
 import { api } from './api';
-import { getEligibleAppointmentsForJobCard, getTaskPauses, pauseTask, qcApprove, qcReject, resumeTask } from './jobCardsApi';
+import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard, getTaskPauses, pauseTask, qcApprove, qcReject, resumeTask } from './jobCardsApi';
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
@@ -35,6 +35,21 @@ describe('jobCardsApi - eligible-appointments (2026-09-17)', () => {
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
     await getEligibleAppointmentsForJobCard('APT-005');
     expect(api.get).toHaveBeenCalledWith('/job-cards/eligible-appointments', { params: { q: 'APT-005' } });
+  });
+});
+
+// 2026-09-21 live finding - the "why" counterpart to eligible-appointments above.
+describe('jobCardsApi - blocked-appointments (2026-09-21)', () => {
+  it('gets /job-cards/blocked-appointments with no params when q is omitted', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await getBlockedAppointmentsForJobCard();
+    expect(api.get).toHaveBeenCalledWith('/job-cards/blocked-appointments', { params: {} });
+  });
+
+  it('gets /job-cards/blocked-appointments with q as a query param when provided', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+    await getBlockedAppointmentsForJobCard('APT-005');
+    expect(api.get).toHaveBeenCalledWith('/job-cards/blocked-appointments', { params: { q: 'APT-005' } });
   });
 });
 

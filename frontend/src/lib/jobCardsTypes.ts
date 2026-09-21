@@ -96,6 +96,31 @@ export interface EligibleAppointmentForJobCard {
   scheduledAt: string;
 }
 
+// 2026-09-21 live finding: an appointment can have S/N/warranty/fault/symptom fully
+// captured and no Job Card yet - everything the "Pending Job Creation"/"on-site ready"
+// badges check - and still be blocked from Job Card creation because of the separate
+// invoiceNumber gate (FR-05), with nothing on screen saying why. This is that "why".
+// Only one reason exists today; kept as a union (not a bare string) so a second gate
+// later is a type change here, not a new shape somewhere else.
+export type BlockedJobCardReason = 'MISSING_INVOICE_NUMBER';
+
+export interface BlockedAppointmentForJobCard {
+  id: string;
+  appointmentNumber: string;
+  customerName: string;
+  customerPhone: string;
+  status: string;
+  scheduledAt: string;
+  reason: BlockedJobCardReason;
+}
+
+export function blockedJobCardReasonText(reason: BlockedJobCardReason): string {
+  switch (reason) {
+    case 'MISSING_INVOICE_NUMBER':
+      return 'Missing invoice number - open this appointment in Appointment Scheduling and fill in its Invoice number field, then it will appear here.';
+  }
+}
+
 export interface ValidateSnInput {
   matches: boolean;
   notes?: string;

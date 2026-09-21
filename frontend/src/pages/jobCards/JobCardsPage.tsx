@@ -13,6 +13,7 @@ import {
   assignSection,
   cancelJobCard,
   createJobCard,
+  getBlockedAppointmentsForJobCard,
   getEligibleAppointmentsForJobCard,
   getJobCardByAppointment,
   getTaskPauses,
@@ -29,7 +30,7 @@ import type {
   JobCardStatusValue,
   TaskPauseReasonValue,
 } from '../../lib/jobCardsTypes';
-import { TASK_PAUSE_REASONS } from '../../lib/jobCardsTypes';
+import { blockedJobCardReasonText, TASK_PAUSE_REASONS } from '../../lib/jobCardsTypes';
 
 // Statuses past which this phase's screens stop. WORKSHOP_ASSIGNED/IN_PROGRESS/
 // SPARE_PENDING/READY_FOR_QC now link to the Workshop screen (Frontend Phase 6) instead
@@ -225,6 +226,19 @@ function EligibleAppointmentPicker({
     queryFn: () => getEligibleAppointmentsForJobCard(debouncedQuery || undefined),
   });
 
+  // 2026-09-21 live finding: a CCE saw "No appointments are ready" here while Appointment
+  // Scheduling showed "Pending Job Creation 1" for the exact same appointment, with
+  // nothing anywhere explaining the mismatch (root cause: S/N/warranty/fault/symptom fully
+  // captured, but the separate invoiceNumber gate/FR-05 was still unmet). Only fetched once
+  // the eligible list has actually come back empty - the common case has results, so this
+  // stays a no-op extra call for every normal page load rather than firing alongside
+  // eligibleQuery every time.
+  const blockedQuery = useQuery({
+    queryKey: ['job-cards', 'blocked-appointments', debouncedQuery],
+    queryFn: () => getBlockedAppointmentsForJobCard(debouncedQuery || undefined),
+    enabled: eligibleQuery.data != null && eligibleQuery.data.length === 0,
+  });
+
   if (selectedLabel != null) {
     return (
       <div className="flex items-center gap-2">
@@ -278,11 +292,28 @@ function EligibleAppointmentPicker({
             ))}
           </ul>
         ) : (
-          <p className="px-3 py-2 text-sm text-slate-400">
-            {debouncedQuery
-              ? `No eligible appointments match "${debouncedQuery}".`
-              : 'No appointments are ready for Job Card creation right now.'}
-          </p>
+          <div className="px-3 py-2">
+            <p className="text-sm text-slate-400">
+              {debouncedQuery
+                ? `No eligible appointments match "${debouncedQuery}".`
+                : 'No appointments are ready for Job Card creation right now.'}
+            </p>
+            {blockedQuery.data && blockedQuery.data.length > 0 && (
+              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2" data-testid="blocked-appointment-list">
+                <p className="text-xs font-medium text-amber-800">
+                  {blockedQuery.data.length} appointment{blockedQuery.data.length === 1 ? '' : 's'} captured but not job-card-ready yet:
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {blockedQuery.data.map((item) => (
+                    <li key={item.id} className="text-xs text-amber-900">
+                      <span className="font-medium">{item.appointmentNumber}</span>
+                      <span className="text-amber-700"> ({item.customerName}) — {blockedJobCardReasonText(item.reason)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
