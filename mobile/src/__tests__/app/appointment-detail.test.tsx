@@ -428,19 +428,36 @@ describe('AppointmentDetailScreen', () => {
     expect(mockedListFaultSymptoms).not.toHaveBeenCalled();
   });
 
-  it('opens the fault/symptom picker, filters by search, selects an item, and captures it', async () => {
+  it('cascades symptom -> fault, filters by search at each step, and captures the selection (#301)', async () => {
     mockedGetVisit.mockResolvedValueOnce(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW' }));
     mockedListFaultSymptoms.mockResolvedValue([
+      // fs-1 and fs-2 share symptom S001 - one customer complaint, two possible diagnoses -
+      // the real after-sales case #301 exists for. fs-3 is a different symptom entirely and
+      // must never leak into S001's fault list.
       faultSymptomFixture(),
-      faultSymptomFixture({ id: 'fs-2', faultCode: 'F002', faultDescription: 'Not draining', symptomCode: 'S002', symptomDescription: 'Water pooling' }),
+      faultSymptomFixture({ id: 'fs-2', faultCode: 'F002', faultDescription: 'Not draining' }),
+      faultSymptomFixture({ id: 'fs-3', faultCode: 'F010', faultDescription: 'Belt worn', symptomCode: 'S003', symptomDescription: 'Excess noise' }),
     ]);
     await renderScreen(appt());
 
     await waitFor(() => expect(screen.getByTestId('open-fault-symptom-picker')).toBeOnTheScreen());
     await fireEvent.press(screen.getByTestId('open-fault-symptom-picker'));
 
+    // Step one: distinct symptoms, deduped - only 2 options even though 3 rows exist.
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-symptom-option-S001')).toBeOnTheScreen());
+    expect(screen.getByTestId('fault-symptom-symptom-option-S003')).toBeOnTheScreen();
+
+    await fireEvent.changeText(screen.getByTestId('fault-symptom-search'), 'noise');
+    await waitFor(() => expect(screen.queryByTestId('fault-symptom-symptom-option-S001')).toBeNull());
+    expect(screen.getByTestId('fault-symptom-symptom-option-S003')).toBeOnTheScreen();
+
+    await fireEvent.changeText(screen.getByTestId('fault-symptom-search'), '');
+    await fireEvent.press(screen.getByTestId('fault-symptom-symptom-option-S001'));
+
+    // Step two: only the faults recorded against S001 - fs-3 (a different symptom) is gone.
     await waitFor(() => expect(screen.getByTestId('fault-symptom-option-fs-1')).toBeOnTheScreen());
     expect(screen.getByTestId('fault-symptom-option-fs-2')).toBeOnTheScreen();
+    expect(screen.queryByTestId('fault-symptom-option-fs-3')).toBeNull();
 
     await fireEvent.changeText(screen.getByTestId('fault-symptom-search'), 'draining');
     await waitFor(() => expect(screen.queryByTestId('fault-symptom-option-fs-1')).toBeNull());
@@ -451,13 +468,13 @@ describe('AppointmentDetailScreen', () => {
     await waitFor(() => expect(screen.getByTestId('fault-symptom-selection')).toBeOnTheScreen());
     expect(screen.queryByTestId('fault-symptom-picker-close')).toBeNull();
 
-    mockedCaptureFaultSymptom.mockResolvedValue(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW', faultCode: 'F002', symptomCode: 'S002' }));
-    mockedGetVisit.mockResolvedValueOnce(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW', faultCode: 'F002', symptomCode: 'S002' }));
+    mockedCaptureFaultSymptom.mockResolvedValue(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW', faultCode: 'F002', symptomCode: 'S001' }));
+    mockedGetVisit.mockResolvedValueOnce(visitFixture({ serialNumber: 'SN123', warrantyStatus: 'IW', faultCode: 'F002', symptomCode: 'S001' }));
 
     await fireEvent.press(screen.getByTestId('capture-fault-symptom-button'));
 
-    await waitFor(() => expect(mockedCaptureFaultSymptom).toHaveBeenCalledWith('appt-1', { faultCode: 'F002', symptomCode: 'S002' }));
-    await waitFor(() => expect(screen.getByTestId('fault-symptom-captured')).toHaveTextContent('F002 · S002'));
+    await waitFor(() => expect(mockedCaptureFaultSymptom).toHaveBeenCalledWith('appt-1', { faultCode: 'F002', symptomCode: 'S001' }));
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-captured')).toHaveTextContent('F002 · S001'));
   });
 
   it('shows an error message when fault/symptom capture fails', async () => {
@@ -467,6 +484,8 @@ describe('AppointmentDetailScreen', () => {
 
     await waitFor(() => expect(screen.getByTestId('open-fault-symptom-picker')).toBeOnTheScreen());
     await fireEvent.press(screen.getByTestId('open-fault-symptom-picker'));
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-symptom-option-S001')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('fault-symptom-symptom-option-S001'));
     await waitFor(() => expect(screen.getByTestId('fault-symptom-option-fs-1')).toBeOnTheScreen());
     await fireEvent.press(screen.getByTestId('fault-symptom-option-fs-1'));
 
@@ -494,6 +513,7 @@ describe('AppointmentDetailScreen', () => {
     await fireEvent.press(screen.getByTestId('open-fault-symptom-picker'));
 
     await waitFor(() => expect(screen.getByTestId('fault-symptom-list-error')).toBeOnTheScreen());
+    expect(screen.queryByTestId('fault-symptom-symptom-option-S001')).toBeNull();
     expect(screen.queryByTestId('fault-symptom-option-fs-1')).toBeNull();
   });
 });
@@ -1113,6 +1133,8 @@ describe('AppointmentDetailScreen - offline queue', () => {
 
     await waitFor(() => expect(screen.getByTestId('open-fault-symptom-picker')).toBeOnTheScreen());
     await fireEvent.press(screen.getByTestId('open-fault-symptom-picker'));
+    await waitFor(() => expect(screen.getByTestId('fault-symptom-symptom-option-S001')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('fault-symptom-symptom-option-S001'));
     await waitFor(() => expect(screen.getByTestId('fault-symptom-option-fs-1')).toBeOnTheScreen());
     await fireEvent.press(screen.getByTestId('fault-symptom-option-fs-1'));
 

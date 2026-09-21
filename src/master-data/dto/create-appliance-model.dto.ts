@@ -1,5 +1,6 @@
-import { ApiProperty, PartialType } from '@nestjs/swagger';
-import { IsString, IsOptional, IsBoolean, MaxLength } from 'class-validator';
+﻿import { ApiProperty, PartialType } from '@nestjs/swagger';
+import { IsString, IsOptional, IsBoolean, IsEnum, MaxLength } from 'class-validator';
+import { ApplianceCategory } from '../entities/fault-symptom.entity';
 
 export class CreateApplianceModelDto {
   @ApiProperty({ example: 'Samsung' })
@@ -16,6 +17,11 @@ export class CreateApplianceModelDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @ApiProperty({ required: false, enum: ApplianceCategory, description: 'Links this model to the Fault & Symptoms picker.' })
+  @IsOptional()
+  @IsEnum(ApplianceCategory)
+  category?: ApplianceCategory;
 
   @ApiProperty({ required: false, default: true })
   @IsOptional()

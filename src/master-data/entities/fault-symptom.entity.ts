@@ -1,4 +1,4 @@
-import {
+﻿import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
@@ -34,7 +34,12 @@ export class FaultSymptom {
   @Column({ length: 255 })
   faultDescription: string;
 
-  @Column({ length: 20, unique: true })
+  // Deliberately NOT unique (2026-09-21, req #301): the same customer-reported symptom
+  // can have several real faults behind it - the technician picks the actual fault from
+  // whichever rows share this symptom, after diagnosis. faultCode below stays the unique
+  // key; every lookup that needs exactly one row (efficiency reports, TechnicianVisit/
+  // WorkshopIntake capture) already keys off faultCode, never symptomCode.
+  @Column({ length: 20 })
   symptomCode: string;
 
   @Column({ length: 255 })

@@ -1,22 +1,24 @@
-import { ApiProperty } from '@nestjs/swagger';
+﻿import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsEnum, IsOptional, IsBoolean, IsInt, Min, MaxLength } from 'class-validator';
 import { ApplianceCategory } from '../entities/fault-symptom.entity';
 
 export class CreateFaultSymptomDto {
-  @ApiProperty({ example: 'F001' })
+  @ApiProperty({ required: false, example: 'F001', description: 'Leave blank to auto-generate.' })
+  @IsOptional()
   @IsString()
   @MaxLength(20)
-  faultCode: string;
+  faultCode?: string;
 
   @ApiProperty({ example: 'Not draining' })
   @IsString()
   @MaxLength(255)
   faultDescription: string;
 
-  @ApiProperty({ example: 'S001' })
+  @ApiProperty({ required: false, example: 'S001', description: 'Leave blank to auto-generate.' })
+  @IsOptional()
   @IsString()
   @MaxLength(20)
-  symptomCode: string;
+  symptomCode?: string;
 
   @ApiProperty({ example: 'Water remains in drum' })
   @IsString()

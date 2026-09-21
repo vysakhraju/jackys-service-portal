@@ -1,4 +1,4 @@
-import {
+﻿import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   Index,
 } from 'typeorm';
+import { ApplianceCategory } from './fault-symptom.entity';
 
 // Appointment/Mobile/Job Card overhaul (2026-09-16), req. 1e: the appliance brand/model
 // SKU master backing the New Appointment popup's Brand + Model dropdowns. Deliberately
@@ -29,6 +30,14 @@ export class ApplianceModel {
 
   @Column({ type: 'text', nullable: true })
   description: string | null;
+
+  // Req #301 (2026-09-21): links this model to the Fault & Symptoms master's own category
+  // enum, so the appointment's chosen model can filter which fault/symptom rows show in
+  // the picker. Nullable - the models seeded before this field existed have none set yet;
+  // callers treat a null category as "show everything, not nothing" (see fault-symptom
+  // picker), not as a dead end.
+  @Column({ type: 'enum', enum: ApplianceCategory, nullable: true })
+  category: ApplianceCategory | null;
 
   @Column({ default: true })
   isActive: boolean;

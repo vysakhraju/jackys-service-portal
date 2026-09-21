@@ -1,4 +1,4 @@
-// Shapes and enums mirrored from the backend's Master Data module
+﻿// Shapes and enums mirrored from the backend's Master Data module
 // (src/master-data/entities/*.entity.ts and dto/create-*.dto.ts).
 // Kept as plain `as const` arrays (not TS enums) so they can drive <select> options
 // directly without an extra mapping step.
@@ -297,7 +297,7 @@ export interface CreateComponentYieldInput {
 }
 
 // === City / Cancellation Reason / Appliance Model (Appointment/Mobile/Job Card
-// overhaul, Phase 1 backend / Phase 2 frontend, 2026-09-16) — mirrors
+// overhaul, Phase 1 backend / Phase 2 frontend, 2026-09-16) â€” mirrors
 // src/master-data/entities/city.entity.ts, cancellation-reason.entity.ts,
 // appliance-model.entity.ts, and their create-*.dto.ts pairs exactly. ===
 export interface City {
@@ -331,6 +331,9 @@ export interface ApplianceModel {
   brand: string;
   model: string;
   description: string | null;
+  // #301 (2026-09-21) - links this model to the Fault & Symptoms picker. Nullable:
+  // existing models predate this field and have none until an admin sets it.
+  category: ApplianceCategoryValue | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -340,5 +343,6 @@ export interface CreateApplianceModelInput {
   brand: string;
   model: string;
   description?: string;
+  category?: ApplianceCategoryValue;
   isActive?: boolean;
 }

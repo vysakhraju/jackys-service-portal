@@ -1,4 +1,4 @@
-import { NotFoundException, ConflictException } from '@nestjs/common';
+﻿import { NotFoundException, ConflictException } from '@nestjs/common';
 import { MasterDataService } from './master-data.service';
 
 describe('MasterDataService', () => {
@@ -26,6 +26,8 @@ describe('MasterDataService', () => {
     addOrderBy: jest.fn().mockReturnThis(),
     getMany: jest.fn().mockResolvedValue(isMany ? result : []),
     getOne: jest.fn().mockResolvedValue(!isMany ? result : null),
+    select: jest.fn().mockReturnThis(),
+    getRawMany: jest.fn().mockResolvedValue(isMany ? result : []),
   });
 
   beforeEach(() => {
@@ -175,12 +177,50 @@ describe('MasterDataService', () => {
       expect(result).toEqual(expect.objectContaining({ faultCode: 'F1' }));
     });
 
-    it('throws ConflictException when the fault or symptom code exists', async () => {
+    it('throws ConflictException when the fault code already exists', async () => {
       faultSymptomRepository.findOne.mockResolvedValue({ id: 'x' });
 
       await expect(
         service.createFaultSymptom({ faultCode: 'F1', symptomCode: 'S1' }),
       ).rejects.toThrow(ConflictException);
+      expect(faultSymptomRepository.findOne).toHaveBeenCalledWith({ where: { faultCode: 'F1' } });
+    });
+
+    it('does NOT reject a repeated symptom code paired with a new fault code (many faults can share one symptom)', async () => {
+      faultSymptomRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createFaultSymptom({ faultCode: 'F2', symptomCode: 'S1' });
+
+      expect(result).toEqual(expect.objectContaining({ faultCode: 'F2', symptomCode: 'S1' }));
+      expect(faultSymptomRepository.findOne).toHaveBeenCalledWith({ where: { faultCode: 'F2' } });
+      expect(faultSymptomRepository.findOne).not.toHaveBeenCalledWith({ where: { symptomCode: 'S1' } });
+    });
+
+    it('does not check for an existing fault code at all when none is supplied (auto-generation path)', async () => {
+      const qb = buildQb([], true);
+      faultSymptomRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.createFaultSymptom({ symptomDescription: 'No cooling' } as any);
+
+      expect(faultSymptomRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('auto-generates faultCode/symptomCode from scratch when the master is empty', async () => {
+      const qb = buildQb([], true);
+      faultSymptomRepository.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.createFaultSymptom({ faultDescription: 'Compressor failure' } as any);
+
+      expect(result).toEqual(expect.objectContaining({ faultCode: 'FLT-0001', symptomCode: 'SYM-0001' }));
+    });
+
+    it('auto-generates the next code after the highest existing numeric suffix for that prefix', async () => {
+      const qb = buildQb([{ code: 'FLT-0003' }, { code: 'FLT-0007' }, { code: 'FLT-0002' }], true);
+      faultSymptomRepository.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.createFaultSymptom({ symptomCode: 'S9' } as any);
+
+      expect(result).toEqual(expect.objectContaining({ faultCode: 'FLT-0008' }));
     });
 
     it('passes standardRepairMinutes (SRT) through to the created fault symptom when given', async () => {

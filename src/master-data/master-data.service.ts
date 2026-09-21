@@ -1,4 +1,4 @@
-import {
+﻿import {
   Injectable,
   NotFoundException,
   ConflictException,
@@ -114,14 +114,30 @@ export class MasterDataService {
   }
 
   // Fault & Symptom
+  private async generateFaultSymptomCode(prefix: 'FLT' | 'SYM'): Promise<string> {
+    const column = prefix === 'FLT' ? 'faultCode' : 'symptomCode';
+    const rows: Array<{ code: string }> = await this.faultSymptomRepository
+      .createQueryBuilder('fs')
+      .select(`fs.${column}`, 'code')
+      .where(`fs.${column} LIKE :pattern`, { pattern: `${prefix}-%` })
+      .getRawMany();
+    const maxN = rows.reduce((max, r) => {
+      const n = parseInt(r.code.slice(prefix.length + 1), 10);
+      return Number.isFinite(n) && n > max ? n : max;
+    }, 0);
+    return `${prefix}-${String(maxN + 1).padStart(4, '0')}`;
+  }
+
   async createFaultSymptom(data: Partial<FaultSymptom>): Promise<FaultSymptom> {
-    const existing = await this.faultSymptomRepository.findOne({
-      where: [{ faultCode: data.faultCode }, { symptomCode: data.symptomCode }],
-    });
-    if (existing) {
-      throw new ConflictException('Fault code or symptom code already exists');
+    if (data.faultCode) {
+      const existing = await this.faultSymptomRepository.findOne({ where: { faultCode: data.faultCode } });
+      if (existing) {
+        throw new ConflictException(`Fault code ${data.faultCode} already exists`);
+      }
     }
-    const fault = this.faultSymptomRepository.create(data);
+    const faultCode = data.faultCode ?? (await this.generateFaultSymptomCode('FLT'));
+    const symptomCode = data.symptomCode ?? (await this.generateFaultSymptomCode('SYM'));
+    const fault = this.faultSymptomRepository.create({ ...data, faultCode, symptomCode });
     return this.faultSymptomRepository.save(fault);
   }
 

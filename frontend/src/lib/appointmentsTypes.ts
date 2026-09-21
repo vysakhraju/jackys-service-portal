@@ -1,6 +1,8 @@
-// Shapes mirrored from the backend's Appointments + Technician modules
+﻿// Shapes mirrored from the backend's Appointments + Technician modules
 // (src/appointments/entities/appointment.entity.ts, src/appointments/dto/*, and
 // src/technician/entities/technician-visit.entity.ts, src/technician/dto/*).
+
+import type { ApplianceCategoryValue } from './masterDataTypes';
 
 export const APPOINTMENT_TYPES = ['WARRANTY', 'OUT_OF_WARRANTY', 'AMC', 'PREVENTIVE', 'DISMANTLING','ACTIVITY'] as const;
 export type AppointmentTypeValue = (typeof APPOINTMENT_TYPES)[number];
@@ -86,6 +88,10 @@ export interface ApplianceModelRef {
   id: string;
   brand: string;
   model: string;
+  // #301 (2026-09-21) - nullable: older models created before this field existed, or
+  // never categorized by an admin, still have none. The Fault & Symptom cascading
+  // pickers fall back to showing all categories unfiltered when this is null.
+  category: ApplianceCategoryValue | null;
 }
 
 export interface CityRef {

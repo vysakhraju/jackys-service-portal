@@ -20,12 +20,13 @@ export function WorkshopIntakeModal({ appointment, onClose }: { appointment: App
   const queryClient = useQueryClient();
   const [serialNumber, setSerialNumber] = useState('');
   const [brand, setBrand] = useState(appointment?.brand ?? '');
-  // Fault/symptom is picked from the Fault & Symptoms master, not typed - the backend
-  // rejects any code that isn't a real row there (findFaultByCode/findSymptomByCode both
-  // 404), and a free-text box just meant every real user hit that 404. One <select> since
-  // each master row IS one fault+symptom pair (faultCode/symptomCode are both unique on
-  // the same row, never mixed-and-matched) - mirrors the mobile app's FaultSymptomPicker,
-  // which already worked this way.
+  // #301 (2026-09-21) - fault/symptom is picked from the Fault & Symptoms master in two
+  // cascaded steps, not one: pick the Symptom (customer complaint) first, then the actual
+  // Fault the technician diagnosed from among the possibilities recorded against that
+  // symptom. symptomCode is deliberately non-unique now (many faults can share a symptom),
+  // so a single <select> keyed on one master row no longer works - mirrors the mobile app's
+  // FaultSymptomPicker, which was updated the same way.
+  const [selectedSymptomCode, setSelectedSymptomCode] = useState('');
   const [selectedFaultSymptomId, setSelectedFaultSymptomId] = useState('');
 
   const {
@@ -38,16 +39,28 @@ export function WorkshopIntakeModal({ appointment, onClose }: { appointment: App
     enabled: !!appointment,
   });
 
+  // #301 - scope to the appointment's appliance model's category when it has one; an
+  // uncategorized model (existing rows predate this field, or an admin hasn't set it yet)
+  // falls back to showing every category's fault/symptom rows unfiltered, per decision -
+  // an empty dead-end list would be worse than a longer unfiltered one.
+  const modelCategory = appointment?.applianceModel?.category ?? undefined;
   const {
     data: faultSymptoms,
     error: faultSymptomsError,
     isLoading: faultSymptomsLoading,
   } = useQuery({
-    queryKey: ['fault-symptoms'],
-    queryFn: () => listFaultSymptoms(),
+    queryKey: ['fault-symptoms', modelCategory],
+    queryFn: () => listFaultSymptoms(modelCategory),
     enabled: !!appointment && !!intake?.serialNumber,
     staleTime: 5 * 60 * 1000,
   });
+  // Distinct symptoms for step one of the picker - dedupe by symptomCode since many rows
+  // (one per possible fault) can now share the same symptom.
+  const symptomOptions = Array.from(
+    new Map((faultSymptoms ?? []).map((fs) => [fs.symptomCode, fs])).values(),
+  );
+  // Step two: only the rows recorded against the chosen symptom.
+  const faultOptions = (faultSymptoms ?? []).filter((fs) => fs.symptomCode === selectedSymptomCode);
   const selectedFaultSymptom = faultSymptoms?.find((fs) => fs.id === selectedFaultSymptomId);
 
   function invalidate() {
@@ -70,10 +83,16 @@ export function WorkshopIntakeModal({ appointment, onClose }: { appointment: App
         symptomCode: selectedFaultSymptom!.symptomCode,
       }),
     onSuccess: () => {
+      setSelectedSymptomCode('');
       setSelectedFaultSymptomId('');
       invalidate();
     },
   });
+
+  function handleSymptomChange(code: string) {
+    setSelectedSymptomCode(code);
+    setSelectedFaultSymptomId(''); // the previously-picked fault may not belong to the new symptom
+  }
 
   if (!appointment) return null;
   const ready = !!(intake?.serialNumber && intake?.warrantyStatus && intake?.faultCode && intake?.symptomCode);
@@ -155,29 +174,51 @@ export function WorkshopIntakeModal({ appointment, onClose }: { appointment: App
             ) : faultSymptomsError ? (
               <ErrorNotice error={faultSymptomsError} />
             ) : (
-              <div className="flex flex-wrap items-end gap-2">
-                <Field label="Fault / symptom">
-                  <select
-                    className={`${inputClass} w-72`}
-                    value={selectedFaultSymptomId}
-                    onChange={(e) => setSelectedFaultSymptomId(e.target.value)}
-                    disabled={faultSymptomsLoading}
+              <div className="space-y-2">
+                {!modelCategory && (
+                  <p className="text-xs text-slate-400">
+                    This appliance model has no category set, so every category's symptoms are shown below.
+                  </p>
+                )}
+                <div className="flex flex-wrap items-end gap-2">
+                  <Field label="Symptom (customer complaint)">
+                    <select
+                      className={`${inputClass} w-72`}
+                      value={selectedSymptomCode}
+                      onChange={(e) => handleSymptomChange(e.target.value)}
+                      disabled={faultSymptomsLoading}
+                    >
+                      <option value="">{faultSymptomsLoading ? 'Loading…' : 'Select a symptom…'}</option>
+                      {symptomOptions.map((fs) => (
+                        <option key={fs.symptomCode} value={fs.symptomCode}>
+                          {fs.symptomCode} — {fs.symptomDescription}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Fault (technician diagnosis)">
+                    <select
+                      className={`${inputClass} w-72`}
+                      value={selectedFaultSymptomId}
+                      onChange={(e) => setSelectedFaultSymptomId(e.target.value)}
+                      disabled={!selectedSymptomCode}
+                    >
+                      <option value="">{selectedSymptomCode ? 'Select the diagnosed fault…' : 'Pick a symptom first'}</option>
+                      {faultOptions.map((fs) => (
+                        <option key={fs.id} value={fs.id}>
+                          {fs.faultCode} — {fs.faultDescription}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <button
+                    disabled={!selectedFaultSymptom || faultMutation.isPending}
+                    onClick={() => faultMutation.mutate()}
+                    className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                   >
-                    <option value="">{faultSymptomsLoading ? 'Loading…' : 'Select a fault / symptom…'}</option>
-                    {faultSymptoms?.map((fs) => (
-                      <option key={fs.id} value={fs.id}>
-                        {fs.faultCode} — {fs.faultDescription} / {fs.symptomDescription}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <button
-                  disabled={!selectedFaultSymptom || faultMutation.isPending}
-                  onClick={() => faultMutation.mutate()}
-                  className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                >
-                  {intake.faultCode ? 'Re-capture' : 'Capture'}
-                </button>
+                    {intake.faultCode ? 'Re-capture' : 'Capture'}
+                  </button>
+                </div>
               </div>
             )}
           </div>

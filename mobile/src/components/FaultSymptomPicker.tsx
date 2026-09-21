@@ -1,9 +1,11 @@
-// Full-screen picker for Fault + Symptom capture (Phase 3). Each row from
-// GET /master-data/fault-symptoms is one fault+symptom PAIR - not two independent lists
-// - so this picker selects a whole row rather than combining separate fault/symptom
-// fields, matching how the backend actually models it
-// (src/master-data/entities/fault-symptom.entity.ts).
-import { useMemo, useState } from 'react';
+// Full-screen picker for Fault + Symptom capture (Phase 3, cascaded per #301 - 2026-09-21).
+// GET /master-data/fault-symptoms rows are no longer one fault+symptom PAIR each in the
+// sense of a unique combo - symptomCode is deliberately non-unique now, since many faults
+// can share one customer-reported symptom (e.g. 50 washing machine models, one symptom
+// set, several possible diagnoses per symptom). So this picker is two steps, mirroring the
+// web app's WorkshopIntakeModal: pick the Symptom (customer complaint) first, then the
+// Fault the technician diagnosed from among the rows recorded against that symptom.
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { FaultSymptom } from '../lib/types';
@@ -17,33 +19,98 @@ interface Props {
   onClose: () => void;
 }
 
-function matches(item: FaultSymptom, query: string): boolean {
-  const haystack = `${item.faultCode} ${item.faultDescription} ${item.symptomCode} ${item.symptomDescription}`.toLowerCase();
-  return haystack.includes(query.toLowerCase());
+interface SymptomOption {
+  symptomCode: string;
+  symptomDescription: string;
 }
 
+function matchesSymptom(option: SymptomOption, query: string): boolean {
+  return `${option.symptomCode} ${option.symptomDescription}`.toLowerCase().includes(query.toLowerCase());
+}
+
+function matchesFault(item: FaultSymptom, query: string): boolean {
+  return `${item.faultCode} ${item.faultDescription}`.toLowerCase().includes(query.toLowerCase());
+}
 export function FaultSymptomPicker({ visible, items, loading, error, onSelect, onClose }: Props) {
   const [query, setQuery] = useState('');
+  const [selectedSymptomCode, setSelectedSymptomCode] = useState<string | null>(null);
 
-  const filtered = useMemo(() => {
+  // Reset to step one whenever the picker (re)opens, so a previous session's symptom
+  // choice doesn't linger into the next.
+  useEffect(() => {
+    if (visible) {
+      setQuery('');
+      setSelectedSymptomCode(null);
+    }
+  }, [visible]);
+
+  // Distinct symptoms (customer complaints) for step one - dedupe by symptomCode since
+  // many rows (one per possible fault) can now share the same symptom.
+  const symptomOptions = useMemo<SymptomOption[]>(() => {
     if (!items) return [];
-    if (!query.trim()) return items;
-    return items.filter((item) => matches(item, query.trim()));
-  }, [items, query]);
+    const seen = new Map<string, SymptomOption>();
+    for (const item of items) {
+      if (!seen.has(item.symptomCode)) {
+        seen.set(item.symptomCode, { symptomCode: item.symptomCode, symptomDescription: item.symptomDescription });
+      }
+    }
+    return Array.from(seen.values());
+  }, [items]);
+
+  const selectedSymptom = symptomOptions.find((option) => option.symptomCode === selectedSymptomCode);
+
+  // Step two: only the rows recorded against the chosen symptom.
+  const faultOptions = useMemo(() => {
+    if (!items || !selectedSymptomCode) return [];
+    return items.filter((item) => item.symptomCode === selectedSymptomCode);
+  }, [items, selectedSymptomCode]);
+
+  const filteredSymptoms = useMemo(() => {
+    if (!query.trim()) return symptomOptions;
+    return symptomOptions.filter((option) => matchesSymptom(option, query.trim()));
+  }, [symptomOptions, query]);
+
+  const filteredFaults = useMemo(() => {
+    if (!query.trim()) return faultOptions;
+    return faultOptions.filter((item) => matchesFault(item, query.trim()));
+  }, [faultOptions, query]);
+
+  function handleSymptomSelect(option: SymptomOption) {
+    setSelectedSymptomCode(option.symptomCode);
+    setQuery('');
+  }
+
+  function handleBack() {
+    setSelectedSymptomCode(null);
+    setQuery('');
+  }
+
+  const step: 'symptom' | 'fault' = selectedSymptomCode ? 'fault' : 'symptom';
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} testID="fault-symptom-picker">
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <View style={styles.header}>
-          <Text style={styles.title}>Select fault &amp; symptom</Text>
+          <View style={styles.headerLeft}>
+            {step === 'fault' && (
+              <Pressable onPress={handleBack} testID="fault-symptom-picker-back" hitSlop={12} style={styles.backButton}>
+                <Text style={styles.closeText}>‹ Back</Text>
+              </Pressable>
+            )}
+            <Text style={styles.title}>{step === 'symptom' ? 'Select symptom' : 'Select fault'}</Text>
+          </View>
           <Pressable onPress={onClose} testID="fault-symptom-picker-close" hitSlop={12}>
             <Text style={styles.closeText}>Close</Text>
           </Pressable>
         </View>
 
+        {step === 'fault' && selectedSymptom && (
+          <Text style={styles.subtitle}>For: {selectedSymptom.symptomDescription}</Text>
+        )}
+
         <TextInput
           style={styles.search}
-          placeholder="Search (e.g. not cooling, no power)"
+          placeholder={step === 'symptom' ? 'Search symptoms (e.g. not cooling, no power)' : 'Search faults (e.g. compressor, thermostat)'}
           value={query}
           onChangeText={setQuery}
           testID="fault-symptom-search"
@@ -57,14 +124,31 @@ export function FaultSymptomPicker({ visible, items, loading, error, onSelect, o
           </Text>
         )}
 
-        {!loading && !error && (
+        {!loading && !error && step === 'symptom' && (
           <FlatList
-            data={filtered}
+            data={filteredSymptoms}
+            keyExtractor={(option) => option.symptomCode}
+            contentContainerStyle={styles.listContent}
+            ListEmptyComponent={<Text style={styles.emptyText}>No matching symptoms.</Text>}
+            renderItem={({ item: option }) => (
+              <Pressable
+                style={styles.row}
+                onPress={() => handleSymptomSelect(option)}
+                testID={`fault-symptom-symptom-option-${option.symptomCode}`}
+              >
+                <Text style={styles.faultText}>{option.symptomDescription}</Text>
+                <Text style={styles.codeText}>{option.symptomCode}</Text>
+              </Pressable>
+            )}
+          />
+        )}
+
+        {!loading && !error && step === 'fault' && (
+          <FlatList
+            data={filteredFaults}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContent}
-            ListEmptyComponent={
-              <Text style={styles.emptyText}>No matching fault/symptom codes.</Text>
-            }
+            ListEmptyComponent={<Text style={styles.emptyText}>No matching fault codes.</Text>}
             renderItem={({ item }) => (
               <Pressable
                 style={styles.row}
@@ -95,7 +179,10 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 4,
   },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  backButton: { marginRight: 2 },
   title: { fontSize: 17, fontWeight: '700', color: '#0f172a' },
+  subtitle: { fontSize: 13, color: '#475569', paddingHorizontal: 20, paddingBottom: 4 },
   closeText: { fontSize: 15, color: '#2563eb', fontWeight: '500' },
   search: {
     marginHorizontal: 16,

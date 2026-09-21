@@ -61,12 +61,15 @@ function makeIntake(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function renderModal(onClose = vi.fn()) {
+function renderModal(onClose = vi.fn(), appointmentOverrides: Partial<Record<string, unknown>> = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <WorkshopIntakeModal appointment={makeAppointment({ id: 'appt-1', status: 'COLLECTED_TO_WS' })} onClose={onClose} />
+        <WorkshopIntakeModal
+          appointment={makeAppointment({ id: 'appt-1', status: 'COLLECTED_TO_WS', ...appointmentOverrides })}
+          onClose={onClose}
+        />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -149,7 +152,7 @@ describe('WorkshopIntakeModal', () => {
     expect(screen.queryByRole('link', { name: /Continue to Job Cards/ })).not.toBeInTheDocument();
   });
 
-  it('records fault/symptom once S/N has been captured, picked from the Fault & Symptoms master', async () => {
+  it('records fault/symptom once S/N has been captured, picked from the Fault & Symptoms master in two cascaded steps', async () => {
     vi.mocked(getWorkshopIntake).mockResolvedValue(makeIntake({ serialNumber: 'SN990000', warrantyStatus: 'IW' }));
     vi.mocked(captureWorkshopFaultSymptom).mockResolvedValue(
       makeIntake({ serialNumber: 'SN990000', warrantyStatus: 'IW', faultCode: 'F002', symptomCode: 'S002' }),
@@ -157,16 +160,63 @@ describe('WorkshopIntakeModal', () => {
     renderModal();
 
     const user = userEvent.setup();
-    const select = await screen.findByLabelText('Fault / symptom');
-    // Option text is built from the master row - proves the dropdown is sourced from
-    // listFaultSymptoms(), not a free-text box a user could type an invalid code into.
-    // findBy* (not getBy*) since the select starts disabled/"Loading…" until the query
-    // resolves.
-    const option = await screen.findByRole('option', { name: /F002 — Not draining \/ Water remains in drum/ });
-    await user.selectOptions(select, option);
+    // Step one: pick the symptom (customer complaint).
+    const symptomSelect = await screen.findByLabelText('Symptom (customer complaint)');
+    const symptomOption = await screen.findByRole('option', { name: /S002 — Water remains in drum/ });
+    await user.selectOptions(symptomSelect, symptomOption);
+
+    // Step two: only now does the Fault dropdown offer the row(s) recorded against that
+    // symptom - proves it's sourced from the master, not free text.
+    const faultSelect = await screen.findByLabelText('Fault (technician diagnosis)');
+    const faultOption = await screen.findByRole('option', { name: /F002 — Not draining/ });
+    await user.selectOptions(faultSelect, faultOption);
     await user.click(screen.getByRole('button', { name: 'Capture' }));
 
     await waitFor(() => expect(captureWorkshopFaultSymptom).toHaveBeenCalledWith('appt-1', { faultCode: 'F002', symptomCode: 'S002' }));
+  });
+
+  it('offers only the faults recorded against the chosen symptom, deduping the symptom list itself', async () => {
+    vi.mocked(getWorkshopIntake).mockResolvedValue(makeIntake({ serialNumber: 'SN990000', warrantyStatus: 'IW' }));
+    // Two faults share one symptom (S002) - the real after-sales case this feature exists
+    // for: one customer complaint, several possible diagnoses.
+    vi.mocked(listFaultSymptoms).mockResolvedValue([
+      makeFaultSymptom({ id: 'fs-1', faultCode: 'F002', faultDescription: 'Not draining' }),
+      makeFaultSymptom({ id: 'fs-2', faultCode: 'F003', faultDescription: 'Pump blocked' }),
+      makeFaultSymptom({ id: 'fs-3', faultCode: 'F010', symptomCode: 'S010', symptomDescription: 'Excess noise' }),
+    ]);
+    renderModal();
+
+    const user = userEvent.setup();
+    const symptomSelect = await screen.findByLabelText('Symptom (customer complaint)');
+    // Only ONE option per distinct symptomCode, even though S002 backs two rows. findAllBy*
+    // (not getAllBy*) since the options only render once the query resolves.
+    expect(await screen.findAllByRole('option', { name: /^S002 —/ })).toHaveLength(1);
+
+    await user.selectOptions(symptomSelect, await screen.findByRole('option', { name: /S002 —/ }));
+
+    const faultSelect = await screen.findByLabelText('Fault (technician diagnosis)');
+    expect(faultSelect).not.toBeDisabled();
+    expect(screen.getByRole('option', { name: /F002 — Not draining/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /F003 — Pump blocked/ })).toBeInTheDocument();
+    // The S010-symptom row must not leak into this symptom's fault list.
+    expect(screen.queryByRole('option', { name: /F010/ })).not.toBeInTheDocument();
+  });
+
+  it('scopes the Fault & Symptoms query to the appointment model\'s category when it has one', async () => {
+    vi.mocked(getWorkshopIntake).mockResolvedValue(makeIntake({ serialNumber: 'SN990000', warrantyStatus: 'IW' }));
+    renderModal(vi.fn(), { applianceModel: { id: 'model-1', brand: 'Samsung', model: 'WA80J5710', category: 'WASHING_MACHINE' } });
+
+    await screen.findByLabelText('Symptom (customer complaint)');
+    await waitFor(() => expect(listFaultSymptoms).toHaveBeenLastCalledWith('WASHING_MACHINE'));
+  });
+
+  it('falls back to every category, with an explanatory note, when the model has no category set', async () => {
+    vi.mocked(getWorkshopIntake).mockResolvedValue(makeIntake({ serialNumber: 'SN990000', warrantyStatus: 'IW' }));
+    renderModal(); // default fixture's applianceModel is null
+
+    await screen.findByLabelText('Symptom (customer complaint)');
+    await waitFor(() => expect(listFaultSymptoms).toHaveBeenLastCalledWith(undefined));
+    expect(screen.getByText(/no category set, so every category's symptoms are shown/)).toBeInTheDocument();
   });
 
   it('shows a fetch error instead of a free-text box if the Fault & Symptoms master fails to load', async () => {
@@ -175,6 +225,6 @@ describe('WorkshopIntakeModal', () => {
     renderModal();
 
     await screen.findByText(/Step 3/);
-    await waitFor(() => expect(screen.queryByLabelText('Fault / symptom')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText('Symptom (customer complaint)')).not.toBeInTheDocument());
   });
 });
