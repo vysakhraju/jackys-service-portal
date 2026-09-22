@@ -791,6 +791,21 @@ describe('MasterDataService', () => {
 
       expect(appointmentFieldConfigRepository.update).toHaveBeenCalledWith('1', { isMandatory: true });
     });
+
+    // Job Type split (requested 2026-09-22), Phase 6 - separate isVisible toggle.
+    it('throws NotFoundException when updating visibility on a field config that does not exist', async () => {
+      appointmentFieldConfigRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.updateAppointmentFieldConfigVisibility('missing', false)).rejects.toThrow(NotFoundException);
+    });
+
+    it('updates isVisible on an existing field config', async () => {
+      appointmentFieldConfigRepository.findOne.mockResolvedValue({ id: '1', fieldKey: 'invoiceNumber', jobType: 'INSTALLATION', isVisible: true });
+
+      await service.updateAppointmentFieldConfigVisibility('1', false);
+
+      expect(appointmentFieldConfigRepository.update).toHaveBeenCalledWith('1', { isVisible: false });
+    });
   });
 
   describe('Cancellation Reason', () => {

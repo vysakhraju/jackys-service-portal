@@ -8,7 +8,7 @@ import { NamePicker } from '../../components/pickers/NamePicker';
 import { useAuth } from '../../lib/auth';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { createPriceList, deletePriceList, listPriceLists, updatePriceList } from '../../lib/masterDataApi';
-import { APPLIANCE_CATEGORIES, JOB_TYPES, type ApplianceCategoryValue, type JobTypeValue } from '../../lib/masterDataTypes';
+import { ACTIVE_JOB_TYPES, APPLIANCE_CATEGORIES, type ApplianceCategoryValue, type JobTypeValue } from '../../lib/masterDataTypes';
 import type { CreatePriceListInput, ServicePriceList } from '../../lib/masterDataTypes';
 import { useBillingChannelOptions } from '../../lib/useBillingChannelOptions';
 
@@ -26,7 +26,7 @@ type FormValues = {
 
 const EMPTY_FORM: FormValues = {
   category: APPLIANCE_CATEGORIES[0],
-  jobType: JOB_TYPES[0],
+  jobType: ACTIVE_JOB_TYPES[0],
   priceB2B: 0,
   priceB2C: 0,
   billingChannelId: '',
@@ -185,7 +185,7 @@ export function PriceListsPage() {
             onChange={(e) => setJobTypeFilter(e.target.value as JobTypeValue | '')}
           >
             <option value="">All job types</option>
-            {JOB_TYPES.map((jt) => (
+            {ACTIVE_JOB_TYPES.map((jt) => (
               <option key={jt} value={jt}>
                 {jt.replace(/_/g, ' ')}
               </option>
@@ -255,7 +255,7 @@ export function PriceListsPage() {
             </Field>
             <Field label="Job Type">
               <select className={inputClass} disabled={!!editing} {...register('jobType', { required: true })}>
-                {JOB_TYPES.map((jt) => (
+                {ACTIVE_JOB_TYPES.map((jt) => (
                   <option key={jt} value={jt}>
                     {jt.replace(/_/g, ' ')}
                   </option>

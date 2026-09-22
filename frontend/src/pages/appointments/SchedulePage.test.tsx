@@ -1359,3 +1359,72 @@ describe('SchedulePage - New Appointment dynamic mandatory fields', () => {
     await waitFor(() => expect(updateAppointment).toHaveBeenCalled());
   });
 });
+
+
+// Job Type split (requested 2026-09-22), Phase 6 - Installation/Delivery Installation get 5
+// fields (Brand/Model, Serial number, Invoice number, Purchase date, Problem description)
+// hidden entirely, driven by a Job-Type-scoped AppointmentFieldConfig row with isVisible:
+// false, resolved the same "most specific row wins" way as the mandatory-field check above.
+describe('SchedulePage - New Appointment Job Type field visibility', () => {
+  function installationHiddenConfigs() {
+    const hidden = ['applianceModelId', 'serialNumber', 'invoiceNumber', 'purchaseDate', 'problemDescription'];
+    return hidden.map((fieldKey, i) => ({
+      id: `cfg-hidden-${i}`,
+      fieldKey,
+      fieldLabel: fieldKey,
+      isMandatory: false,
+      jobType: 'INSTALLATION',
+      isVisible: false,
+      createdAt: '',
+      updatedAt: '',
+    }));
+  }
+
+  it('shows Brand/Model, Serial number, Invoice number, Purchase date, Problem description for the default Job Type (Repair)', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue(installationHiddenConfigs() as any);
+    const form = await openCreateModal();
+
+    expect(form.getByText('Brand / Model (optional)')).toBeInTheDocument();
+    expect(form.getByText('Serial number (optional)')).toBeInTheDocument();
+    expect(form.getByText('Invoice number (optional)')).toBeInTheDocument();
+    expect(form.getByText('Purchase date (optional)')).toBeInTheDocument();
+    expect(form.getByText('Problem description (optional)')).toBeInTheDocument();
+  });
+
+  it('hides Brand/Model, Serial number, Invoice number, Purchase date, Problem description once Job Type is switched to Installation', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue(installationHiddenConfigs() as any);
+    const form = await openCreateModal();
+
+    fireEvent.change(form.getByLabelText('Job type', { exact: false }), { target: { value: 'INSTALLATION' } });
+
+    await waitFor(() => expect(form.queryByText('Brand / Model (optional)')).not.toBeInTheDocument());
+    expect(form.queryByText('Serial number (optional)')).not.toBeInTheDocument();
+    expect(form.queryByText('Invoice number (optional)')).not.toBeInTheDocument();
+    expect(form.queryByText('Purchase date (optional)')).not.toBeInTheDocument();
+    expect(form.queryByText('Problem description (optional)')).not.toBeInTheDocument();
+    // Fields with no Job-Type-scoped row stay visible - hiding is per-field, not global.
+    expect(form.getByText('Billing Channel (optional)')).toBeInTheDocument();
+  });
+
+  it('shows the hidden fields again after switching Job Type back to Repair', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue(installationHiddenConfigs() as any);
+    const form = await openCreateModal();
+
+    fireEvent.change(form.getByLabelText('Job type', { exact: false }), { target: { value: 'INSTALLATION' } });
+    await waitFor(() => expect(form.queryByText('Serial number (optional)')).not.toBeInTheDocument());
+
+    fireEvent.change(form.getByLabelText('Job type', { exact: false }), { target: { value: 'REPAIR' } });
+
+    await waitFor(() => expect(form.getByText('Serial number (optional)')).toBeInTheDocument());
+  });
+
+  it('never offers Maintenance as a Job Type option on the New Appointment popup', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue([]);
+    const form = await openCreateModal();
+
+    const jobTypeSelect = form.getByLabelText('Job type', { exact: false }) as HTMLSelectElement;
+    const optionValues = Array.from(jobTypeSelect.options).map((o) => o.value);
+    expect(optionValues).not.toContain('MAINTENANCE');
+    expect(optionValues).toEqual(['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION']);
+  });
+});

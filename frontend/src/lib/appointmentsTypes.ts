@@ -2,13 +2,15 @@
 // (src/appointments/entities/appointment.entity.ts, src/appointments/dto/*, and
 // src/technician/entities/technician-visit.entity.ts, src/technician/dto/*).
 
-import type { ApplianceCategoryValue } from './masterDataTypes';
+import type { ApplianceCategoryValue, JobTypeValue } from './masterDataTypes';
 // Price List rebuild (requested 2026-09-22, Phase 3) moved JOB_TYPES/JobTypeValue's
 // definition into masterDataTypes.ts so master-data (the Price List rebuild) and this
 // New Appointment form share ONE list instead of two that could drift - see that file's
 // own comment. Re-exported under the same name so every existing import from this file
-// keeps working unchanged.
-export { JOB_TYPES, type JobTypeValue } from './masterDataTypes';
+// keeps working unchanged. (Re-exporting alone doesn't bind the name locally - this file
+// also uses JobTypeValue itself below, e.g. on Appointment.jobType, so it's imported above
+// too, not just re-exported.)
+export { JOB_TYPES, ACTIVE_JOB_TYPES, type JobTypeValue } from './masterDataTypes';
 
 export const APPOINTMENT_TYPES = ['WARRANTY', 'OUT_OF_WARRANTY', 'AMC', 'PREVENTIVE', 'DISMANTLING','ACTIVITY'] as const;
 export type AppointmentTypeValue = (typeof APPOINTMENT_TYPES)[number];

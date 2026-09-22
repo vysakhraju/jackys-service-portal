@@ -29,6 +29,14 @@ export type ApplianceCategoryValue = (typeof APPLIANCE_CATEGORIES)[number];
 export const JOB_TYPES = ['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION', 'MAINTENANCE'] as const;
 export type JobTypeValue = (typeof JOB_TYPES)[number];
 
+// Job Type split (requested 2026-09-22), Phase 6 - MAINTENANCE soft-hidden per the locked
+// decision: it stays a valid JobType value in the database/enum (existing MAINTENANCE
+// appointments keep working untouched, including one still ON_SITE) but is dropped from
+// every picker that offers a Job Type choice for something NEW, so no one can select it
+// going forward. Use this (not JOB_TYPES) for any Job Type <select>/dropdown; keep using
+// JOB_TYPES for anything that must recognize every value the database can actually hold.
+export const ACTIVE_JOB_TYPES = JOB_TYPES.filter((t) => t !== 'MAINTENANCE') as readonly JobTypeValue[];
+
 export const NOTIFICATION_CHANNELS = ['WHATSAPP', 'EMAIL', 'SMS'] as const;
 export type NotificationChannelValue = (typeof NOTIFICATION_CHANNELS)[number];
 
@@ -386,6 +394,11 @@ export interface AppointmentFieldConfig {
   fieldKey: string;
   fieldLabel: string;
   isMandatory: boolean;
+  // Job Type split (requested 2026-09-22), Phase 6 - null means this row applies to every
+  // Job Type; a row with a jobType set overrides the null row for that Job Type only. See
+  // the backend entity's own doc comment for the full resolution rule.
+  jobType: JobTypeValue | null;
+  isVisible: boolean;
   createdAt: string;
   updatedAt: string;
 }

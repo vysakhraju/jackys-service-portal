@@ -173,18 +173,36 @@ export class AppointmentsService {
   // undefined/null/empty-string - good enough for every field type on this form today
   // (strings, dates-as-strings, UUIDs); a 0/false value never appears on any mandatory-
   // eligible field, so there's no numeric-zero/boolean-false false-positive to guard here.
+  //
+  // Job Type split (requested 2026-09-22), Phase 6: a fieldKey can now have several config
+  // rows, each scoped to a different Job Type plus one global (jobType: null) row. For each
+  // fieldKey, the row matching dto.jobType wins over the global row when both exist - same
+  // "most specific match wins" resolution the frontend popup uses (see SchedulePage.tsx's
+  // resolveFieldConfig()). A resolved row with isVisible: false is skipped even if
+  // isMandatory is somehow also true on it - a hidden field was never shown for the CCE to
+  // fill in, so it can never legitimately be enforced as mandatory.
   private async validateMandatoryFields(dto: CreateAppointmentDto): Promise<void> {
     const configs = await this.masterDataService.findAllAppointmentFieldConfigs();
-    const missingLabels: string[] = [];
+    const rowsByFieldKey = new Map<string, typeof configs>();
     for (const config of configs) {
-      if (!config.isMandatory) continue;
-      const value = (dto as unknown as Record<string, unknown>)[config.fieldKey];
+      const rows = rowsByFieldKey.get(config.fieldKey) ?? [];
+      rows.push(config);
+      rowsByFieldKey.set(config.fieldKey, rows);
+    }
+
+    const missingLabels: string[] = [];
+    for (const [fieldKey, rows] of rowsByFieldKey) {
+      const resolved =
+        rows.find((r) => r.jobType === dto.jobType) ?? rows.find((r) => r.jobType == null);
+      if (!resolved || !resolved.isMandatory || resolved.isVisible === false) continue;
+
+      const value = (dto as unknown as Record<string, unknown>)[fieldKey];
       const isMissing =
         value === undefined ||
         value === null ||
         (typeof value === 'string' && value.trim() === '');
       if (isMissing) {
-        missingLabels.push(config.fieldLabel);
+        missingLabels.push(resolved.fieldLabel);
       }
     }
     if (missingLabels.length > 0) {

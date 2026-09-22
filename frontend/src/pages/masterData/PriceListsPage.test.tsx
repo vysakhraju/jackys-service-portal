@@ -134,8 +134,13 @@ describe('PriceListsPage - list filters', () => {
     fireEvent.change(screen.getByDisplayValue('All categories'), { target: { value: 'AC' } });
     await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith('AC', undefined));
 
-    fireEvent.change(screen.getByDisplayValue('All job types'), { target: { value: 'MAINTENANCE' } });
-    await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith('AC', 'MAINTENANCE'));
+    // Job Type split (2026-09-22) Phase 6 - MAINTENANCE is soft-hidden out of every
+    // NEW-pick dropdown, including this filter (ACTIVE_JOB_TYPES, not the full JobType
+    // enum), so this filter test now exercises an active job type instead. MAINTENANCE
+    // stays a valid stored value on any pre-existing row; this filter just can no longer
+    // pick it (no live ServicePriceList rows reference it today, so nothing to filter to).
+    fireEvent.change(screen.getByDisplayValue('All job types'), { target: { value: 'INSTALLATION' } });
+    await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith('AC', 'INSTALLATION'));
   });
 });
 

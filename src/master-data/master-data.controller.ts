@@ -27,6 +27,7 @@ import { CreateCancellationReasonDto, UpdateCancellationReasonDto } from './dto/
 import { CreateApplianceModelDto, UpdateApplianceModelDto } from './dto/create-appliance-model.dto';
 import { CreateBillingChannelDto, UpdateBillingChannelDto } from './dto/create-billing-channel.dto';
 import { UpdateAppointmentFieldConfigDto } from './dto/update-appointment-field-config.dto';
+import { UpdateAppointmentFieldConfigVisibilityDto } from './dto/update-appointment-field-config-visibility.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -554,6 +555,19 @@ export class MasterDataController {
   @ApiResponse({ status: 200, type: AppointmentFieldConfig })
   updateAppointmentFieldConfig(@Param('id') id: string, @Body() data: UpdateAppointmentFieldConfigDto) {
     return this.masterDataService.updateAppointmentFieldConfig(id, data.isMandatory);
+  }
+
+  // Job Type split (requested 2026-09-22), Phase 6 - separate endpoint from the isMandatory
+  // toggle above on purpose, see UpdateAppointmentFieldConfigVisibilityDto's own doc comment.
+  @Put('appointment-field-configs/:id/visibility')
+  @RequiresCapability('MASTER_DATA_APPOINTMENT_FIELD_CONFIG_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.UPDATE, entityType: 'AppointmentFieldConfig', getEntityId: (args) => args.params?.id })
+  @ApiOperation({ summary: 'Toggle whether a (field, Job Type) row is shown on the New Appointment popup' })
+  @ApiBody({ type: UpdateAppointmentFieldConfigVisibilityDto })
+  @ApiResponse({ status: 200, type: AppointmentFieldConfig })
+  updateAppointmentFieldConfigVisibility(@Param('id') id: string, @Body() data: UpdateAppointmentFieldConfigVisibilityDto) {
+    return this.masterDataService.updateAppointmentFieldConfigVisibility(id, data.isVisible);
   }
 
   // === Cancellation Reason === (req. 3f - mobile Cancellation action's reason dropdown)

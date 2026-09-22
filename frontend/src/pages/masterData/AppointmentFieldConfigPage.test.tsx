@@ -6,10 +6,15 @@ import type { AppointmentFieldConfig } from '../../lib/masterDataTypes';
 vi.mock('../../lib/masterDataApi', () => ({
   listAppointmentFieldConfigs: vi.fn(),
   updateAppointmentFieldConfig: vi.fn(),
+  updateAppointmentFieldConfigVisibility: vi.fn(),
 }));
 vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 
-import { listAppointmentFieldConfigs, updateAppointmentFieldConfig } from '../../lib/masterDataApi';
+import {
+  listAppointmentFieldConfigs,
+  updateAppointmentFieldConfig,
+  updateAppointmentFieldConfigVisibility,
+} from '../../lib/masterDataApi';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { AppointmentFieldConfigPage } from './AppointmentFieldConfigPage';
 
@@ -24,12 +29,17 @@ function mockCapabilities(capabilities: string[], fullAccess = false) {
   });
 }
 
+// Job Type split (requested 2026-09-22), Phase 6 - jobType/isVisible default to the
+// pre-Phase-6 shape (global row, always shown) so every test written before this phase
+// keeps passing unchanged; only the new tests below override them.
 function config(overrides: Partial<AppointmentFieldConfig> = {}): AppointmentFieldConfig {
   return {
     id: 'cfg-1',
     fieldKey: 'jobType',
     fieldLabel: 'Job Type',
     isMandatory: true,
+    jobType: null,
+    isVisible: true,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -50,6 +60,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue([config(), config({ id: 'cfg-2', fieldKey: 'channel', fieldLabel: 'Channel', isMandatory: false })]);
   vi.mocked(updateAppointmentFieldConfig).mockReset();
+  vi.mocked(updateAppointmentFieldConfigVisibility).mockReset();
 });
 
 describe('AppointmentFieldConfigPage', () => {
@@ -99,5 +110,66 @@ describe('AppointmentFieldConfigPage', () => {
     renderPage();
 
     expect(await screen.findByText(/run the seed script/i)).toBeInTheDocument();
+  });
+});
+
+// Job Type split (requested 2026-09-22), Phase 6 - Job Type column/filter and the
+// separate Visible/Hidden toggle.
+describe('AppointmentFieldConfigPage - Job Type matrix', () => {
+  function jobTypeScopedRows() {
+    return [
+      config({ id: 'cfg-global', fieldKey: 'invoiceNumber', fieldLabel: 'Invoice Number', isMandatory: false, jobType: null, isVisible: true }),
+      config({
+        id: 'cfg-installation',
+        fieldKey: 'invoiceNumber',
+        fieldLabel: 'Invoice Number',
+        isMandatory: false,
+        jobType: 'INSTALLATION',
+        isVisible: false,
+      }),
+    ];
+  }
+
+  it('shows "All job types" for a global row and the Job Type name for a scoped row', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue(jobTypeScopedRows());
+    mockCapabilities(['MASTER_DATA_APPOINTMENT_FIELD_CONFIG_MANAGE']);
+    renderPage();
+
+    expect(await screen.findAllByText('All job types')).toHaveLength(1);
+    expect(screen.getByText('INSTALLATION')).toBeInTheDocument();
+  });
+
+  it('filters to only the selected Job Type\'s override rows', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue(jobTypeScopedRows());
+    mockCapabilities(['MASTER_DATA_APPOINTMENT_FIELD_CONFIG_MANAGE']);
+    renderPage();
+    await screen.findAllByText('Invoice Number');
+
+    fireEvent.change(screen.getByLabelText('Filter: Job Type'), { target: { value: 'INSTALLATION' } });
+
+    expect(screen.getAllByText('Invoice Number')).toHaveLength(1);
+    expect(screen.getByText('Hidden')).toBeInTheDocument();
+  });
+
+  it('shows the row as Hidden and disables its Mandatory switch when isVisible is false', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue(jobTypeScopedRows());
+    mockCapabilities(['MASTER_DATA_APPOINTMENT_FIELD_CONFIG_MANAGE']);
+    renderPage();
+
+    const mandatorySwitch = await screen.findByLabelText('Mandatory: Invoice Number (INSTALLATION)');
+    expect(mandatorySwitch).toBeDisabled();
+    expect(screen.getByText('Hidden')).toBeInTheDocument();
+  });
+
+  it('toggles isVisible via the Visible/Hidden switch when the caller can manage', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue(jobTypeScopedRows());
+    vi.mocked(updateAppointmentFieldConfigVisibility).mockResolvedValue(jobTypeScopedRows()[1]);
+    mockCapabilities(['MASTER_DATA_APPOINTMENT_FIELD_CONFIG_MANAGE']);
+    renderPage();
+
+    const visibilitySwitch = await screen.findByLabelText('Visible: Invoice Number (INSTALLATION)');
+    fireEvent.click(visibilitySwitch);
+
+    await waitFor(() => expect(updateAppointmentFieldConfigVisibility).toHaveBeenCalledWith('cfg-installation', true));
   });
 });

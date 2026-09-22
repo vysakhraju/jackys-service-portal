@@ -556,6 +556,15 @@ export class MasterDataService {
     return this.findAppointmentFieldConfigById(id);
   }
 
+  // Job Type split (requested 2026-09-22), Phase 6 - separate from updateAppointmentFieldConfig
+  // above on purpose (see the new DTO's own doc comment): toggles whether a (field, Job Type)
+  // row is shown on the New Appointment popup at all, independent of isMandatory.
+  async updateAppointmentFieldConfigVisibility(id: string, isVisible: boolean): Promise<AppointmentFieldConfig> {
+    await this.findAppointmentFieldConfigById(id);
+    await this.appointmentFieldConfigRepository.update(id, { isVisible });
+    return this.findAppointmentFieldConfigById(id);
+  }
+
   // Cancellation Reason - req. 3f (mobile Cancellation action's reason dropdown).
   async createCancellationReason(data: Partial<CancellationReason>): Promise<CancellationReason> {
     const existing = await this.cancellationReasonRepository.findOne({ where: { label: data.label } });

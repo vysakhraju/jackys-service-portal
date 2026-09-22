@@ -34,8 +34,8 @@ import {
   APPOINTMENT_STATUSES,
   APPOINTMENT_TYPES,
   CUSTOMER_TYPES,
+  ACTIVE_JOB_TYPES,
   GLANCE_TILES,
-  JOB_TYPES,
   WORKSHOP_SUB_STATUSES,
   type Appointment,
   type AppointmentStatusValue,
@@ -261,8 +261,19 @@ export function SchedulePage() {
     queryKey: ['master-data', 'appointment-field-configs'],
     queryFn: () => listAppointmentFieldConfigs(),
   });
-  const mandatoryFieldKeys = new Set((fieldConfigs ?? []).filter((c) => c.isMandatory).map((c) => c.fieldKey));
-  const isFieldMandatory = (key: string) => mandatoryFieldKeys.has(key);
+  // Job Type split (requested 2026-09-22), Phase 6 - a fieldKey can now have several rows
+  // (one global, jobType: null, plus one per Job Type that overrides it for that Job Type
+  // only). Resolves the most specific row for the CURRENTLY SELECTED Job Type - mirrors
+  // AppointmentsService.validateMandatoryFields()'s own resolution on the backend exactly,
+  // so the popup's asterisks/hidden fields never disagree with what the server will accept.
+  function resolveFieldConfig(key: string) {
+    const rows = (fieldConfigs ?? []).filter((c) => c.fieldKey === key);
+    return rows.find((c) => c.jobType === watchedJobType) ?? rows.find((c) => c.jobType == null);
+  }
+  const isFieldMandatory = (key: string) => resolveFieldConfig(key)?.isMandatory ?? false;
+  // A field with no config row at all defaults to visible (every pre-Phase-6 field keeps
+  // behaving exactly as before) - only an explicit isVisible: false row hides it.
+  const isFieldVisible = (key: string) => resolveFieldConfig(key)?.isVisible ?? true;
 
   const {
     data,
@@ -365,6 +376,17 @@ export function SchedulePage() {
   const watchedCityId = watch('cityId');
   const watchedApplianceModelId = watch('applianceModelId');
   const watchedBillingChannelId = watch('billingChannelId');
+  // Job Type split (requested 2026-09-22), Phase 6 - drives both the per-Job-Type field
+  // visibility below and, in edit mode, keeps MAINTENANCE selectable on an appointment
+  // that already has it (see jobTypeSelectOptions below) even though it's hidden from
+  // ACTIVE_JOB_TYPES for anything new.
+  const watchedJobType = watch('jobType');
+  // MAINTENANCE is soft-hidden (locked decision, Job Type split request): dropped from
+  // every NEW pick, but an appointment that already has it must keep showing it as its
+  // own selected option in edit mode - re-saving the form must never silently change an
+  // existing MAINTENANCE appointment's Job Type just because the option disappeared.
+  const jobTypeSelectOptions =
+    watchedJobType === 'MAINTENANCE' ? [...ACTIVE_JOB_TYPES, 'MAINTENANCE' as const] : ACTIVE_JOB_TYPES;
 
   // Phase 2 (2026-09-16, req. 1b) - which past appointment (if any) the customer-lookup
   // search below was filled in from, so a "view repair history" link can show once
@@ -557,13 +579,21 @@ export function SchedulePage() {
     // the security boundary), so a stale/unfetched config here just means the backend
     // catches it instead - never a way to bypass a mandatory field.
     if (!editTarget) {
-      const missingLabels = (fieldConfigs ?? [])
-        .filter((c) => c.isMandatory)
-        .filter((c) => {
-          const value = (values as unknown as Record<string, unknown>)[c.fieldKey];
-          return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
-        })
-        .map((c) => c.fieldLabel);
+      // Job Type split (requested 2026-09-22), Phase 6 - resolves per fieldKey the same
+      // "most specific row for values.jobType wins" way resolveFieldConfig() above does,
+      // instead of treating any isMandatory row for that fieldKey as binding regardless of
+      // Job Type. A resolved row with isVisible: false is skipped (it was never shown for
+      // the CCE to fill in - matches AppointmentsService.validateMandatoryFields()).
+      const fieldKeys = new Set((fieldConfigs ?? []).map((c) => c.fieldKey));
+      const missingLabels: string[] = [];
+      for (const fieldKey of fieldKeys) {
+        const rows = (fieldConfigs ?? []).filter((c) => c.fieldKey === fieldKey);
+        const resolved = rows.find((c) => c.jobType === values.jobType) ?? rows.find((c) => c.jobType == null);
+        if (!resolved || !resolved.isMandatory || resolved.isVisible === false) continue;
+        const value = (values as unknown as Record<string, unknown>)[fieldKey];
+        const isMissing = value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+        if (isMissing) missingLabels.push(resolved.fieldLabel);
+      }
       if (missingLabels.length > 0) {
         setMutationError(new Error(`Missing mandatory field(s): ${missingLabels.join(', ')}`));
         return;
@@ -1071,7 +1101,7 @@ export function SchedulePage() {
             </Field>
             <Field label="Job type" hint="What work is being done - independent of coverage">
               <select className={inputClass} {...register('jobType', { required: true })}>
-                {JOB_TYPES.map((t) => <option key={t} value={t}>{t.replaceAll('_', ' ')}</option>)}
+                {jobTypeSelectOptions.map((t) => <option key={t} value={t}>{t.replaceAll('_', ' ')}</option>)}
               </select>
             </Field>
           </div>
@@ -1179,17 +1209,19 @@ export function SchedulePage() {
               />
             </Field>
           </div>
-          <Field
-            label={isFieldMandatory('applianceModelId') ? 'Brand / Model *' : 'Brand / Model (optional)'}
-            hint="Search by brand or model"
-          >
-            <NamePicker
-              value={watchedApplianceModelId || null}
-              options={applianceModelOptions}
-              onChange={(id) => setValue('applianceModelId', id ?? '')}
-              placeholder="Type a brand or model…"
-            />
-          </Field>
+          {isFieldVisible('applianceModelId') && (
+            <Field
+              label={isFieldMandatory('applianceModelId') ? 'Brand / Model *' : 'Brand / Model (optional)'}
+              hint="Search by brand or model"
+            >
+              <NamePicker
+                value={watchedApplianceModelId || null}
+                options={applianceModelOptions}
+                onChange={(id) => setValue('applianceModelId', id ?? '')}
+                placeholder="Type a brand or model…"
+              />
+            </Field>
+          )}
           <Field
             label={isFieldMandatory('billingChannelId') ? 'Billing Channel *' : 'Billing Channel (optional)'}
             hint="Finance routing for B2B interdepartment billing - separate from the intake Channel above"
@@ -1201,41 +1233,51 @@ export function SchedulePage() {
               onChange={(id) => setValue('billingChannelId', id ?? '')}
             />
           </Field>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label={isFieldMandatory('serialNumber') ? 'Serial number *' : 'Serial number (optional)'} error={errors.serialNumber?.message}>
+          {(isFieldVisible('serialNumber') || isFieldVisible('invoiceNumber')) && (
+            <div className="grid grid-cols-2 gap-4">
+              {isFieldVisible('serialNumber') && (
+                <Field label={isFieldMandatory('serialNumber') ? 'Serial number *' : 'Serial number (optional)'} error={errors.serialNumber?.message}>
+                  <input
+                    className={inputClass}
+                    {...register('serialNumber')}
+                  />
+                </Field>
+              )}
+              {isFieldVisible('invoiceNumber') && (
+                <Field
+                  label={isFieldMandatory('invoiceNumber') ? 'Invoice number *' : 'Invoice number (optional)'}
+                  hint="Needed later to create a Job Card for this appointment (FR-05)"
+                  error={errors.invoiceNumber?.message}
+                >
+                  <input
+                    className={inputClass}
+                    {...register('invoiceNumber')}
+                  />
+                </Field>
+              )}
+            </div>
+          )}
+          {isFieldVisible('purchaseDate') && (
+            <Field label={isFieldMandatory('purchaseDate') ? 'Purchase date *' : 'Purchase date (optional)'} error={errors.purchaseDate?.message}>
               <input
+                type="date"
                 className={inputClass}
-                {...register('serialNumber')}
+                {...register('purchaseDate')}
               />
             </Field>
+          )}
+          {isFieldVisible('problemDescription') && (
             <Field
-              label={isFieldMandatory('invoiceNumber') ? 'Invoice number *' : 'Invoice number (optional)'}
-              hint="Needed later to create a Job Card for this appointment (FR-05)"
-              error={errors.invoiceNumber?.message}
+              label={isFieldMandatory('problemDescription') ? 'Problem description *' : 'Problem description (optional)'}
+              error={errors.problemDescription?.message}
             >
-              <input
+              <textarea
                 className={inputClass}
-                {...register('invoiceNumber')}
+                rows={2}
+                {...register('problemDescription')}
               />
             </Field>
-          </div>
-          <Field label={isFieldMandatory('purchaseDate') ? 'Purchase date *' : 'Purchase date (optional)'} error={errors.purchaseDate?.message}>
-            <input
-              type="date"
-              className={inputClass}
-              {...register('purchaseDate')}
-            />
-          </Field>
-          <Field
-            label={isFieldMandatory('problemDescription') ? 'Problem description *' : 'Problem description (optional)'}
-            error={errors.problemDescription?.message}
-          >
-            <textarea
-              className={inputClass}
-              rows={2}
-              {...register('problemDescription')}
-            />
-          </Field>
+          )}
           <Field label="Service centre" error={errors.serviceCentreId?.message}>
             <NamePicker
               value={watchedServiceCentreId || null}

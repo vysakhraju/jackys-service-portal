@@ -187,3 +187,7 @@ export const listAppointmentFieldConfigs = () =>
   api.get<AppointmentFieldConfig[]>(`${BASE}/appointment-field-configs`).then((r) => r.data);
 export const updateAppointmentFieldConfig = (id: string, isMandatory: boolean) =>
   api.put<AppointmentFieldConfig>(`${BASE}/appointment-field-configs/${id}`, { isMandatory }).then((r) => r.data);
+// Job Type split (requested 2026-09-22), Phase 6 - separate endpoint from the isMandatory
+// toggle above, see the backend DTO's own doc comment for why.
+export const updateAppointmentFieldConfigVisibility = (id: string, isVisible: boolean) =>
+  api.put<AppointmentFieldConfig>(`${BASE}/appointment-field-configs/${id}/visibility`, { isVisible }).then((r) => r.data);

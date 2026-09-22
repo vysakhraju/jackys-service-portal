@@ -256,6 +256,43 @@ describe('AppointmentsService', () => {
       const result = await service.create({ ...dto }, 'user-1');
       expect(result).toBeDefined();
     });
+
+    // Job Type split (requested 2026-09-22), Phase 6.
+    it('resolves a Job-Type-scoped row over the global row for that Job Type', async () => {
+      masterDataService.findAllAppointmentFieldConfigs.mockResolvedValue([
+        { fieldKey: 'invoiceNumber', fieldLabel: 'Invoice Number', isMandatory: false, jobType: null, isVisible: true },
+        { fieldKey: 'invoiceNumber', fieldLabel: 'Invoice Number', isMandatory: true, jobType: 'INSTALLATION', isVisible: true },
+      ]);
+
+      // REPAIR falls back to the global row (isMandatory: false) - passes.
+      serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 5 } }));
+      appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+      await expect(service.create({ ...dto, jobType: 'REPAIR' }, 'user-1')).resolves.toBeDefined();
+
+      // INSTALLATION matches its own scoped row (isMandatory: true) - rejects.
+      await expect(
+        service.create({ ...dto, jobType: 'INSTALLATION' }, 'user-1'),
+      ).rejects.toThrow('Missing mandatory field(s): Invoice Number');
+    });
+
+    it('never enforces a hidden (isVisible: false) row, even if isMandatory is also true on it', async () => {
+      masterDataService.findAllAppointmentFieldConfigs.mockResolvedValue([
+        {
+          fieldKey: 'problemDescription',
+          fieldLabel: 'Problem Description',
+          isMandatory: true,
+          jobType: 'INSTALLATION',
+          isVisible: false,
+        },
+      ]);
+      serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 5 } }));
+      appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+
+      const result = await service.create({ ...dto, jobType: 'INSTALLATION' }, 'user-1');
+      expect(result).toBeDefined();
+    });
   });
 
   describe('generateAppointmentNumber (via create)', () => {
