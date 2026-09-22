@@ -17,7 +17,7 @@ import { CreateFaultSymptomDto, UpdateFaultSymptomDto } from './dto/create-fault
 import { CreateSparePartDto } from './dto/create-spare-part.dto';
 import { CreateSparePartModelDto } from './dto/create-spare-part-model.dto';
 import { LinkSparePartModelDto } from './dto/link-spare-part-model.dto';
-import { CreatePriceListDto } from './dto/create-price-list.dto';
+import { CreatePriceListDto, UpdatePriceListDto } from './dto/create-price-list.dto';
 import { CreateKpiRuleDto } from './dto/create-kpi-rule.dto';
 import { CreateNotificationTemplateDto } from './dto/create-notification-template.dto';
 import { CreateWarrantyMasterDto } from './dto/create-warranty-master.dto';
@@ -36,7 +36,7 @@ import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { Country } from './entities/service-centre.entity';
 import { ApplianceCategory } from './entities/fault-symptom.entity';
-import { ServiceActivityType } from './entities/service-price-list.entity';
+import { JobType } from './entities/service-price-list.entity';
 import { NotificationTrigger, NotificationChannel } from './entities/notification-template.entity';
 import { RecoveryCategory } from './entities/component-yield-matrix.entity';
 import { ServiceCentre } from './entities/service-centre.entity';
@@ -286,30 +286,57 @@ export class MasterDataController {
     return this.masterDataService.findAllSparePartModels();
   }
 
-  // === Service Price List ===
+  // === Service Price List === (rebuilt 2026-09-22, Phase 3 - see
+  // service-price-list.entity.ts's own doc comment for the row-shape reasoning). Full
+  // CRUD now, matching City/BillingChannel's own MANAGE/SUPER_ADMIN split - the original
+  // design (create + list-by-activityType only) never had update/delete routes at all.
   @Post('price-lists')
   @RequiresCapability('MASTER_DATA_PRICE_LIST_MANAGE')
-  @ApiOperation({ summary: 'Create service price list' })
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.CREATE,
+    entityType: 'ServicePriceList',
+    getEntityId: (args) => `${args.body?.category}/${args.body?.jobType}`,
+  })
+  @ApiOperation({ summary: 'Create a service price list row' })
   @ApiBody({ type: CreatePriceListDto })
   @ApiResponse({ status: 201, type: ServicePriceList })
   createPriceList(@Body() data: CreatePriceListDto) {
     return this.masterDataService.createServicePriceList(data);
   }
 
-  // Gated MASTER_DATA_VIEW (2026-09-14) - confirmed only called from PriceListsPage (Master
-  // Data admin). Estimates/Invoicing compute prices via MasterDataService directly in-
-  // process, never through this HTTP route, so they're unaffected.
+  // Gated MASTER_DATA_VIEW (2026-09-14, unchanged by the Phase 3 rebuild) - confirmed
+  // only called from PriceListsPage (Master Data admin). Billing/Estimates/Invoicing
+  // don't consume this yet (Phase 4, not built), so they're unaffected either way.
   @Get('price-lists')
   @RequiresCapability('MASTER_DATA_VIEW')
-  @ApiOperation({ summary: 'Get price list by activity type' })
-  @ApiQuery({ name: 'activityType', required: true, enum: ServiceActivityType })
-  @ApiQuery({ name: 'modelId', required: false })
+  @ApiOperation({ summary: 'Get active price list rows, optionally filtered by category and/or job type' })
+  @ApiQuery({ name: 'category', required: false, enum: ApplianceCategory })
+  @ApiQuery({ name: 'jobType', required: false, enum: JobType })
   @ApiResponse({ status: 200, type: [ServicePriceList] })
-  findPriceList(
-    @Query('activityType') activityType: ServiceActivityType,
-    @Query('modelId') modelId?: string,
+  findAllPriceLists(
+    @Query('category') category?: ApplianceCategory,
+    @Query('jobType') jobType?: JobType,
   ) {
-    return this.masterDataService.findPriceList(activityType, modelId);
+    return this.masterDataService.findAllPriceLists(category, jobType);
+  }
+
+  @Put('price-lists/:id')
+  @RequiresCapability('MASTER_DATA_PRICE_LIST_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.UPDATE, entityType: 'ServicePriceList', getEntityId: (args) => args.params?.id })
+  @ApiOperation({ summary: 'Update a price list row (rates/billing channel/status - not its category or job type)' })
+  @ApiBody({ type: UpdatePriceListDto })
+  @ApiResponse({ status: 200, type: ServicePriceList })
+  updatePriceList(@Param('id') id: string, @Body() data: UpdatePriceListDto) {
+    return this.masterDataService.updatePriceList(id, data);
+  }
+
+  @Delete('price-lists/:id')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Delete a price list row (soft)' })
+  deletePriceList(@Param('id') id: string) {
+    return this.masterDataService.deletePriceList(id);
   }
 
   // === Technician KPI Rules ===

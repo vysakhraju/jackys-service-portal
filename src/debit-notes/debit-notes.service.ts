@@ -1,14 +1,14 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository } from 'typeorm';
 import { DebitNote, DebitNoteStatus } from './entities/debit-note.entity';
 import { InventoryReservation, ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
 import { SparePart } from '../master-data/entities/spare-part.entity';
-import { ServicePriceList, ServiceActivityType } from '../master-data/entities/service-price-list.entity';
+import { ServicePriceList } from '../master-data/entities/service-price-list.entity';
 import { JobCardsService } from '../job-cards/job-cards.service';
 import { JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
-import { CustomerType } from '../appointments/entities/appointment.entity';
+import { Appointment, CustomerType, JobType } from '../appointments/entities/appointment.entity';
 import { GlLedgerService } from '../gl-ledger/gl-ledger.service';
 
 @Injectable()
@@ -55,33 +55,40 @@ export class DebitNotesService {
   }
 
   /**
-   * ASSUMPTION (documented, since no direct Job-Card-to-ServicePriceList link exists
-   * yet): the interdepartment labor rate is looked up from ServicePriceList rows with
-   * activityType=REPAIR (a workshop/on-site repair job is a REPAIR activity in this
-   * schema's terms) - first trying a row matching the Job Card's model, falling back to
-   * a model-agnostic (modelId IS NULL) default REPAIR row. If neither exists, this
-   * throws rather than silently charging 0 labor - a silent 0 would understate every
-   * interdepartment recharge and is exactly the kind of gap a real Finance audit would
-   * flag, so it's a hard stop here instead.
+   * Price List rebuild (2026-09-22, Phase 3) changed the row shape to Appliance
+   * Category x Job Type (dropping the loose model text field the original design used),
+   * so this now resolves the interdepartment labor rate the same way the rest of the app
+   * resolves a Price List row: via the appointment's linked ApplianceModel.category
+   * (req. 1e's proper FK, not the legacy modelNumber string) crossed with the
+   * appointment's own jobType. `warrantyLaborCost` is the correct column for this call
+   * site specifically - getOrCreateForJobCard already only reaches here for
+   * WarrantyStatus.IN_WARRANTY jobs (see the check above), so "labor cost while under
+   * warranty" is exactly the interdepartment recharge this Debit Note is for.
+   *
+   * Both failure modes below throw rather than silently charging 0 labor - a silent 0
+   * would understate every interdepartment recharge and is exactly the kind of gap a
+   * real Finance audit would flag, so these are hard stops instead: (1) the model has no
+   * Category set yet (still a known, nullable-by-design gap from #301 - see
+   * ApplianceModel's own doc comment); (2) a Category resolves but no matching, active
+   * Price List row exists for it.
    */
-  private async resolveLaborCost(modelNumber: string | null): Promise<number> {
-    if (modelNumber) {
-      const specific = await this.priceListRepository.findOne({
-        where: { activityType: ServiceActivityType.REPAIR, modelId: modelNumber, isActive: true },
-      });
-      if (specific) {
-        return Number(specific.interdepartmentLaborCost);
-      }
+  private async resolveLaborCost(appointment: Appointment | null | undefined): Promise<number> {
+    const category = appointment?.applianceModel?.category ?? null;
+    if (!category) {
+      throw new BadRequestException(
+        "This appointment's Appliance Model has no Category set (or no model is linked at all) - set one on the Appliance Model master before a Debit Note can be generated for it.",
+      );
     }
-    const fallback = await this.priceListRepository.findOne({
-      where: { activityType: ServiceActivityType.REPAIR, modelId: IsNull(), isActive: true },
+    const jobType = appointment?.jobType ?? JobType.REPAIR;
+    const priceRow = await this.priceListRepository.findOne({
+      where: { category, jobType, isActive: true },
     });
-    if (fallback) {
-      return Number(fallback.interdepartmentLaborCost);
+    if (!priceRow) {
+      throw new BadRequestException(
+        `No active Price List row exists for ${category} / ${jobType} - add one before a Debit Note can be generated.`,
+      );
     }
-    throw new BadRequestException(
-      'No active REPAIR Service Price List entry (model-specific or default) exists to determine the interdepartment labor rate - add one before a Debit Note can be generated.',
-    );
+    return Number(priceRow.warrantyLaborCost);
   }
 
   async findById(id: string): Promise<DebitNote> {
@@ -124,7 +131,7 @@ export class DebitNotesService {
     }
 
     const sparePartsCost = await this.computeSparePartsCost(jobCardId);
-    const laborCost = await this.resolveLaborCost(jobCard.appointment?.modelNumber ?? null);
+    const laborCost = await this.resolveLaborCost(jobCard.appointment);
     const totalAmount = Math.round((sparePartsCost + laborCost) * 100) / 100;
 
     try {

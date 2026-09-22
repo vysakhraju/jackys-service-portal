@@ -2,10 +2,9 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { DebitNotesService } from './debit-notes.service';
 import { DebitNoteStatus } from './entities/debit-note.entity';
 import { ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
-import { ServiceActivityType } from '../master-data/entities/service-price-list.entity';
 import { JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
-import { CustomerType } from '../appointments/entities/appointment.entity';
+import { CustomerType, JobType } from '../appointments/entities/appointment.entity';
 
 describe('DebitNotesService', () => {
   let service: DebitNotesService;
@@ -36,7 +35,11 @@ describe('DebitNotesService', () => {
       id: 'jc-1',
       status: JobCardStatus.QC_PASSED,
       warrantyStatus: WarrantyStatus.IN_WARRANTY,
-      appointment: { customerType: CustomerType.B2B_SALES_CHANNEL, modelNumber: 'MODEL-X' },
+      appointment: {
+        customerType: CustomerType.B2B_SALES_CHANNEL,
+        jobType: JobType.REPAIR,
+        applianceModel: { category: 'REFRIGERATOR' },
+      },
       ...overrides,
     } as any);
 
@@ -120,7 +123,7 @@ describe('DebitNotesService', () => {
       sparePartRepository.findOne
         .mockResolvedValueOnce({ id: 'sp-1', unitCost: 30 })
         .mockResolvedValueOnce({ id: 'sp-2', unitCost: 40 });
-      priceListRepository.findOne.mockResolvedValue({ interdepartmentLaborCost: 50 });
+      priceListRepository.findOne.mockResolvedValue({ warrantyLaborCost: 50 });
 
       const result = await service.getOrCreateForJobCard('jc-1');
 
@@ -128,22 +131,23 @@ describe('DebitNotesService', () => {
       expect(result.sparePartsCost).toBe(100);
       expect(result.laborCost).toBe(50);
       expect(result.totalAmount).toBe(150);
+      expect(priceListRepository.findOne).toHaveBeenCalledWith({
+        where: { category: 'REFRIGERATOR', jobType: JobType.REPAIR, isActive: true },
+      });
     });
 
-    it('falls back to the model-agnostic REPAIR price list row when no model-specific one exists', async () => {
+    it('throws when the appointment has no Appliance Model / Category linked, rather than silently charging 0 labor', async () => {
       debitNoteRepository.findOne.mockResolvedValue(null);
-      jobCardsService.findById.mockResolvedValue(interdeptJobCard());
+      jobCardsService.findById.mockResolvedValue(
+        interdeptJobCard({ appointment: { customerType: CustomerType.B2B_SALES_CHANNEL, jobType: JobType.REPAIR, applianceModel: null } }),
+      );
       reservationRepository.find.mockResolvedValue([]);
-      priceListRepository.findOne
-        .mockResolvedValueOnce(null) // model-specific lookup
-        .mockResolvedValueOnce({ interdepartmentLaborCost: 75 }); // fallback lookup
 
-      const result = await service.getOrCreateForJobCard('jc-1');
-
-      expect(result.laborCost).toBe(75);
+      await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+      expect(priceListRepository.findOne).not.toHaveBeenCalled();
     });
 
-    it('throws rather than silently charging 0 labor when no REPAIR price list row exists at all', async () => {
+    it('throws rather than silently charging 0 labor when no matching Price List row exists at all', async () => {
       debitNoteRepository.findOne.mockResolvedValue(null);
       jobCardsService.findById.mockResolvedValue(interdeptJobCard());
       reservationRepository.find.mockResolvedValue([]);
@@ -156,7 +160,7 @@ describe('DebitNotesService', () => {
       debitNoteRepository.findOne.mockResolvedValue(null);
       jobCardsService.findById.mockResolvedValue(interdeptJobCard());
       reservationRepository.find.mockResolvedValue([]);
-      priceListRepository.findOne.mockResolvedValue({ interdepartmentLaborCost: 50 });
+      priceListRepository.findOne.mockResolvedValue({ warrantyLaborCost: 50 });
       queryBuilder.getOne.mockResolvedValue(debitNote({ debitNoteNumber: 'DN-0004' }));
 
       const result = await service.getOrCreateForJobCard('jc-1');
@@ -170,7 +174,7 @@ describe('DebitNotesService', () => {
         .mockResolvedValueOnce(debitNote({ id: 'dn-winner' }));
       jobCardsService.findById.mockResolvedValue(interdeptJobCard());
       reservationRepository.find.mockResolvedValue([]);
-      priceListRepository.findOne.mockResolvedValue({ interdepartmentLaborCost: 50 });
+      priceListRepository.findOne.mockResolvedValue({ warrantyLaborCost: 50 });
       debitNoteRepository.save.mockRejectedValueOnce({ code: '23505' });
 
       const result = await service.getOrCreateForJobCard('jc-1');

@@ -20,8 +20,14 @@ export const APPLIANCE_CATEGORIES = [
 ] as const;
 export type ApplianceCategoryValue = (typeof APPLIANCE_CATEGORIES)[number];
 
-export const SERVICE_ACTIVITY_TYPES = ['INSTALL', 'REPAIR', 'DEMO', 'ON_SITE', 'PM', 'DISMANTLE'] as const;
-export type ServiceActivityTypeValue = (typeof SERVICE_ACTIVITY_TYPES)[number];
+// Price List rebuild (requested 2026-09-22, Phase 3) - moved here from
+// appointmentsTypes.ts (which now just re-exports it) so master-data and the New
+// Appointment popup share ONE list instead of two that could drift, same reasoning as
+// the backend's JobType move into service-price-list.entity.ts. Retires the old,
+// separate SERVICE_ACTIVITY_TYPES list (INSTALL/REPAIR/DEMO/ON_SITE/PM/DISMANTLE) that
+// Price Lists used to key off - see PriceListsPage.tsx.
+export const JOB_TYPES = ['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION', 'MAINTENANCE'] as const;
+export type JobTypeValue = (typeof JOB_TYPES)[number];
 
 export const NOTIFICATION_CHANNELS = ['WHATSAPP', 'EMAIL', 'SMS'] as const;
 export type NotificationChannelValue = (typeof NOTIFICATION_CHANNELS)[number];
@@ -176,15 +182,20 @@ export interface CreateSparePartModelInput {
   modelName: string;
 }
 
-// === Service Price List ===
+// === Service Price List === (rebuilt 2026-09-22, Phase 3 - see the backend
+// service-price-list.entity.ts's own doc comment for the row-shape reasoning). Row key
+// is now (category, jobType) instead of (activityType, modelId); billingChannelId/Rate
+// is an optional interdepartment-billing override on that same row.
 export interface ServicePriceList {
   id: string;
-  activityType: ServiceActivityTypeValue;
-  modelId: string | null;
+  category: ApplianceCategoryValue;
+  jobType: JobTypeValue;
   priceB2B: number;
   priceB2C: number;
+  billingChannelId: string | null;
+  billingChannel: BillingChannel | null;
+  billingChannelRate: number;
   warrantyLaborCost: number;
-  interdepartmentLaborCost: number;
   currency: string | null;
   isActive: boolean;
   createdAt: string;
@@ -192,12 +203,13 @@ export interface ServicePriceList {
 }
 
 export interface CreatePriceListInput {
-  activityType: ServiceActivityTypeValue;
-  modelId?: string;
+  category: ApplianceCategoryValue;
+  jobType: JobTypeValue;
   priceB2B?: number;
   priceB2C?: number;
+  billingChannelId?: string;
+  billingChannelRate?: number;
   warrantyLaborCost?: number;
-  interdepartmentLaborCost?: number;
   currency?: string;
   isActive?: boolean;
 }

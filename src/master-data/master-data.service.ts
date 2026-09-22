@@ -22,7 +22,7 @@ import { BillingChannel } from './entities/billing-channel.entity';
 import { AppointmentFieldConfig } from './entities/appointment-field-config.entity';
 import { Country } from './entities/service-centre.entity';
 import { ApplianceCategory } from './entities/fault-symptom.entity';
-import { ServiceActivityType } from './entities/service-price-list.entity';
+import { JobType } from './entities/service-price-list.entity';
 import { NotificationTrigger, NotificationChannel } from './entities/notification-template.entity';
 import { RecoveryCategory } from './entities/component-yield-matrix.entity';
 import { User, UserStatus } from '../auth/entities/user.entity';
@@ -292,22 +292,60 @@ export class MasterDataService {
     return this.sparePartModelRepository.find({ relations: { spareParts: true } });
   }
 
-  // Service Price List
+  // Service Price List - Price List rebuild (requested 2026-09-22, Phase 3). Same
+  // create/findAll(active-only, optionally filtered)/update/soft-delete shape as City/
+  // BillingChannel above - the original design (create + list-by-activityType only, no
+  // update/delete route at all) predates this rebuild and never had one, so this is a
+  // real capability add, not just a schema change. Uniqueness is on (category, jobType)
+  // now, the entity's own doc comment covers why.
   async createServicePriceList(data: Partial<ServicePriceList>): Promise<ServicePriceList> {
+    const existing = await this.servicePriceListRepository.findOne({
+      where: { category: data.category, jobType: data.jobType },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `A price list row for ${data.category} / ${data.jobType} already exists - edit that row instead of creating a duplicate.`,
+      );
+    }
     const price = this.servicePriceListRepository.create(data);
     return this.servicePriceListRepository.save(price);
   }
 
-  async findPriceList(activityType: ServiceActivityType, modelId?: string): Promise<ServicePriceList[]> {
-    const query = this.servicePriceListRepository.createQueryBuilder('price')
-      .where('price.activityType = :activityType', { activityType })
-      .andWhere('price.isActive = :isActive', { isActive: true });
+  async findAllPriceLists(category?: ApplianceCategory, jobType?: JobType): Promise<ServicePriceList[]> {
+    const query = this.servicePriceListRepository
+      .createQueryBuilder('price')
+      .leftJoinAndSelect('price.billingChannel', 'billingChannel')
+      .where('price.isActive = :isActive', { isActive: true })
+      .orderBy('price.category', 'ASC')
+      .addOrderBy('price.jobType', 'ASC');
 
-    if (modelId) {
-      query.andWhere('price.modelId = :modelId', { modelId });
+    if (category) {
+      query.andWhere('price.category = :category', { category });
+    }
+    if (jobType) {
+      query.andWhere('price.jobType = :jobType', { jobType });
     }
 
     return query.getMany();
+  }
+
+  async findPriceListById(id: string): Promise<ServicePriceList> {
+    const price = await this.servicePriceListRepository.findOne({ where: { id }, relations: { billingChannel: true } });
+    if (!price) {
+      throw new NotFoundException(`Price list row ${id} not found`);
+    }
+    return price;
+  }
+
+  async updatePriceList(id: string, data: Partial<ServicePriceList>): Promise<ServicePriceList> {
+    await this.findPriceListById(id);
+    await this.servicePriceListRepository.update(id, data);
+    return this.findPriceListById(id);
+  }
+
+  async deletePriceList(id: string): Promise<void> {
+    await this.findPriceListById(id);
+    await this.servicePriceListRepository.update(id, { isActive: false });
   }
 
   // Technician KPI Rules

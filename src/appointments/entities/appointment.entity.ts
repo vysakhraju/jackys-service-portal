@@ -15,6 +15,14 @@ import { CancellationReason } from '../../master-data/entities/cancellation-reas
 import { ApplianceModel } from '../../master-data/entities/appliance-model.entity';
 import { User } from '../../auth/entities/user.entity';
 import { JobCard } from '../../job-cards/entities/job-card.entity';
+// Price List rebuild (2026-09-22, Phase 3) moved JobType's definition into master-data
+// (service-price-list.entity.ts) so the Price List rebuild could reuse the exact same
+// enum without a cycle back into this module - see that file's own doc comment. Re-
+// exported under the same name here so every existing `import { JobType } from
+// '../entities/appointment.entity'` (create-appointment.dto.ts, this app's own tests)
+// keeps working unchanged; the string values themselves are untouched.
+import { JobType } from '../../master-data/entities/service-price-list.entity';
+export { JobType };
 
 // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 3d/3e: COLLECTED_TO_WS
 // is the new intermediate status for the mobile "Collection to WS" action. Deliberately
@@ -58,12 +66,8 @@ export enum AppointmentType {
 // every appointment created before this field existed, and every existing consumer of
 // this app that doesn't yet pass one, behaves exactly as before (a repair visit).
 // Installation/Delivery+Installation's cost/rate logic stays parked per the request.
-export enum JobType {
-  REPAIR = 'REPAIR',
-  INSTALLATION = 'INSTALLATION',
-  DELIVERY_INSTALLATION = 'DELIVERY_INSTALLATION',
-  MAINTENANCE = 'MAINTENANCE',
-}
+// (JobType itself is now defined in master-data/entities/service-price-list.entity.ts
+// and imported/re-exported above - see that import's own comment.)
 
 // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 1d/5: purely
 // informational going forward - VAT stays Service Centre-driven, unchanged (spec doc

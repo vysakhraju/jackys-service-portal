@@ -94,13 +94,19 @@ export const createSparePartModel = (data: CreateSparePartModelInput) =>
 export const listFieldTechnicians = () =>
   api.get<{ id: string; name: string }[]>(`${BASE}/service-centres/field-technicians`).then((r) => r.data);
 
-// === Service Price List (create; list REQUIRES activityType — no unfiltered list route) ===
-export const getPriceList = (activityType: string, modelId?: string) =>
+// === Service Price List (full CRUD, Price List rebuild 2026-09-22 Phase 3) — grid is
+// Appliance Category x Job Type, one row per pair, same CRUD shape as Billing Channel's
+// own block above. List takes optional category/jobType filters (both ungated, same
+// "every screen that needs the dropdown can read it" rule as City/BillingChannel). ===
+export const listPriceLists = (category?: string, jobType?: string) =>
   api
-    .get<ServicePriceList[]>(`${BASE}/price-lists`, { params: { activityType, modelId: modelId || undefined } })
+    .get<ServicePriceList[]>(`${BASE}/price-lists`, { params: { category: category || undefined, jobType: jobType || undefined } })
     .then((r) => r.data);
 export const createPriceList = (data: CreatePriceListInput) =>
   api.post<ServicePriceList>(`${BASE}/price-lists`, data).then((r) => r.data);
+export const updatePriceList = (id: string, data: Partial<CreatePriceListInput>) =>
+  api.put<ServicePriceList>(`${BASE}/price-lists/${id}`, data).then((r) => r.data);
+export const deletePriceList = (id: string) => api.delete(`${BASE}/price-lists/${id}`).then((r) => r.data);
 
 // === Technician KPI Rules (create + list; no update/delete) ===
 export const listKpiRules = () => api.get<TechnicianKpiRule[]>(`${BASE}/kpi-rules`).then((r) => r.data);

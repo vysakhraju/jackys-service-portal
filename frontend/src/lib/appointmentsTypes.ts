@@ -3,6 +3,12 @@
 // src/technician/entities/technician-visit.entity.ts, src/technician/dto/*).
 
 import type { ApplianceCategoryValue } from './masterDataTypes';
+// Price List rebuild (requested 2026-09-22, Phase 3) moved JOB_TYPES/JobTypeValue's
+// definition into masterDataTypes.ts so master-data (the Price List rebuild) and this
+// New Appointment form share ONE list instead of two that could drift - see that file's
+// own comment. Re-exported under the same name so every existing import from this file
+// keeps working unchanged.
+export { JOB_TYPES, type JobTypeValue } from './masterDataTypes';
 
 export const APPOINTMENT_TYPES = ['WARRANTY', 'OUT_OF_WARRANTY', 'AMC', 'PREVENTIVE', 'DISMANTLING','ACTIVITY'] as const;
 export type AppointmentTypeValue = (typeof APPOINTMENT_TYPES)[number];
@@ -52,11 +58,8 @@ export const GLANCE_TILES: readonly {
   { key: 'pendingJobCreation', label: 'Pending Job Creation', statusValue: 'PENDING_JOB_CREATION' },
 ];
 
-// Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 1) - orthogonal to
-// AppointmentTypeValue (coverage: Warranty/AMC/etc), mirrors the new JobType enum on the
-// backend entity. Defaults to REPAIR (the DB column default) when omitted.
-export const JOB_TYPES = ['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION', 'MAINTENANCE'] as const;
-export type JobTypeValue = (typeof JOB_TYPES)[number];
+// (JOB_TYPES/JobTypeValue - orthogonal to AppointmentTypeValue, coverage: Warranty/AMC/
+// etc - are now defined in masterDataTypes.ts and re-exported above.)
 
 // Informational only (decision #5 in the spec doc) - never used for VAT, which stays
 // Service Centre-driven. Mirrors the new AppointmentCountry enum on the backend entity.

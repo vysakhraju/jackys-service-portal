@@ -5,53 +5,85 @@ import { ActiveBadge, DataTable, ErrorNotice, type Column } from '../../componen
 import { Checkbox, Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { NamePicker } from '../../components/pickers/NamePicker';
-import { createPriceList, getPriceList } from '../../lib/masterDataApi';
-import { SERVICE_ACTIVITY_TYPES, type CreatePriceListInput, type ServicePriceList } from '../../lib/masterDataTypes';
-import { useSparePartModelOptions } from '../../lib/useSparePartModelOptions';
+import { useAuth } from '../../lib/auth';
+import { useMyCapabilities } from '../../lib/useMyCapabilities';
+import { createPriceList, deletePriceList, listPriceLists, updatePriceList } from '../../lib/masterDataApi';
+import { APPLIANCE_CATEGORIES, JOB_TYPES, type ApplianceCategoryValue, type JobTypeValue } from '../../lib/masterDataTypes';
+import type { CreatePriceListInput, ServicePriceList } from '../../lib/masterDataTypes';
+import { useBillingChannelOptions } from '../../lib/useBillingChannelOptions';
 
 type FormValues = {
-  activityType: string;
-  modelId: string;
+  category: ApplianceCategoryValue;
+  jobType: JobTypeValue;
   priceB2B: number;
   priceB2C: number;
+  billingChannelId: string;
+  billingChannelRate: number;
   warrantyLaborCost: number;
-  interdepartmentLaborCost: number;
   currency: string;
   isActive: boolean;
 };
 
+const EMPTY_FORM: FormValues = {
+  category: APPLIANCE_CATEGORIES[0],
+  jobType: JOB_TYPES[0],
+  priceB2B: 0,
+  priceB2C: 0,
+  billingChannelId: '',
+  billingChannelRate: 0,
+  warrantyLaborCost: 0,
+  currency: '',
+  isActive: true,
+};
+
+function toPayload(values: FormValues): CreatePriceListInput {
+  return {
+    category: values.category,
+    jobType: values.jobType,
+    priceB2B: values.priceB2B,
+    priceB2C: values.priceB2C,
+    billingChannelId: values.billingChannelId || undefined,
+    billingChannelRate: values.billingChannelRate,
+    warrantyLaborCost: values.warrantyLaborCost,
+    currency: values.currency.trim() || undefined,
+    isActive: values.isActive,
+  };
+}
+
+// Price List rebuild (requested 2026-09-22, Phase 3) - full replacement of the original
+// (2026-09-14) ServiceActivityType/modelId design. Grid is now Appliance Category x Job
+// Type (one row per pair, enforced unique server-side), with B2B price / B2C price / an
+// optional Billing Channel + its own interdepartment rate, same CRUD shape and
+// capability/role gating as BillingChannelsPage.tsx (its own exact template).
 export function PriceListsPage() {
   const queryClient = useQueryClient();
+  const { has } = useMyCapabilities();
+  const { user } = useAuth();
+  const canManage = has('MASTER_DATA_PRICE_LIST_MANAGE');
+  const canDelete = user?.role.name === 'SUPER_ADMIN';
+
+  const [categoryFilter, setCategoryFilter] = useState<ApplianceCategoryValue | ''>('');
+  const [jobTypeFilter, setJobTypeFilter] = useState<JobTypeValue | ''>('');
+
   const [modalOpen, setModalOpen] = useState(false);
-  const [activityType, setActivityType] = useState<string>(SERVICE_ACTIVITY_TYPES[0]);
-  const [modelIdFilter, setModelIdFilter] = useState('');
+  const [editing, setEditing] = useState<ServicePriceList | null>(null);
   const [mutationError, setMutationError] = useState<unknown>(null);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['price-lists', activityType, modelIdFilter],
-    queryFn: () => getPriceList(activityType, modelIdFilter || undefined),
+    queryKey: ['price-lists', categoryFilter, jobTypeFilter],
+    queryFn: () => listPriceLists(categoryFilter || undefined, jobTypeFilter || undefined),
   });
+
+  const billingChannelOptions = useBillingChannelOptions();
 
   const {
     register,
     handleSubmit,
     reset,
-    setValue,
     watch,
+    setValue,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
-    defaultValues: {
-      activityType: SERVICE_ACTIVITY_TYPES[0],
-      modelId: '',
-      priceB2B: 0,
-      priceB2C: 0,
-      warrantyLaborCost: 0,
-      interdepartmentLaborCost: 0,
-      currency: 'AED',
-      isActive: true,
-    },
-  });
-  const modelOptions = useSparePartModelOptions();
+  } = useForm<FormValues>({ defaultValues: EMPTY_FORM });
 
   const createMutation = useMutation({
     mutationFn: (data: CreatePriceListInput) => createPriceList(data),
@@ -62,57 +94,112 @@ export function PriceListsPage() {
     onError: (err) => setMutationError(err),
   });
 
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<CreatePriceListInput> }) => updatePriceList(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['price-lists'] });
+      setModalOpen(false);
+    },
+    onError: (err) => setMutationError(err),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deletePriceList(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['price-lists'] }),
+  });
+
   function openCreate() {
+    setEditing(null);
     setMutationError(null);
-    reset();
+    reset(EMPTY_FORM);
     setModalOpen(true);
   }
 
+  function openEdit(row: ServicePriceList) {
+    setEditing(row);
+    setMutationError(null);
+    reset({
+      category: row.category,
+      jobType: row.jobType,
+      priceB2B: row.priceB2B,
+      priceB2C: row.priceB2C,
+      billingChannelId: row.billingChannelId ?? '',
+      billingChannelRate: row.billingChannelRate,
+      warrantyLaborCost: row.warrantyLaborCost,
+      currency: row.currency ?? '',
+      isActive: row.isActive,
+    });
+    setModalOpen(true);
+  }
+
+  function closeModal() {
+    setModalOpen(false);
+  }
+
+  function onSubmit(values: FormValues) {
+    const payload = toPayload(values);
+    if (editing) {
+      updateMutation.mutate({ id: editing.id, data: payload });
+    } else {
+      createMutation.mutate(payload);
+    }
+  }
+
   const columns: Column<ServicePriceList>[] = [
-    { key: 'activityType', label: 'Activity', render: (r) => <span className="font-medium text-slate-900">{r.activityType}</span> },
-    { key: 'modelId', label: 'Model ID', render: (r) => r.modelId ?? 'All models' },
-    { key: 'priceB2B', label: 'B2B', render: (r) => Number(r.priceB2B).toFixed(2) },
-    { key: 'priceB2C', label: 'B2C', render: (r) => Number(r.priceB2C).toFixed(2) },
-    { key: 'warrantyLabor', label: 'Warranty labor', render: (r) => Number(r.warrantyLaborCost).toFixed(2) },
-    { key: 'interdeptLabor', label: 'Interdept labor', render: (r) => Number(r.interdepartmentLaborCost).toFixed(2) },
+    { key: 'category', label: 'Category', render: (r) => r.category.replace(/_/g, ' ') },
+    { key: 'jobType', label: 'Job Type', render: (r) => r.jobType.replace(/_/g, ' ') },
+    { key: 'priceB2B', label: 'B2B Price', render: (r) => Number(r.priceB2B).toFixed(2) },
+    { key: 'priceB2C', label: 'B2C Price', render: (r) => Number(r.priceB2C).toFixed(2) },
+    { key: 'billingChannel', label: 'Billing Channel', render: (r) => r.billingChannel?.name ?? '—' },
+    { key: 'billingChannelRate', label: 'Channel Rate', render: (r) => Number(r.billingChannelRate).toFixed(2) },
+    { key: 'warrantyLaborCost', label: 'Warranty Labor', render: (r) => Number(r.warrantyLaborCost).toFixed(2) },
     { key: 'currency', label: 'Currency', render: (r) => r.currency ?? '—' },
     { key: 'status', label: 'Status', render: (r) => <ActiveBadge active={r.isActive} /> },
   ];
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <p className="text-sm text-slate-500">
-          Pricing by service activity type. The backend only exposes "list by activity type" —
-          pick one below to see its price rows.
-        </p>
-        <button
-          onClick={openCreate}
-          className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
-        >
-          + New Price Row
-        </button>
-      </div>
-
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <label className="text-xs font-medium text-slate-500">Activity type</label>
-        <select className={`${inputClass} w-auto`} value={activityType} onChange={(e) => setActivityType(e.target.value)}>
-          {SERVICE_ACTIVITY_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t.replace(/_/g, ' ')}
-            </option>
-          ))}
-        </select>
-        <label className="ml-2 text-xs font-medium text-slate-500">Model (optional)</label>
-        <div className="w-56">
-          <NamePicker
-            value={modelIdFilter || null}
-            options={modelOptions.options}
-            loading={modelOptions.loading}
-            onChange={(id) => setModelIdFilter(id ?? '')}
-            getOptionSubtext={(o) => o.id}
-          />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-sm text-slate-500">
+            Price List — one row per Appliance Category x Job Type, with B2B/B2C pricing and an optional Billing
+            Channel rate for interdepartment routing.
+          </p>
+          <label className="text-xs font-medium text-slate-500">Category</label>
+          <select
+            className={`${inputClass} w-auto`}
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value as ApplianceCategoryValue | '')}
+          >
+            <option value="">All categories</option>
+            {APPLIANCE_CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {c.replace(/_/g, ' ')}
+              </option>
+            ))}
+          </select>
+          <label className="text-xs font-medium text-slate-500">Job Type</label>
+          <select
+            className={`${inputClass} w-auto`}
+            value={jobTypeFilter}
+            onChange={(e) => setJobTypeFilter(e.target.value as JobTypeValue | '')}
+          >
+            <option value="">All job types</option>
+            {JOB_TYPES.map((jt) => (
+              <option key={jt} value={jt}>
+                {jt.replace(/_/g, ' ')}
+              </option>
+            ))}
+          </select>
         </div>
+        {canManage && (
+          <button
+            onClick={openCreate}
+            className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            + New Price Row
+          </button>
+        )}
       </div>
 
       <DataTable
@@ -120,73 +207,127 @@ export function PriceListsPage() {
         rows={data}
         isLoading={isLoading}
         error={error}
-        emptyMessage={`No price rows for ${activityType.replace(/_/g, ' ')} yet.`}
+        emptyMessage="No price list rows yet — create the first one."
+        rowActions={
+          canManage || canDelete
+            ? (row) => (
+                <div className="flex justify-end gap-3">
+                  {canManage && (
+                    <button onClick={() => openEdit(row)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
+                      Edit
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      onClick={() => {
+                        if (confirm(`Delete the price row for ${row.category.replace(/_/g, ' ')} / ${row.jobType.replace(/_/g, ' ')}? This is a soft delete.`)) {
+                          deleteMutation.mutate(row.id);
+                        }
+                      }}
+                      className="text-xs font-medium text-red-500 hover:text-red-700"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              )
+            : undefined
+        }
       />
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="New Price List Row">
-        <form
-          onSubmit={handleSubmit((values) =>
-            createMutation.mutate({ ...values, activityType: values.activityType as CreatePriceListInput['activityType'] }),
-          )}
-          className="space-y-4"
-        >
+      <Modal
+        open={modalOpen}
+        onClose={closeModal}
+        title={editing ? `Edit ${editing.category.replace(/_/g, ' ')} / ${editing.jobType.replace(/_/g, ' ')}` : 'New Price Row'}
+      >
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <ErrorNotice error={mutationError} />
+
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Activity type">
-              <select className={inputClass} {...register('activityType', { required: true })}>
-                {SERVICE_ACTIVITY_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t.replace(/_/g, ' ')}
+            <Field label="Appliance Category">
+              <select className={inputClass} disabled={!!editing} {...register('category', { required: true })}>
+                {APPLIANCE_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c.replace(/_/g, ' ')}
                   </option>
                 ))}
               </select>
             </Field>
-            <Field label="Model" hint="Leave blank for a price that applies to all models">
-              <NamePicker
-                value={watch('modelId') || null}
-                options={modelOptions.options}
-                loading={modelOptions.loading}
-                onChange={(id) => setValue('modelId', id ?? '')}
-                getOptionSubtext={(o) => o.id}
-              />
+            <Field label="Job Type">
+              <select className={inputClass} disabled={!!editing} {...register('jobType', { required: true })}>
+                {JOB_TYPES.map((jt) => (
+                  <option key={jt} value={jt}>
+                    {jt.replace(/_/g, ' ')}
+                  </option>
+                ))}
+              </select>
             </Field>
           </div>
+
           <div className="grid grid-cols-2 gap-4">
-            <Field label="B2B price" error={errors.priceB2B?.message}>
-              <input type="number" step="0.01" className={inputClass} {...register('priceB2B', { valueAsNumber: true })} />
-            </Field>
-            <Field label="B2C price">
-              <input type="number" step="0.01" className={inputClass} {...register('priceB2C', { valueAsNumber: true })} />
-            </Field>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Warranty labor cost">
-              <input type="number" step="0.01" className={inputClass} {...register('warrantyLaborCost', { valueAsNumber: true })} />
-            </Field>
-            <Field label="Interdepartment labor cost">
+            <Field label="B2B Price" error={errors.priceB2B?.message}>
               <input
                 type="number"
                 step="0.01"
                 className={inputClass}
-                {...register('interdepartmentLaborCost', { valueAsNumber: true })}
+                {...register('priceB2B', { valueAsNumber: true, min: { value: 0, message: 'Must be 0 or more' } })}
+              />
+            </Field>
+            <Field label="B2C Price" error={errors.priceB2C?.message}>
+              <input
+                type="number"
+                step="0.01"
+                className={inputClass}
+                {...register('priceB2C', { valueAsNumber: true, min: { value: 0, message: 'Must be 0 or more' } })}
               />
             </Field>
           </div>
-          <Field label="Currency">
-            <input className={inputClass} placeholder="AED" {...register('currency')} />
-          </Field>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Billing Channel (optional)" hint="For B2B interdepartment routing — leave blank if not applicable">
+              <NamePicker
+                value={watch('billingChannelId') || null}
+                options={billingChannelOptions.options}
+                loading={billingChannelOptions.loading}
+                onChange={(id) => setValue('billingChannelId', id ?? '')}
+              />
+            </Field>
+            <Field label="Billing Channel Rate" error={errors.billingChannelRate?.message}>
+              <input
+                type="number"
+                step="0.01"
+                className={inputClass}
+                {...register('billingChannelRate', { valueAsNumber: true, min: { value: 0, message: 'Must be 0 or more' } })}
+              />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Warranty Labor Cost" error={errors.warrantyLaborCost?.message}>
+              <input
+                type="number"
+                step="0.01"
+                className={inputClass}
+                {...register('warrantyLaborCost', { valueAsNumber: true, min: { value: 0, message: 'Must be 0 or more' } })}
+              />
+            </Field>
+            <Field label="Currency">
+              <input className={inputClass} placeholder="AED" {...register('currency')} />
+            </Field>
+          </div>
+
           <Checkbox label="Active" {...register('isActive')} />
 
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={() => setModalOpen(false)} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600">
+            <button type="button" onClick={closeModal} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600">
               Cancel
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || createMutation.isPending}
+              disabled={isSubmitting || createMutation.isPending || updateMutation.isPending}
               className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
-              Create
+              {editing ? 'Save changes' : 'Create'}
             </button>
           </div>
         </form>

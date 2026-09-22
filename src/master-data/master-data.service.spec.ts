@@ -404,33 +404,71 @@ describe('MasterDataService', () => {
     });
   });
 
+  // Price List rebuild (requested 2026-09-22, Phase 3) - full CRUD + uniqueness on
+  // (category, jobType), replacing the old activityType/modelId shape.
   describe('Service Price List', () => {
-    it('creates a price list entry', async () => {
-      const result = await service.createServicePriceList({ activityType: 'REPAIR' as any });
-      expect(result).toEqual(expect.objectContaining({ activityType: 'REPAIR' }));
+    it('creates a price list row when the category/jobType combo is unused', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createServicePriceList({ category: 'AC' as any, jobType: 'REPAIR' as any });
+
+      expect(servicePriceListRepository.findOne).toHaveBeenCalledWith({
+        where: { category: 'AC', jobType: 'REPAIR' },
+      });
+      expect(result).toEqual(expect.objectContaining({ category: 'AC', jobType: 'REPAIR' }));
     });
 
-    it('filters by activity type and active status, optionally by model', async () => {
+    it('throws ConflictException when a row for that category/jobType already exists', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue({ id: 'existing' });
+
+      await expect(
+        service.createServicePriceList({ category: 'AC' as any, jobType: 'REPAIR' as any }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('filters active rows, optionally by category and/or job type', async () => {
       const qb = buildQb([{ id: '1' }], true);
       servicePriceListRepository.createQueryBuilder.mockReturnValue(qb);
 
-      await service.findPriceList('REPAIR' as any, 'model-1');
+      const result = await service.findAllPriceLists('AC' as any, 'REPAIR' as any);
 
-      expect(qb.where).toHaveBeenCalledWith('price.activityType = :activityType', { activityType: 'REPAIR' });
-      expect(qb.andWhere).toHaveBeenCalledWith('price.isActive = :isActive', { isActive: true });
-      expect(qb.andWhere).toHaveBeenCalledWith('price.modelId = :modelId', { modelId: 'model-1' });
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('price.billingChannel', 'billingChannel');
+      expect(qb.where).toHaveBeenCalledWith('price.isActive = :isActive', { isActive: true });
+      expect(qb.andWhere).toHaveBeenCalledWith('price.category = :category', { category: 'AC' });
+      expect(qb.andWhere).toHaveBeenCalledWith('price.jobType = :jobType', { jobType: 'REPAIR' });
+      expect(result).toEqual([{ id: '1' }]);
     });
 
-    it('skips the model filter when no modelId is given', async () => {
+    it('skips both filters when neither category nor jobType is given', async () => {
       const qb = buildQb([], true);
       servicePriceListRepository.createQueryBuilder.mockReturnValue(qb);
 
-      await service.findPriceList('REPAIR' as any);
+      await service.findAllPriceLists();
 
-      expect(qb.andWhere).not.toHaveBeenCalledWith(
-        expect.stringContaining('modelId'),
-        expect.anything(),
-      );
+      expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('category'), expect.anything());
+      expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('jobType'), expect.anything());
+    });
+
+    it('throws NotFoundException for a missing price list row', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.findPriceListById('missing')).rejects.toThrow(NotFoundException);
+    });
+
+    it('updates rates/status on an existing row', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue({ id: '1', category: 'AC', jobType: 'REPAIR' });
+
+      await service.updatePriceList('1', { priceB2B: 150 });
+
+      expect(servicePriceListRepository.update).toHaveBeenCalledWith('1', { priceB2B: 150 });
+    });
+
+    it('soft-deletes an existing row', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue({ id: '1', category: 'AC', jobType: 'REPAIR' });
+
+      await service.deletePriceList('1');
+
+      expect(servicePriceListRepository.update).toHaveBeenCalledWith('1', { isActive: false });
     });
   });
 
