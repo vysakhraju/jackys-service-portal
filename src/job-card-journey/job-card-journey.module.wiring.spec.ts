@@ -45,6 +45,11 @@ import { ComponentYieldMatrix } from '../master-data/entities/component-yield-ma
 import { City } from '../master-data/entities/city.entity';
 import { CancellationReason } from '../master-data/entities/cancellation-reason.entity';
 import { ApplianceModel } from '../master-data/entities/appliance-model.entity';
+// Master-Data/New-Appointment billing modification (requested 2026-09-21) Phase 1 - new
+// master-data entities, registered in MasterDataModule's TypeOrmModule.forFeature
+// alongside City/CancellationReason/ApplianceModel above.
+import { BillingChannel } from '../master-data/entities/billing-channel.entity';
+import { AppointmentFieldConfig } from '../master-data/entities/appointment-field-config.entity';
 import { UserPermissionGrant } from '../permissions/entities/user-permission-grant.entity';
 import { GlPosting } from '../gl-ledger/entities/gl-posting.entity';
 // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4) - JobCardsModule now also
@@ -122,6 +127,8 @@ describe('JobCardJourneyModule wiring', () => {
       City,
       CancellationReason,
       ApplianceModel,
+      BillingChannel,
+      AppointmentFieldConfig,
       WorkshopIntake,
     ];
 

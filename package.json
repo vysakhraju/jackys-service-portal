@@ -20,7 +20,8 @@
     "cleanup:users": "ts-node -T scripts/cleanup-test-users.ts",
     "release:stale-reservations": "ts-node -T scripts/release-stale-reservations.ts",
     "seed:role-permissions": "ts-node -T scripts/seed-role-permissions.ts",
-    "seed:cancellation-reasons": "ts-node -T scripts/seed-cancellation-reasons.ts"
+    "seed:cancellation-reasons": "ts-node -T scripts/seed-cancellation-reasons.ts",
+    "seed:appointment-field-config": "ts-node -T scripts/seed-appointment-field-config.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.1",

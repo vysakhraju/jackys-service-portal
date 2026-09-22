@@ -14,6 +14,8 @@ import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
 import { City } from './entities/city.entity';
 import { CancellationReason } from './entities/cancellation-reason.entity';
 import { ApplianceModel } from './entities/appliance-model.entity';
+import { BillingChannel } from './entities/billing-channel.entity';
+import { AppointmentFieldConfig } from './entities/appointment-field-config.entity';
 import { User } from '../auth/entities/user.entity';
 import { AuthModule } from '../auth/auth.module';
 
@@ -36,6 +38,10 @@ import { AuthModule } from '../auth/auth.module';
       City,
       CancellationReason,
       ApplianceModel,
+      // Master-Data/New-Appointment billing modification (requested 2026-09-21) Phase 1 -
+      // Billing Channel master (req. 4) and the mandatory-field config table (req. 1).
+      BillingChannel,
+      AppointmentFieldConfig,
       // #218/#253: listActiveFieldTechnicians() below backs the Service Centres page's
       // field-technician picker - CCE (who can create/update service centres) has no
       // access to GET /users (admin-only) or GET /technician-schedule/gantt (Team-Leader-

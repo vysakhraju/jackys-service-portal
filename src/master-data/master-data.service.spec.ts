@@ -15,6 +15,8 @@ describe('MasterDataService', () => {
   let cityRepository: any;
   let cancellationReasonRepository: any;
   let applianceModelRepository: any;
+  let billingChannelRepository: any;
+  let appointmentFieldConfigRepository: any;
   let userRepository: any;
 
   const buildQb = (result: any, isMany = false) => ({
@@ -52,6 +54,8 @@ describe('MasterDataService', () => {
     cityRepository = repoFactory();
     cancellationReasonRepository = repoFactory();
     applianceModelRepository = repoFactory();
+    billingChannelRepository = repoFactory();
+    appointmentFieldConfigRepository = repoFactory();
     userRepository = repoFactory();
 
     service = new MasterDataService(
@@ -67,6 +71,8 @@ describe('MasterDataService', () => {
       cityRepository,
       cancellationReasonRepository,
       applianceModelRepository,
+      billingChannelRepository,
+      appointmentFieldConfigRepository,
       userRepository,
     );
   });
@@ -654,6 +660,77 @@ describe('MasterDataService', () => {
       await service.deleteCity('1');
 
       expect(cityRepository.update).toHaveBeenCalledWith('1', { isActive: false });
+    });
+  });
+
+  // Master-Data/New-Appointment billing modification (requested 2026-09-21) Phase 1 -
+  // same create/findAll(active-only)/update/soft-delete shape as City above.
+  describe('Billing Channel', () => {
+    it('creates a billing channel when the name is not already used', async () => {
+      billingChannelRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createBillingChannel({ name: 'Corporate Interdepartment' });
+
+      expect(billingChannelRepository.save).toHaveBeenCalled();
+      expect(result).toMatchObject({ name: 'Corporate Interdepartment' });
+    });
+
+    it('throws ConflictException when the name is already used', async () => {
+      billingChannelRepository.findOne.mockResolvedValue({ id: 'existing', name: 'Retail' });
+
+      await expect(service.createBillingChannel({ name: 'Retail' })).rejects.toThrow(ConflictException);
+    });
+
+    it('finds only active billing channels', async () => {
+      billingChannelRepository.find.mockResolvedValue([{ id: '1', name: 'Retail', isActive: true }]);
+
+      const result = await service.findAllBillingChannels();
+
+      expect(billingChannelRepository.find).toHaveBeenCalledWith({
+        where: { isActive: true },
+        order: { name: 'ASC' },
+      });
+      expect(result).toHaveLength(1);
+    });
+
+    it('throws NotFoundException when updating a billing channel that does not exist', async () => {
+      billingChannelRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.updateBillingChannel('missing', { name: 'X' })).rejects.toThrow(NotFoundException);
+    });
+
+    it('soft-deletes (deactivates) a billing channel rather than removing the row', async () => {
+      billingChannelRepository.findOne.mockResolvedValue({ id: '1', name: 'Retail', isActive: true });
+
+      await service.deleteBillingChannel('1');
+
+      expect(billingChannelRepository.update).toHaveBeenCalledWith('1', { isActive: false });
+    });
+  });
+
+  // Same request, req. 1 - only isMandatory is ever updated, no create/delete route.
+  describe('Appointment Field Config', () => {
+    it('lists all field configs ordered by label', async () => {
+      appointmentFieldConfigRepository.find.mockResolvedValue([{ id: '1', fieldKey: 'jobType', isMandatory: true }]);
+
+      const result = await service.findAllAppointmentFieldConfigs();
+
+      expect(appointmentFieldConfigRepository.find).toHaveBeenCalledWith({ order: { fieldLabel: 'ASC' } });
+      expect(result).toHaveLength(1);
+    });
+
+    it('throws NotFoundException when updating a field config that does not exist', async () => {
+      appointmentFieldConfigRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.updateAppointmentFieldConfig('missing', true)).rejects.toThrow(NotFoundException);
+    });
+
+    it('updates isMandatory on an existing field config', async () => {
+      appointmentFieldConfigRepository.findOne.mockResolvedValue({ id: '1', fieldKey: 'jobType', isMandatory: false });
+
+      await service.updateAppointmentFieldConfig('1', true);
+
+      expect(appointmentFieldConfigRepository.update).toHaveBeenCalledWith('1', { isMandatory: true });
     });
   });
 

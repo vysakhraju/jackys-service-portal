@@ -18,6 +18,8 @@ import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
 import { City } from './entities/city.entity';
 import { CancellationReason } from './entities/cancellation-reason.entity';
 import { ApplianceModel } from './entities/appliance-model.entity';
+import { BillingChannel } from './entities/billing-channel.entity';
+import { AppointmentFieldConfig } from './entities/appointment-field-config.entity';
 import { Country } from './entities/service-centre.entity';
 import { ApplianceCategory } from './entities/fault-symptom.entity';
 import { ServiceActivityType } from './entities/service-price-list.entity';
@@ -53,6 +55,10 @@ export class MasterDataService {
     private cancellationReasonRepository: Repository<CancellationReason>,
     @InjectRepository(ApplianceModel)
     private applianceModelRepository: Repository<ApplianceModel>,
+    @InjectRepository(BillingChannel)
+    private billingChannelRepository: Repository<BillingChannel>,
+    @InjectRepository(AppointmentFieldConfig)
+    private appointmentFieldConfigRepository: Repository<AppointmentFieldConfig>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
   ) {}
@@ -452,6 +458,64 @@ export class MasterDataService {
   async deleteCity(id: string): Promise<void> {
     await this.findCityById(id);
     await this.cityRepository.update(id, { isActive: false });
+  }
+
+  // Billing Channel - Master-Data/New-Appointment billing modification (requested
+  // 2026-09-21), req. 4. Same create/findAll(active-only)/update/soft-delete shape as
+  // City above - deliberately not merged with AppointmentChannel (intake triage), see
+  // billing-channel.entity.ts's own doc comment for why.
+  async createBillingChannel(data: Partial<BillingChannel>): Promise<BillingChannel> {
+    const existing = await this.billingChannelRepository.findOne({ where: { name: data.name } });
+    if (existing) {
+      throw new ConflictException(`Billing channel "${data.name}" already exists`);
+    }
+    const channel = this.billingChannelRepository.create(data);
+    return this.billingChannelRepository.save(channel);
+  }
+
+  async findAllBillingChannels(): Promise<BillingChannel[]> {
+    return this.billingChannelRepository.find({ where: { isActive: true }, order: { name: 'ASC' } });
+  }
+
+  async findBillingChannelById(id: string): Promise<BillingChannel> {
+    const channel = await this.billingChannelRepository.findOne({ where: { id } });
+    if (!channel) {
+      throw new NotFoundException(`Billing channel ${id} not found`);
+    }
+    return channel;
+  }
+
+  async updateBillingChannel(id: string, data: Partial<BillingChannel>): Promise<BillingChannel> {
+    await this.findBillingChannelById(id);
+    await this.billingChannelRepository.update(id, data);
+    return this.findBillingChannelById(id);
+  }
+
+  async deleteBillingChannel(id: string): Promise<void> {
+    await this.findBillingChannelById(id);
+    await this.billingChannelRepository.update(id, { isActive: false });
+  }
+
+  // Appointment Field Config - same request, req. 1. Rows are fixed (seeded by
+  // scripts/seed-appointment-field-config.ts, see that file and the entity's own doc
+  // comment) - only isMandatory is ever updated here, no create/delete route exists for
+  // this master on purpose.
+  async findAllAppointmentFieldConfigs(): Promise<AppointmentFieldConfig[]> {
+    return this.appointmentFieldConfigRepository.find({ order: { fieldLabel: 'ASC' } });
+  }
+
+  async findAppointmentFieldConfigById(id: string): Promise<AppointmentFieldConfig> {
+    const config = await this.appointmentFieldConfigRepository.findOne({ where: { id } });
+    if (!config) {
+      throw new NotFoundException(`Appointment field config ${id} not found`);
+    }
+    return config;
+  }
+
+  async updateAppointmentFieldConfig(id: string, isMandatory: boolean): Promise<AppointmentFieldConfig> {
+    await this.findAppointmentFieldConfigById(id);
+    await this.appointmentFieldConfigRepository.update(id, { isMandatory });
+    return this.findAppointmentFieldConfigById(id);
   }
 
   // Cancellation Reason - req. 3f (mobile Cancellation action's reason dropdown).

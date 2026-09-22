@@ -642,6 +642,23 @@ export const CAPABILITY_CATALOG: CapabilityDefinition[] = [
     defaultRoles: [],
     migrated: true,
   },
+  // Master-Data/New-Appointment billing modification (requested 2026-09-21) Phase 1 - see
+  // claude/MODIFICATION_REQUESTS.md. Same "empty defaultRoles" pattern as every other
+  // Master Data entry above.
+  {
+    key: 'MASTER_DATA_BILLING_CHANNEL_MANAGE',
+    label: 'Create, update, or delete a Billing Channel master entry',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
+  {
+    key: 'MASTER_DATA_APPOINTMENT_FIELD_CONFIG_MANAGE',
+    label: 'Toggle which New Appointment fields are mandatory',
+    module: 'Master Data',
+    defaultRoles: [],
+    migrated: true,
+  },
   // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 4 - see
   // claude/APPOINTMENT_MOBILE_JOBCARD_SPEC.md section 3.4. Gates all 3 mutating
   // WorkshopIntakeController endpoints (mark-received, serial-number, fault-symptom) - one

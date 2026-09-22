@@ -109,6 +109,10 @@ export const MIGRATED_CAPABILITIES: { key: string; defaultRoles: string[] }[] = 
   // capability-catalog.ts's own comments for reasoning.
   { key: 'MASTER_DATA_CITY_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_CANCELLATION_REASON_MANAGE', defaultRoles: [] },
+  // Master-Data/New-Appointment billing modification (requested 2026-09-21) Phase 1 -
+  // mirror capability-catalog.ts's own comments for reasoning.
+  { key: 'MASTER_DATA_BILLING_CHANNEL_MANAGE', defaultRoles: [] },
+  { key: 'MASTER_DATA_APPOINTMENT_FIELD_CONFIG_MANAGE', defaultRoles: [] },
   { key: 'MASTER_DATA_APPLIANCE_MODEL_MANAGE', defaultRoles: [] },
   // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 4 - mirror
   // capability-catalog.ts's own comment for reasoning.

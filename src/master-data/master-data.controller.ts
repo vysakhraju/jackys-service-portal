@@ -25,6 +25,8 @@ import { CreateComponentYieldDto } from './dto/create-component-yield.dto';
 import { CreateCityDto, UpdateCityDto } from './dto/create-city.dto';
 import { CreateCancellationReasonDto, UpdateCancellationReasonDto } from './dto/create-cancellation-reason.dto';
 import { CreateApplianceModelDto, UpdateApplianceModelDto } from './dto/create-appliance-model.dto';
+import { CreateBillingChannelDto, UpdateBillingChannelDto } from './dto/create-billing-channel.dto';
+import { UpdateAppointmentFieldConfigDto } from './dto/update-appointment-field-config.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -49,6 +51,8 @@ import { ComponentYieldMatrix } from './entities/component-yield-matrix.entity';
 import { City } from './entities/city.entity';
 import { CancellationReason } from './entities/cancellation-reason.entity';
 import { ApplianceModel } from './entities/appliance-model.entity';
+import { BillingChannel } from './entities/billing-channel.entity';
+import { AppointmentFieldConfig } from './entities/appointment-field-config.entity';
 
 @ApiTags('master-data')
 @Controller('master-data')
@@ -461,6 +465,68 @@ export class MasterDataController {
   @ApiOperation({ summary: 'Delete a city (soft)' })
   deleteCity(@Param('id') id: string) {
     return this.masterDataService.deleteCity(id);
+  }
+
+  // === Billing Channel === (Master-Data/New-Appointment billing modification, requested
+  // 2026-09-21, req. 4). List deliberately open - same reasoning as City above: this
+  // backs the New Appointment popup's Billing Channel dropdown for every CCE-type user.
+  @Post('billing-channels')
+  @RequiresCapability('MASTER_DATA_BILLING_CHANNEL_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.CREATE, entityType: 'BillingChannel', getEntityId: (args) => args.body?.name })
+  @ApiOperation({ summary: 'Create a billing channel' })
+  @ApiBody({ type: CreateBillingChannelDto })
+  @ApiResponse({ status: 201, type: BillingChannel })
+  createBillingChannel(@Body() data: CreateBillingChannelDto) {
+    return this.masterDataService.createBillingChannel(data);
+  }
+
+  @Get('billing-channels')
+  @ApiOperation({ summary: 'Get all active billing channels' })
+  @ApiResponse({ status: 200, type: [BillingChannel] })
+  findAllBillingChannels() {
+    return this.masterDataService.findAllBillingChannels();
+  }
+
+  @Put('billing-channels/:id')
+  @RequiresCapability('MASTER_DATA_BILLING_CHANNEL_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.UPDATE, entityType: 'BillingChannel', getEntityId: (args) => args.params?.id })
+  @ApiOperation({ summary: 'Update a billing channel (also used to reactivate one)' })
+  @ApiBody({ type: UpdateBillingChannelDto })
+  @ApiResponse({ status: 200, type: BillingChannel })
+  updateBillingChannel(@Param('id') id: string, @Body() data: UpdateBillingChannelDto) {
+    return this.masterDataService.updateBillingChannel(id, data);
+  }
+
+  @Delete('billing-channels/:id')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Delete a billing channel (soft)' })
+  deleteBillingChannel(@Param('id') id: string) {
+    return this.masterDataService.deleteBillingChannel(id);
+  }
+
+  // === Appointment Field Config === (same request, req. 1). List also deliberately open
+  // - both the New Appointment form (to know which optional fields to mark required) and
+  // Phase 2's backend validation need this without a Master Data capability. Only PUT
+  // (toggling isMandatory) is gated - no create/delete route, see the entity's own doc
+  // comment for why the row set is fixed.
+  @Get('appointment-field-configs')
+  @ApiOperation({ summary: 'Get all New Appointment field mandatory/optional settings' })
+  @ApiResponse({ status: 200, type: [AppointmentFieldConfig] })
+  findAllAppointmentFieldConfigs() {
+    return this.masterDataService.findAllAppointmentFieldConfigs();
+  }
+
+  @Put('appointment-field-configs/:id')
+  @RequiresCapability('MASTER_DATA_APPOINTMENT_FIELD_CONFIG_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({ action: AuditAction.UPDATE, entityType: 'AppointmentFieldConfig', getEntityId: (args) => args.params?.id })
+  @ApiOperation({ summary: 'Toggle whether a New Appointment field is mandatory' })
+  @ApiBody({ type: UpdateAppointmentFieldConfigDto })
+  @ApiResponse({ status: 200, type: AppointmentFieldConfig })
+  updateAppointmentFieldConfig(@Param('id') id: string, @Body() data: UpdateAppointmentFieldConfigDto) {
+    return this.masterDataService.updateAppointmentFieldConfig(id, data.isMandatory);
   }
 
   // === Cancellation Reason === (req. 3f - mobile Cancellation action's reason dropdown)
