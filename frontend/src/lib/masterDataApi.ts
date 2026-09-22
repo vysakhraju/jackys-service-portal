@@ -5,10 +5,13 @@
 import { api } from './api';
 import type {
   ApplianceModel,
+  AppointmentFieldConfig,
+  BillingChannel,
   CancellationReason,
   City,
   ComponentYieldMatrix,
   CreateApplianceModelInput,
+  CreateBillingChannelInput,
   CreateCancellationReasonInput,
   CreateCityInput,
   CreateComponentYieldInput,
@@ -162,3 +165,19 @@ export const bulkImportApplianceModels = (rows: Partial<CreateApplianceModelInpu
   api
     .post<{ success: number; errors: string[] }>(`${BASE}/bulk-import/appliance-model`, rows)
     .then((r) => r.data);
+
+// === Billing Channel (full CRUD, Master-Data/New-Appointment billing modification req. 4,
+// 2026-09-22) — same shape as City's own CRUD above. ===
+export const listBillingChannels = () => api.get<BillingChannel[]>(`${BASE}/billing-channels`).then((r) => r.data);
+export const createBillingChannel = (data: CreateBillingChannelInput) =>
+  api.post<BillingChannel>(`${BASE}/billing-channels`, data).then((r) => r.data);
+export const updateBillingChannel = (id: string, data: Partial<CreateBillingChannelInput>) =>
+  api.put<BillingChannel>(`${BASE}/billing-channels/${id}`, data).then((r) => r.data);
+export const deleteBillingChannel = (id: string) => api.delete(`${BASE}/billing-channels/${id}`).then((r) => r.data);
+
+// === Appointment Field Config (req. 1) — list open, only isMandatory is admin-editable,
+// no create/delete route (see the entity's own doc comment). ===
+export const listAppointmentFieldConfigs = () =>
+  api.get<AppointmentFieldConfig[]>(`${BASE}/appointment-field-configs`).then((r) => r.data);
+export const updateAppointmentFieldConfig = (id: string, isMandatory: boolean) =>
+  api.put<AppointmentFieldConfig>(`${BASE}/appointment-field-configs/${id}`, { isMandatory }).then((r) => r.data);

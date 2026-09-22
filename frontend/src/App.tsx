@@ -13,6 +13,8 @@ import { ServiceCentresPage } from './pages/masterData/ServiceCentresPage';
 import { FaultSymptomsPage } from './pages/masterData/FaultSymptomsPage';
 import { CitiesPage } from './pages/masterData/CitiesPage';
 import { CancellationReasonsPage } from './pages/masterData/CancellationReasonsPage';
+import { BillingChannelsPage } from './pages/masterData/BillingChannelsPage';
+import { AppointmentFieldConfigPage } from './pages/masterData/AppointmentFieldConfigPage';
 import { ApplianceModelsPage } from './pages/masterData/ApplianceModelsPage';
 import { SparePartsPage } from './pages/masterData/SparePartsPage';
 import { SparePartModelsPage } from './pages/masterData/SparePartModelsPage';
@@ -102,6 +104,8 @@ export function App() {
                   <Route path="cities" element={<CitiesPage />} />
                   <Route path="cancellation-reasons" element={<CancellationReasonsPage />} />
                   <Route path="appliance-models" element={<ApplianceModelsPage />} />
+                  <Route path="billing-channels" element={<BillingChannelsPage />} />
+                  <Route path="appointment-field-config" element={<AppointmentFieldConfigPage />} />
                   <Route path="fault-symptoms" element={<FaultSymptomsPage />} />
                   <Route path="spare-parts" element={<SparePartsPage />} />
                   <Route path="spare-part-models" element={<SparePartModelsPage />} />

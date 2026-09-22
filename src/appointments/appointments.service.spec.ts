@@ -15,6 +15,7 @@ describe('AppointmentsService', () => {
   let jobCardRepository: any;
   let workshopIntakeRepository: any;
   let inventoryService: any;
+  let masterDataService: any;
 
   const buildQb = (overrides: Partial<Record<string, any>> = {}) => ({
     where: jest.fn().mockReturnThis(),
@@ -63,6 +64,10 @@ describe('AppointmentsService', () => {
     jobCardRepository = { findOne: jest.fn().mockResolvedValue(null) };
     workshopIntakeRepository = { find: jest.fn().mockResolvedValue([]) };
     inventoryService = { hasActiveReservationInCustody: jest.fn().mockResolvedValue(false) };
+    // Phase 2 mandatory-field config - defaults to no configured rows so every pre-existing
+    // test (written before this table existed) keeps passing unchanged; the dedicated
+    // 'mandatory field config' describe block below overrides this per-test.
+    masterDataService = { findAllAppointmentFieldConfigs: jest.fn().mockResolvedValue([]) };
 
     service = new AppointmentsService(
       appointmentRepository,
@@ -72,6 +77,7 @@ describe('AppointmentsService', () => {
       jobCardRepository,
       workshopIntakeRepository,
       inventoryService,
+      masterDataService,
     );
   });
 
@@ -148,6 +154,102 @@ describe('AppointmentsService', () => {
       await expect(
         service.create({ ...dto, technicianId: 'tech-1' }, 'user-1'),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // Master-Data/New-Appointment billing modification Phase 2 (2026-09-22), req. 1 -
+  // dynamic mandatory-field enforcement driven by AppointmentFieldConfig.
+  describe('create - mandatory field config', () => {
+    const dto = {
+      type: AppointmentType.WARRANTY,
+      customerType: CustomerType.B2C,
+      customerName: 'John Doe',
+      customerPhone: '+971501234567',
+      scheduledAt: '2026-08-25T09:00:00Z',
+      serviceCentreId: 'sc-1',
+    } as any;
+
+    it('rejects when a config-mandatory optional field is missing', async () => {
+      masterDataService.findAllAppointmentFieldConfigs.mockResolvedValue([
+        { fieldKey: 'jobType', fieldLabel: 'Job Type', isMandatory: true },
+        { fieldKey: 'channel', fieldLabel: 'Channel', isMandatory: false },
+      ]);
+
+      await expect(service.create({ ...dto }, 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.create({ ...dto }, 'user-1')).rejects.toThrow(
+        'Missing mandatory field(s): Job Type',
+      );
+      // Never gets as far as looking up the service centre once the field check rejects.
+      expect(serviceCentreRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('lists every missing mandatory field in one message', async () => {
+      masterDataService.findAllAppointmentFieldConfigs.mockResolvedValue([
+        { fieldKey: 'jobType', fieldLabel: 'Job Type', isMandatory: true },
+        { fieldKey: 'channel', fieldLabel: 'Channel', isMandatory: true },
+      ]);
+
+      await expect(service.create({ ...dto }, 'user-1')).rejects.toThrow(
+        'Missing mandatory field(s): Job Type, Channel',
+      );
+    });
+
+    it('treats an empty/whitespace string as missing', async () => {
+      masterDataService.findAllAppointmentFieldConfigs.mockResolvedValue([
+        { fieldKey: 'notes', fieldLabel: 'Notes', isMandatory: true },
+      ]);
+
+      await expect(
+        service.create({ ...dto, notes: '   ' }, 'user-1'),
+      ).rejects.toThrow('Missing mandatory field(s): Notes');
+    });
+
+    it('passes when every config-mandatory field is present', async () => {
+      masterDataService.findAllAppointmentFieldConfigs.mockResolvedValue([
+        { fieldKey: 'jobType', fieldLabel: 'Job Type', isMandatory: true },
+      ]);
+      serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 5 } }));
+      appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+
+      const result = await service.create(
+        { ...dto, jobType: 'REPAIR' },
+        'user-1',
+      );
+      expect(result).toBeDefined();
+    });
+
+    it('ignores non-mandatory config rows entirely', async () => {
+      masterDataService.findAllAppointmentFieldConfigs.mockResolvedValue([
+        { fieldKey: 'jobType', fieldLabel: 'Job Type', isMandatory: false },
+        { fieldKey: 'channel', fieldLabel: 'Channel', isMandatory: false },
+      ]);
+      serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 5 } }));
+      appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+
+      const result = await service.create({ ...dto }, 'user-1');
+      expect(result).toBeDefined();
+    });
+
+    it('tolerates a stray type/customerType config row without double-blocking a valid request', async () => {
+      // Per the entity's own doc comment, a config row should never exist for type/
+      // customerType - they're permanently hard-enforced by CreateAppointmentDto's own
+      // @IsEnum decorators (no @IsOptional), never by this table. This just proves that if
+      // one ever did exist, it wouldn't crash or double-reject a request that already
+      // supplies both.
+      masterDataService.findAllAppointmentFieldConfigs.mockResolvedValue([
+        { fieldKey: 'type', fieldLabel: 'Type', isMandatory: true },
+        { fieldKey: 'customerType', fieldLabel: 'Customer Type', isMandatory: true },
+      ]);
+      serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 5 } }));
+      appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+      appointmentRepository.findOne.mockResolvedValue(appointment());
+
+      const result = await service.create({ ...dto }, 'user-1');
+      expect(result).toBeDefined();
     });
   });
 

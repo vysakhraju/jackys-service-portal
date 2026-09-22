@@ -42,7 +42,7 @@ import {
   type EffectiveAppointmentStatusValue,
   type CreateAppointmentInput,
 } from '../../lib/appointmentsTypes';
-import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
+import { listApplianceModels, listAppointmentFieldConfigs, listCities, listServiceCentres } from '../../lib/masterDataApi';
 import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
 import { blockedJobCardReasonText } from '../../lib/jobCardsTypes';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
@@ -124,13 +124,21 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// req.txt Issue E - Previous/Next Day quick-nav buttons shift off a reference date (parsed
-// as local midnight, not UTC, so a day shift near midnight in any timezone still lands on
-// the calendar day the user sees) rather than off `Date.now()`, so repeated clicks step one
-// full day at a time from wherever the filter currently points.
+// req.txt Issue E - Previous/Next Day quick-nav buttons shift off a reference date, so
+// repeated clicks step one full day at a time from wherever the filter currently points.
+// Pure Y-M-D calendar arithmetic done entirely in UTC (Date.UTC to build, getUTCDate/
+// setUTCDate to shift, toISOString to re-serialize) - never mixed with local-time Date
+// methods. Bug fixed 2026-09-22: the previous version parsed `${iso}T00:00:00` (local
+// midnight) but then shifted with local setDate()/getDate() and re-serialized with
+// toISOString() (UTC) - on any host whose local offset isn't exactly a whole multiple that
+// keeps local-midnight-plus-N-days on the same UTC calendar day, that round-trip silently
+// cancelled out or double-counted the shift (caught by the existing Issue E "Next ▶"/
+// "◀ Prev" tests once run on a non-UTC-offset host - see MODIFICATION_REQUESTS.md).
 function shiftIsoDate(iso: string, days: number): string {
-  const base = iso ? new Date(`${iso}T00:00:00`) : new Date();
-  base.setDate(base.getDate() + days);
+  const source = iso || todayIsoDate();
+  const [y, m, d] = source.split('-').map(Number);
+  const base = new Date(Date.UTC(y, m - 1, d));
+  base.setUTCDate(base.getUTCDate() + days);
   return base.toISOString().slice(0, 10);
 }
 
@@ -230,6 +238,20 @@ export function SchedulePage() {
     id: m.id,
     name: `${m.brand} — ${m.model}`,
   }));
+
+  // Master-Data/New-Appointment billing modification Phase 2 (2026-09-22), req. 1 -
+  // Super-Admin-editable mandatory-field config, read once and applied to every optional
+  // field on this popup below (asterisked label + a submit-time check, since several of
+  // these fields - cityId/applianceModelId - are NamePicker-driven, not plain register()
+  // inputs, so a uniform submit-time check covers both kinds of field the same way rather
+  // than wiring `required` individually per input type). `type`/`customerType` are never
+  // in this list - see the config entity's own doc comment.
+  const { data: fieldConfigs } = useQuery({
+    queryKey: ['master-data', 'appointment-field-configs'],
+    queryFn: () => listAppointmentFieldConfigs(),
+  });
+  const mandatoryFieldKeys = new Set((fieldConfigs ?? []).filter((c) => c.isMandatory).map((c) => c.fieldKey));
+  const isFieldMandatory = (key: string) => mandatoryFieldKeys.has(key);
 
   const {
     data,
@@ -513,6 +535,28 @@ export function SchedulePage() {
   }
 
   async function onSubmit(values: FormValues) {
+    // Master-Data/New-Appointment billing modification Phase 2, req. 1 - client-side
+    // mirror of AppointmentsService.validateMandatoryFields() on create. Scoped to create
+    // only (matching the backend, which only enforces this in create() too) - cityId/
+    // applianceModelId are NamePicker-driven rather than plain register() inputs, so this
+    // one submit-time check covers every optional field uniformly instead of wiring
+    // `required` per input type. The backend re-checks this regardless (this is UX, not
+    // the security boundary), so a stale/unfetched config here just means the backend
+    // catches it instead - never a way to bypass a mandatory field.
+    if (!editTarget) {
+      const missingLabels = (fieldConfigs ?? [])
+        .filter((c) => c.isMandatory)
+        .filter((c) => {
+          const value = (values as unknown as Record<string, unknown>)[c.fieldKey];
+          return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+        })
+        .map((c) => c.fieldLabel);
+      if (missingLabels.length > 0) {
+        setMutationError(new Error(`Missing mandatory field(s): ${missingLabels.join(', ')}`));
+        return;
+      }
+    }
+
     const sharedFields = {
       type: values.type as CreateAppointmentInput['type'],
       jobType: values.jobType as CreateAppointmentInput['jobType'],
@@ -1021,8 +1065,12 @@ export function SchedulePage() {
               {CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </Field>
-          <Field label="Channel" hint="How this request came in - Service Desk triage">
-            <select className={inputClass} {...register('channel', { required: true })}>
+          <Field
+            label={isFieldMandatory('channel') ? 'Channel *' : 'Channel (optional)'}
+            hint="How this request came in - Service Desk triage"
+            error={errors.channel?.message}
+          >
+            <select className={inputClass} {...register('channel')}>
               {APPOINTMENT_CHANNELS.map((c) => <option key={c} value={c}>{c.replaceAll('_', ' ')}</option>)}
             </select>
           </Field>
@@ -1035,11 +1083,18 @@ export function SchedulePage() {
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Email (optional)">
-              <input type="email" className={inputClass} {...register('customerEmail')} />
+            <Field label={isFieldMandatory('customerEmail') ? 'Email *' : 'Email (optional)'} error={errors.customerEmail?.message}>
+              <input
+                type="email"
+                className={inputClass}
+                {...register('customerEmail')}
+              />
             </Field>
-            <Field label="Address (optional)">
-              <input className={inputClass} {...register('customerAddress')} />
+            <Field label={isFieldMandatory('customerAddress') ? 'Address *' : 'Address (optional)'} error={errors.customerAddress?.message}>
+              <input
+                className={inputClass}
+                {...register('customerAddress')}
+              />
             </Field>
           </div>
           <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1082,23 +1137,37 @@ export function SchedulePage() {
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
-            <Field label="City (optional)">
+            <Field label={isFieldMandatory('cityId') ? 'City *' : 'City (optional)'}>
               <NamePicker
                 value={watchedCityId || null}
                 options={cityOptions}
                 onChange={(id) => setValue('cityId', id ?? '')}
               />
             </Field>
-            <Field label="Country" hint="Informational only - VAT stays Service Centre-driven">
+            <Field
+              label={isFieldMandatory('country') ? 'Country *' : 'Country'}
+              hint="Informational only - VAT stays Service Centre-driven"
+              error={errors.country?.message}
+            >
               <select className={inputClass} {...register('country')}>
                 {APPOINTMENT_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </Field>
-            <Field label="VAT number (optional)" hint="B2B only">
-              <input className={inputClass} {...register('customerVatNumber')} />
+            <Field
+              label={isFieldMandatory('customerVatNumber') ? 'VAT number *' : 'VAT number (optional)'}
+              hint="B2B only"
+              error={errors.customerVatNumber?.message}
+            >
+              <input
+                className={inputClass}
+                {...register('customerVatNumber')}
+              />
             </Field>
           </div>
-          <Field label="Brand / Model (optional)" hint="Search by brand or model">
+          <Field
+            label={isFieldMandatory('applianceModelId') ? 'Brand / Model *' : 'Brand / Model (optional)'}
+            hint="Search by brand or model"
+          >
             <NamePicker
               value={watchedApplianceModelId || null}
               options={applianceModelOptions}
@@ -1107,21 +1176,39 @@ export function SchedulePage() {
             />
           </Field>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Serial number (optional)">
-              <input className={inputClass} {...register('serialNumber')} />
+            <Field label={isFieldMandatory('serialNumber') ? 'Serial number *' : 'Serial number (optional)'} error={errors.serialNumber?.message}>
+              <input
+                className={inputClass}
+                {...register('serialNumber')}
+              />
             </Field>
             <Field
-              label="Invoice number (optional)"
+              label={isFieldMandatory('invoiceNumber') ? 'Invoice number *' : 'Invoice number (optional)'}
               hint="Needed later to create a Job Card for this appointment (FR-05)"
+              error={errors.invoiceNumber?.message}
             >
-              <input className={inputClass} {...register('invoiceNumber')} />
+              <input
+                className={inputClass}
+                {...register('invoiceNumber')}
+              />
             </Field>
           </div>
-          <Field label="Purchase date (optional)">
-            <input type="date" className={inputClass} {...register('purchaseDate')} />
+          <Field label={isFieldMandatory('purchaseDate') ? 'Purchase date *' : 'Purchase date (optional)'} error={errors.purchaseDate?.message}>
+            <input
+              type="date"
+              className={inputClass}
+              {...register('purchaseDate')}
+            />
           </Field>
-          <Field label="Problem description (optional)">
-            <textarea className={inputClass} rows={2} {...register('problemDescription')} />
+          <Field
+            label={isFieldMandatory('problemDescription') ? 'Problem description *' : 'Problem description (optional)'}
+            error={errors.problemDescription?.message}
+          >
+            <textarea
+              className={inputClass}
+              rows={2}
+              {...register('problemDescription')}
+            />
           </Field>
           <Field label="Service centre" error={errors.serviceCentreId?.message}>
             <NamePicker
@@ -1156,8 +1243,12 @@ export function SchedulePage() {
             ) : null}
           </div>
 
-          <Field label="Notes (optional)">
-            <textarea className={inputClass} rows={2} {...register('notes')} />
+          <Field label={isFieldMandatory('notes') ? 'Notes *' : 'Notes (optional)'} error={errors.notes?.message}>
+            <textarea
+              className={inputClass}
+              rows={2}
+              {...register('notes')}
+            />
           </Field>
 
           <div className="flex justify-end gap-2 pt-2">

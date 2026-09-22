@@ -27,6 +27,11 @@ import { JobCard } from '../job-cards/entities/job-card.entity';
 import { WorkshopIntake } from '../workshop-intake/entities/workshop-intake.entity';
 import { InventoryService } from '../inventory/inventory.service';
 import { buildSchedulingGrid, SchedulingGridResult } from './appointment-scheduling-grid.util';
+// Master-Data/New-Appointment billing modification Phase 2 (2026-09-22): reads
+// AppointmentFieldConfig rows to decide which optional CreateAppointmentDto fields are
+// currently admin-marked mandatory. AppointmentsModule already imports MasterDataModule
+// (for other lookups), which exports MasterDataService, so no module change needed here.
+import { MasterDataService } from '../master-data/master-data.service';
 
 // Appointment Scheduling page fixes (2026-09-17, user-reported req.txt Issues A-D) -
 // COLLECTED_TO_WS is one raw AppointmentStatus value covering three real operational
@@ -115,6 +120,7 @@ export class AppointmentsService {
     @InjectRepository(WorkshopIntake)
     private workshopIntakeRepository: Repository<WorkshopIntake>,
     private inventoryService: InventoryService,
+    private masterDataService: MasterDataService,
   ) {}
 
   // Appointment Scheduling page fixes (2026-09-17, req.txt Issues B/C) - resolves each
@@ -159,6 +165,35 @@ export class AppointmentsService {
     });
   }
 
+  // Master-Data/New-Appointment billing modification Phase 2 (2026-09-22), req. 1: enforces
+  // the Super-Admin-editable AppointmentFieldConfig table against a create payload. Only
+  // covers fields that ARE optional in CreateAppointmentDto today (`type`/`customerType`
+  // stay permanently decorator-enforced, per the locked Phase 1 decision - this method
+  // never touches those two even if a stray config row existed for them). "Missing" means
+  // undefined/null/empty-string - good enough for every field type on this form today
+  // (strings, dates-as-strings, UUIDs); a 0/false value never appears on any mandatory-
+  // eligible field, so there's no numeric-zero/boolean-false false-positive to guard here.
+  private async validateMandatoryFields(dto: CreateAppointmentDto): Promise<void> {
+    const configs = await this.masterDataService.findAllAppointmentFieldConfigs();
+    const missingLabels: string[] = [];
+    for (const config of configs) {
+      if (!config.isMandatory) continue;
+      const value = (dto as unknown as Record<string, unknown>)[config.fieldKey];
+      const isMissing =
+        value === undefined ||
+        value === null ||
+        (typeof value === 'string' && value.trim() === '');
+      if (isMissing) {
+        missingLabels.push(config.fieldLabel);
+      }
+    }
+    if (missingLabels.length > 0) {
+      throw new BadRequestException(
+        `Missing mandatory field(s): ${missingLabels.join(', ')}`,
+      );
+    }
+  }
+
   private async generateAppointmentNumber(): Promise<string> {
     const today = new Date();
     const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
@@ -184,6 +219,11 @@ export class AppointmentsService {
     userId: string,
     req?: any,
   ): Promise<Appointment> {
+    // Master-Data/New-Appointment billing modification Phase 2, req. 1 - dynamic
+    // mandatory-field check first, before any DB-state lookups, since a missing field is
+    // a pure client-input error (400), not a business-rule conflict.
+    await this.validateMandatoryFields(createAppointmentDto);
+
     // Validate service centre exists and is active
     const serviceCentre = await this.serviceCentreRepository.findOne({
       where: { id: createAppointmentDto.serviceCentreId, isActive: true },

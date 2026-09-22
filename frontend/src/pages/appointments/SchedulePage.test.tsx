@@ -25,10 +25,13 @@ vi.mock('../../lib/appointmentsApi', () => ({
 // #218: Service centre/Technician filter+form fields are now NamePickers backed by these.
 // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 2): cities/appliance models added
 // for the New Appointment popup's City and Brand+Model pickers.
+// Master-Data/New-Appointment billing modification Phase 2 (2026-09-22) - the New
+// Appointment popup's dynamic mandatory-field check reads this.
 vi.mock('../../lib/masterDataApi', () => ({
   listServiceCentres: vi.fn(),
   listCities: vi.fn(),
   listApplianceModels: vi.fn(),
+  listAppointmentFieldConfigs: vi.fn(),
 }));
 // req.txt Issue F "+ Create Job" pill (widened 2026-09-21) - now backed by the same
 // eligible-appointments endpoint JobCardsPage's picker already calls, instead of
@@ -62,7 +65,7 @@ import {
   searchAppointments,
   updateAppointment,
 } from '../../lib/appointmentsApi';
-import { listApplianceModels, listCities, listServiceCentres } from '../../lib/masterDataApi';
+import { listApplianceModels, listAppointmentFieldConfigs, listCities, listServiceCentres } from '../../lib/masterDataApi';
 import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { getWorkshopIntake } from '../../lib/workshopIntakeApi';
@@ -139,6 +142,10 @@ beforeEach(() => {
   vi.mocked(listServiceCentres).mockReset().mockResolvedValue([{ id: 'sc-1', name: 'Dubai Service Centre' }] as any);
   vi.mocked(listCities).mockReset().mockResolvedValue([{ id: 'city-1', name: 'Dubai' }] as any);
   vi.mocked(listApplianceModels).mockReset().mockResolvedValue([{ id: 'model-1', brand: 'Samsung', model: 'WA80J5710' }] as any);
+  // Master-Data/New-Appointment billing modification Phase 2 (2026-09-22) - empty by
+  // default so every pre-existing test (written before this table existed) keeps passing
+  // unchanged; the dedicated describe block below overrides this per-test.
+  vi.mocked(listAppointmentFieldConfigs).mockReset().mockResolvedValue([]);
   vi.mocked(getEligibleAppointmentsForJobCard).mockReset().mockResolvedValue([]);
   vi.mocked(getBlockedAppointmentsForJobCard).mockReset().mockResolvedValue([]);
   vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
@@ -1227,5 +1234,88 @@ describe('SchedulePage - req.txt Issue F: "+ Create Job" pill', () => {
     expect(within(row).queryByRole('link', { name: '+ Create Job' })).not.toBeInTheDocument();
     const badge = within(row).getByText('Job card blocked ⓘ');
     expect(badge).toHaveAttribute('title', expect.stringContaining('Missing invoice number'));
+  });
+});
+
+
+// Master-Data/New-Appointment billing modification Phase 2 (2026-09-22), req. 1 - the New
+// Appointment popup's dynamic mandatory-field enforcement, driven by listAppointmentFieldConfigs.
+describe('SchedulePage - New Appointment dynamic mandatory fields', () => {
+  it('asterisks the label for a config-mandatory optional field, and leaves an unconfigured one as "(optional)"', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue([
+      { id: 'cfg-1', fieldKey: 'notes', fieldLabel: 'Notes', isMandatory: true, createdAt: '', updatedAt: '' },
+    ] as any);
+    const form = await openCreateModal();
+
+    expect(await form.findByText('Notes *')).toBeInTheDocument();
+    expect(form.queryByText('Notes (optional)')).not.toBeInTheDocument();
+    // Email has no config row in this test - stays plainly optional.
+    expect(form.getByText('Email (optional)')).toBeInTheDocument();
+  });
+
+  it('blocks submit with a clear message when a config-mandatory field is empty, and never calls createAppointment', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue([
+      { id: 'cfg-1', fieldKey: 'invoiceNumber', fieldLabel: 'Invoice Number', isMandatory: true, createdAt: '', updatedAt: '' },
+    ] as any);
+    const form = await openCreateModal();
+    await fillRequiredCreateFields(form);
+
+    fireEvent.click(form.getByRole('button', { name: 'Create' }));
+
+    expect(await form.findByText(/Missing mandatory field\(s\): Invoice Number/)).toBeInTheDocument();
+    expect(createAppointment).not.toHaveBeenCalled();
+  });
+
+  it('submits successfully once the config-mandatory field is filled in', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue([
+      { id: 'cfg-1', fieldKey: 'invoiceNumber', fieldLabel: 'Invoice Number', isMandatory: true, createdAt: '', updatedAt: '' },
+    ] as any);
+    vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
+    const form = await openCreateModal();
+    await fillRequiredCreateFields(form);
+    fireEvent.change(form.getByLabelText('Invoice number', { exact: false }), { target: { value: 'INV-2026-1' } });
+
+    fireEvent.click(form.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() =>
+      expect(createAppointment).toHaveBeenCalledWith(expect.objectContaining({ invoiceNumber: 'INV-2026-1' })),
+    );
+  });
+
+  it('never asterisks or blocks on type/customerType - those stay permanently hard-required regardless of config', async () => {
+    // Per the entity's own doc comment, a config row should never exist for these - proves
+    // the popup doesn't accidentally treat a stray row for them as the toggle mechanism.
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue([
+      { id: 'cfg-1', fieldKey: 'type', fieldLabel: 'Type', isMandatory: false, createdAt: '', updatedAt: '' },
+      { id: 'cfg-2', fieldKey: 'customerType', fieldLabel: 'Customer Type', isMandatory: false, createdAt: '', updatedAt: '' },
+    ] as any);
+    vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
+    const form = await openCreateModal();
+    await fillRequiredCreateFields(form);
+
+    fireEvent.click(form.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(createAppointment).toHaveBeenCalled());
+  });
+
+  it('does not run the mandatory-field check in edit mode', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue([
+      { id: 'cfg-1', fieldKey: 'invoiceNumber', fieldLabel: 'Invoice Number', isMandatory: true, createdAt: '', updatedAt: '' },
+    ] as any);
+    vi.mocked(updateAppointment).mockResolvedValue(makeAppointment());
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-1', appointmentNumber: 'APT-0001', status: 'SCHEDULED', jobCard: null, invoiceNumber: null })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0001');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await screen.findByRole('heading', { name: /Edit/ });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(updateAppointment).toHaveBeenCalled());
   });
 });

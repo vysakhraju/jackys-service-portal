@@ -346,3 +346,29 @@ export interface CreateApplianceModelInput {
   category?: ApplianceCategoryValue;
   isActive?: boolean;
 }
+
+// === Billing Channel / Appointment Field Config (Master-Data/New-Appointment billing
+// modification Phase 1 backend / Phase 2 frontend, 2026-09-22) - mirrors
+// src/master-data/entities/billing-channel.entity.ts and
+// appointment-field-config.entity.ts exactly. ===
+export interface BillingChannel {
+  id: string;
+  name: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateBillingChannelInput {
+  name: string;
+  isActive?: boolean;
+}
+
+export interface AppointmentFieldConfig {
+  id: string;
+  fieldKey: string;
+  fieldLabel: string;
+  isMandatory: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
