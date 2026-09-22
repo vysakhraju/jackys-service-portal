@@ -65,6 +65,12 @@ export class DebitNotesService {
    * WarrantyStatus.IN_WARRANTY jobs (see the check above), so "labor cost while under
    * warranty" is exactly the interdepartment recharge this Debit Note is for.
    *
+   * Billing logic + Billing Channel routing (2026-09-22, Phase 4): when the matched row
+   * has a Billing Channel configured, that channel's own `billingChannelRate` overrides
+   * the plain `warrantyLaborCost` - Finance needs to see which named interdepartment
+   * channel a recharge actually ran through, and at what rate, rather than always the
+   * generic one. billingChannelId/Name below are only ever set in that case.
+   *
    * Both failure modes below throw rather than silently charging 0 labor - a silent 0
    * would understate every interdepartment recharge and is exactly the kind of gap a
    * real Finance audit would flag, so these are hard stops instead: (1) the model has no
@@ -72,7 +78,9 @@ export class DebitNotesService {
    * ApplianceModel's own doc comment); (2) a Category resolves but no matching, active
    * Price List row exists for it.
    */
-  private async resolveLaborCost(appointment: Appointment | null | undefined): Promise<number> {
+  private async resolveLaborCost(
+    appointment: Appointment | null | undefined,
+  ): Promise<{ laborCost: number; billingChannelId: string | null; billingChannelName: string | null }> {
     const category = appointment?.applianceModel?.category ?? null;
     if (!category) {
       throw new BadRequestException(
@@ -82,13 +90,21 @@ export class DebitNotesService {
     const jobType = appointment?.jobType ?? JobType.REPAIR;
     const priceRow = await this.priceListRepository.findOne({
       where: { category, jobType, isActive: true },
+      relations: { billingChannel: true },
     });
     if (!priceRow) {
       throw new BadRequestException(
         `No active Price List row exists for ${category} / ${jobType} - add one before a Debit Note can be generated.`,
       );
     }
-    return Number(priceRow.warrantyLaborCost);
+    if (priceRow.billingChannelId) {
+      return {
+        laborCost: Number(priceRow.billingChannelRate),
+        billingChannelId: priceRow.billingChannelId,
+        billingChannelName: priceRow.billingChannel?.name ?? null,
+      };
+    }
+    return { laborCost: Number(priceRow.warrantyLaborCost), billingChannelId: null, billingChannelName: null };
   }
 
   async findById(id: string): Promise<DebitNote> {
@@ -131,7 +147,7 @@ export class DebitNotesService {
     }
 
     const sparePartsCost = await this.computeSparePartsCost(jobCardId);
-    const laborCost = await this.resolveLaborCost(jobCard.appointment);
+    const { laborCost, billingChannelId, billingChannelName } = await this.resolveLaborCost(jobCard.appointment);
     const totalAmount = Math.round((sparePartsCost + laborCost) * 100) / 100;
 
     try {
@@ -141,6 +157,8 @@ export class DebitNotesService {
         sparePartsCost,
         laborCost,
         totalAmount,
+        billingChannelId,
+        billingChannelName,
         status: DebitNoteStatus.DRAFT,
       });
       return await this.debitNoteRepository.save(debitNote);

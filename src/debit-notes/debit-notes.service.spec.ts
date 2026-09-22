@@ -123,7 +123,7 @@ describe('DebitNotesService', () => {
       sparePartRepository.findOne
         .mockResolvedValueOnce({ id: 'sp-1', unitCost: 30 })
         .mockResolvedValueOnce({ id: 'sp-2', unitCost: 40 });
-      priceListRepository.findOne.mockResolvedValue({ warrantyLaborCost: 50 });
+      priceListRepository.findOne.mockResolvedValue({ warrantyLaborCost: 50, billingChannelId: null });
 
       const result = await service.getOrCreateForJobCard('jc-1');
 
@@ -131,9 +131,33 @@ describe('DebitNotesService', () => {
       expect(result.sparePartsCost).toBe(100);
       expect(result.laborCost).toBe(50);
       expect(result.totalAmount).toBe(150);
+      expect(result.billingChannelId).toBeNull();
       expect(priceListRepository.findOne).toHaveBeenCalledWith({
         where: { category: 'REFRIGERATOR', jobType: JobType.REPAIR, isActive: true },
+        relations: { billingChannel: true },
       });
+    });
+
+    // Phase 4 (billing logic + Billing Channel routing, 2026-09-22): when the matched
+    // Price List row has a Billing Channel configured, its billingChannelRate overrides
+    // the plain warrantyLaborCost, and the Debit Note records which channel applied.
+    it('uses billingChannelRate instead of warrantyLaborCost, and stamps the channel, when the matched Price List row has a Billing Channel set', async () => {
+      debitNoteRepository.findOne.mockResolvedValue(null);
+      jobCardsService.findById.mockResolvedValue(interdeptJobCard());
+      reservationRepository.find.mockResolvedValue([]);
+      priceListRepository.findOne.mockResolvedValue({
+        warrantyLaborCost: 50,
+        billingChannelId: 'bc-1',
+        billingChannelRate: 80,
+        billingChannel: { id: 'bc-1', name: 'Acme Partner' },
+      });
+
+      const result = await service.getOrCreateForJobCard('jc-1');
+
+      expect(result.laborCost).toBe(80);
+      expect(result.totalAmount).toBe(80);
+      expect(result.billingChannelId).toBe('bc-1');
+      expect(result.billingChannelName).toBe('Acme Partner');
     });
 
     it('throws when the appointment has no Appliance Model / Category linked, rather than silently charging 0 labor', async () => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useFieldArray, useForm } from 'react-hook-form';
@@ -10,6 +10,7 @@ import { AsyncSearchPicker } from '../../components/pickers/AsyncSearchPicker';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getJobCard } from '../../lib/jobCardsApi';
 import type { JobCard } from '../../lib/jobCardsTypes';
+import { listPriceLists } from '../../lib/masterDataApi';
 import {
   createEstimate,
   getEstimatesByJobCard,
@@ -160,7 +161,7 @@ export function EstimatesPage() {
 
           {jobCard && jobCard.warrantyStatus === 'OOW' && (
             <>
-              {canCreate && <CreateEstimateCard mutation={createMutation} />}
+              {canCreate && <CreateEstimateCard mutation={createMutation} jobCard={jobCard} />}
               {!canCreate && !activeEstimate && jobCard.status !== 'SN_VALIDATED' && estimates.length === 0 && (
                 <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
                   An Estimate can only be created once this Job Card is SN_VALIDATED
@@ -197,8 +198,14 @@ export function EstimatesPage() {
   );
 }
 
-function CreateEstimateCard({ mutation }: { mutation: UseMutationResult<Estimate, unknown, EstimateLineItem[]> }) {
-  const { register, control, handleSubmit, watch, reset } = useForm<{ lineItems: EstimateLineItem[] }>({
+function CreateEstimateCard({
+  mutation,
+  jobCard,
+}: {
+  mutation: UseMutationResult<Estimate, unknown, EstimateLineItem[]>;
+  jobCard: JobCard;
+}) {
+  const { register, control, handleSubmit, watch, reset, getValues } = useForm<{ lineItems: EstimateLineItem[] }>({
     defaultValues: { lineItems: [{ description: '', quantity: 1, unitPrice: 0 }] },
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'lineItems' });
@@ -207,6 +214,35 @@ function CreateEstimateCard({ mutation }: { mutation: UseMutationResult<Estimate
     () => watchedItems.reduce((sum, li) => sum + (Number(li.quantity) || 0) * (Number(li.unitPrice) || 0), 0),
     [watchedItems],
   );
+
+  // Phase 4 (billing logic + Billing Channel routing, requested 2026-09-22): "Price List
+  // gives the baseline" - prefill one suggested line item from the matching
+  // (category, jobType) Price List row, picking B2B/B2C/channel rate the same way
+  // InvoicingService's own Price-List-baseline fallback does, so staff aren't typing a
+  // number from memory. Fully editable/removable afterwards - this never changes what's
+  // actually validated/stored (CreateEstimateDto still takes free-form lineItems).
+  const category = jobCard.appointment?.applianceModel?.category ?? null;
+  const jobType = jobCard.appointment?.jobType;
+  const customerType = jobCard.appointment?.customerType;
+  const priceListQuery = useQuery({
+    queryKey: ['master-data', 'price-lists', category, jobType],
+    queryFn: () => listPriceLists(category ?? undefined, jobType),
+    enabled: !!category && !!jobType,
+  });
+
+  useEffect(() => {
+    const row = priceListQuery.data?.find((r) => r.isActive);
+    if (!row) return;
+    // Only prefill while the form is still untouched - never clobber what staff already
+    // typed (e.g. if they started editing before this query resolved).
+    const current = getValues('lineItems');
+    if (current.length !== 1 || current[0].description !== '' || current[0].unitPrice !== 0) return;
+
+    const usesChannelRate = customerType === 'B2B_SALES_CHANNEL' && !!row.billingChannelId;
+    const suggestedPrice = usesChannelRate ? row.billingChannelRate : customerType === 'B2C' ? row.priceB2C : row.priceB2B;
+    const label = `${(category ?? '').replace(/_/g, ' ')} ${(jobType ?? '').replace(/_/g, ' ')} (Price List baseline)`;
+    reset({ lineItems: [{ description: label, quantity: 1, unitPrice: suggestedPrice }] });
+  }, [priceListQuery.data, category, jobType, customerType, getValues, reset]);
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">

@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { makeEstimate, makeJobCard } from '../../test/fixtures';
+import { makeAppointment, makeEstimate, makeJobCard } from '../../test/fixtures';
 
 vi.mock('../../lib/jobCardsApi', () => ({
   getJobCard: vi.fn(),
@@ -18,6 +18,12 @@ vi.mock('../../lib/estimatesApi', () => ({
 vi.mock('../../lib/jobCardJourneyApi', () => ({
   searchJobCardJourney: vi.fn(),
 }));
+// Phase 4 (billing logic + Billing Channel routing, 2026-09-22): CreateEstimateCard now
+// prefills a suggested line item from the Price List baseline - mocked here so existing
+// tests never hit a real network call, and so the new prefill tests below control it.
+vi.mock('../../lib/masterDataApi', () => ({
+  listPriceLists: vi.fn(),
+}));
 // 2026-09-14 (Group B): EstimatesPage had zero frontend capability check on its
 // Send/Revise/RecordResponse actions - now gated on ESTIMATE_MANAGE / ESTIMATE_RECORD_RESPONSE
 // (mirroring estimates.controller.ts's own @RequiresCapability() on those endpoints), same
@@ -27,6 +33,7 @@ vi.mock('../../lib/useMyCapabilities', () => ({ useMyCapabilities: vi.fn() }));
 import { getJobCard } from '../../lib/jobCardsApi';
 import { getEstimatesByJobCard, recordResponse } from '../../lib/estimatesApi';
 import { searchJobCardJourney } from '../../lib/jobCardJourneyApi';
+import { listPriceLists } from '../../lib/masterDataApi';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { EstimatesPage } from './EstimatesPage';
 
@@ -57,6 +64,7 @@ beforeEach(() => {
   vi.mocked(getEstimatesByJobCard).mockReset();
   vi.mocked(recordResponse).mockReset();
   vi.mocked(searchJobCardJourney).mockReset().mockResolvedValue([]);
+  vi.mocked(listPriceLists).mockReset().mockResolvedValue([]);
   mockCapabilities([], true);
 });
 
@@ -119,6 +127,49 @@ describe('EstimatesPage - Create gating (the-fool pre-mortem finding #1: no dead
     renderPage();
     await screen.findByText('AED 367.50 total');
     expect(screen.queryByText('Create Estimate')).not.toBeInTheDocument();
+  });
+});
+
+describe('EstimatesPage - Price List baseline prefill (Phase 4, requested 2026-09-22)', () => {
+  it('prefills the unit price from the matching Price List row when the Appliance Model has a Category', async () => {
+    vi.mocked(getJobCard).mockResolvedValue(
+      makeJobCard({ appointment: makeAppointment({ applianceModel: { id: 'am-1', brand: 'Samsung', model: 'WA80', category: 'WASHING_MACHINE' } }) }),
+    );
+    vi.mocked(getEstimatesByJobCard).mockResolvedValue([]);
+    vi.mocked(listPriceLists).mockResolvedValue([
+      {
+        id: 'price-1',
+        category: 'WASHING_MACHINE',
+        jobType: 'REPAIR',
+        priceB2B: 300,
+        priceB2C: 220,
+        billingChannelId: null,
+        billingChannelRate: 0,
+        billingChannel: null,
+        warrantyLaborCost: 0,
+        currency: 'AED',
+        isActive: true,
+        createdAt: '2026-09-22T00:00:00Z',
+        updatedAt: '2026-09-22T00:00:00Z',
+      },
+    ]);
+    renderPage();
+
+    await screen.findByText('Create Estimate');
+    // Default customerType on the fixture is B2C, so priceB2C (220) is the suggested rate.
+    const unitPriceInput = (await screen.findByDisplayValue('220')) as HTMLInputElement;
+    expect(unitPriceInput).toBeInTheDocument();
+    expect(listPriceLists).toHaveBeenCalledWith('WASHING_MACHINE', 'REPAIR');
+  });
+
+  it('leaves the line item blank when the Appliance Model has no Category set', async () => {
+    vi.mocked(getJobCard).mockResolvedValue(makeJobCard()); // fixture's applianceModel is null
+    vi.mocked(getEstimatesByJobCard).mockResolvedValue([]);
+    renderPage();
+
+    await screen.findByText('Create Estimate');
+    expect(listPriceLists).not.toHaveBeenCalled();
+    expect(screen.queryByDisplayValue('220')).not.toBeInTheDocument();
   });
 });
 

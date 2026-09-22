@@ -51,10 +51,11 @@ export enum JobType {
 // is billed through a specific interdepartment Billing Channel (billingChannelId),
 // keeping the "B2B Sales Channel (interdepartment billing)" rate distinct from the
 // default B2B price. `billingChannelId` null means no channel-specific override is set
-// for this category/jobType combo yet (Finance falls back to priceB2B). This shape can
-// still change again in a follow-up round if it turns out to need one row PER channel
-// instead of one extra column - nothing downstream consumes it yet (Phase 4, not built),
-// so revising it now is cheap.
+// for this category/jobType combo yet (Finance falls back to priceB2B/priceB2C, or to
+// warrantyLaborCost for Debit Notes). Consumed by Phase 4 (billing logic + Billing
+// Channel routing, 2026-09-22): InvoicingService's Price-List-baseline fallback path
+// (OOW jobs with no approved Estimate) and DebitNotesService.resolveLaborCost both check
+// this column and switch to billingChannelRate when it's set.
 @Entity('service_price_lists')
 @Index(['category', 'jobType'], { unique: true })
 export class ServicePriceList {

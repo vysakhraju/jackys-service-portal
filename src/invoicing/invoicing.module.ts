@@ -5,13 +5,17 @@ import { InvoicingController } from './invoicing.controller';
 import { Invoice } from './entities/invoice.entity';
 import { Payment } from './entities/payment.entity';
 import { Estimate } from '../estimates/entities/estimate.entity';
+import { ServicePriceList } from '../master-data/entities/service-price-list.entity';
 import { JobCardsModule } from '../job-cards/job-cards.module';
 import { AuthModule } from '../auth/auth.module';
 import { GlLedgerModule } from '../gl-ledger/gl-ledger.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Invoice, Payment, Estimate]),
+    // ServicePriceList added for Phase 4's Price-List-baseline fallback (see
+    // InvoicingService.resolveBaselinePricing) - same repository DebitNotesModule
+    // already registers for its own Price List lookup.
+    TypeOrmModule.forFeature([Invoice, Payment, Estimate, ServicePriceList]),
     // Needed for InvoicingService.getOrCreateForJobCard()/recordPayment() to look up the
     // Job Card (status/warranty/appointment.customerType) via JobCardsService.findById().
     JobCardsModule,

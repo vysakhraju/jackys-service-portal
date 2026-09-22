@@ -48,6 +48,18 @@ export enum PaymentMethod {
   B2B_CREDIT = 'B2B_CREDIT',
 }
 
+// Billing logic + Billing Channel routing (requested 2026-09-22, Phase 4). Real gap
+// found before writing any code: an OOW Job Card can reach QC_PASSED with NO Estimate at
+// all (JobCardsService.approveCustomer's FR-06 manual stopgap bypasses the Estimate flow
+// entirely), and getOrCreateForJobCard used to hard-block invoicing in that case. Now it
+// falls back to a Price List baseline (see InvoicingService.resolveBaselinePricing) - an
+// approved Estimate still always overrides the baseline whenever one exists (the
+// "billing tiebreaker" decision locked back in the original 2026-09-22 request).
+export enum InvoicePriceSource {
+  ESTIMATE = 'ESTIMATE',
+  PRICE_LIST_BASELINE = 'PRICE_LIST_BASELINE',
+}
+
 @Entity('invoices')
 @Index(['jobCardId'], { unique: true })
 export class Invoice {
@@ -86,6 +98,31 @@ export class Invoice {
 
   @Column({ type: 'enum', enum: InvoiceStatus, default: InvoiceStatus.DRAFT })
   status: InvoiceStatus;
+
+  // Phase 4 - which of the two paths actually priced this invoice. Defaults ESTIMATE
+  // since every invoice created before this column existed really was Estimate-priced
+  // (the baseline-fallback path didn't exist yet), so backfilling old rows this way is
+  // correct, not just a placeholder.
+  @Column({ type: 'enum', enum: InvoicePriceSource, default: InvoicePriceSource.ESTIMATE })
+  priceSource: InvoicePriceSource;
+
+  // Which APPROVED Estimate this invoice's amount was snapshotted from - null when
+  // priceSource is PRICE_LIST_BASELINE (no Estimate was ever involved). Traceability
+  // only; amount/subtotal/vatAmount remain the real snapshot, this is just "why".
+  @Column({ type: 'uuid', nullable: true })
+  sourceEstimateId: string | null;
+
+  // Set only when priceSource is PRICE_LIST_BASELINE AND the matched Price List row has
+  // a Billing Channel configured (B2B_SALES_CHANNEL jobs only) - see
+  // InvoicingService.resolveBaselinePricing. billingChannelName is a denormalized
+  // snapshot at creation time (same "copy, not a live join" convention as the VAT
+  // breakdown above), so a later rename/deactivation of the channel doesn't retroactively
+  // change what this invoice says it was billed through.
+  @Column({ type: 'uuid', nullable: true })
+  billingChannelId: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  billingChannelName: string | null;
 
   @Column({ type: 'enum', enum: PaymentMethod, nullable: true })
   paymentMethod: PaymentMethod | null;

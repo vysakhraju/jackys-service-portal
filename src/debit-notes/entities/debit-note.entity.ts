@@ -26,9 +26,10 @@ import { User } from '../../auth/entities/user.entity';
  * InventoryReservation for this Job Card (the same reservations Phase 6's QC-approval
  * step permanently moved Main Store -> Damage Location) - i.e. what this repair actually
  * cost the company in parts, not what a customer would have been charged
- * (unitPriceB2B/B2C). laborCost is looked up from ServicePriceList.interdepartmentLaborCost
- * (see DebitNotesService.resolveLaborCost for the matching rule and its documented
- * assumption, since no direct Job-Card-to-ServicePriceList link exists yet).
+ * (unitPriceB2B/B2C). laborCost is looked up from ServicePriceList - warrantyLaborCost by
+ * default, or billingChannelRate instead when the matched row has a Billing Channel
+ * configured (see DebitNotesService.resolveLaborCost, Phase 4 - billingChannelId/Name
+ * below record which channel applied, for Finance routing/reporting).
  *
  * Lazily created on first read (mirrors Invoice's getOrCreateForJobCard exactly, same
  * race-safety via the unique index + 23505 retry) - never touches Phase 6's QC-approval
@@ -63,6 +64,17 @@ export class DebitNote {
 
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   totalAmount: number;
+
+  // Phase 4 - set only when the matched Price List row has a Billing Channel configured;
+  // null means labor was charged at the plain warrantyLaborCost rate, no channel involved.
+  // billingChannelName is a denormalized snapshot at creation time (same convention as
+  // Invoice.billingChannelName) so a later channel rename doesn't retroactively change
+  // what this note says it was recharged through.
+  @Column({ type: 'uuid', nullable: true })
+  billingChannelId: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  billingChannelName: string | null;
 
   @Column({ type: 'enum', enum: DebitNoteStatus, default: DebitNoteStatus.DRAFT })
   status: DebitNoteStatus;

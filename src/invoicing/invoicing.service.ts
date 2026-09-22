@@ -1,13 +1,14 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Invoice, InvoiceStatus, PaymentMethod } from './entities/invoice.entity';
+import { Invoice, InvoiceStatus, PaymentMethod, InvoicePriceSource } from './entities/invoice.entity';
 import { Payment } from './entities/payment.entity';
 import { Estimate, EstimateStatus } from '../estimates/entities/estimate.entity';
+import { ServicePriceList, JobType } from '../master-data/entities/service-price-list.entity';
 import { JobCardsService } from '../job-cards/job-cards.service';
-import { JobCardStatus } from '../job-cards/entities/job-card.entity';
+import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
-import { CustomerType } from '../appointments/entities/appointment.entity';
+import { Appointment, CustomerType } from '../appointments/entities/appointment.entity';
 import { GlLedgerService } from '../gl-ledger/gl-ledger.service';
 
 const B2B_CREDIT_TERM_DAYS = 30;
@@ -24,6 +25,7 @@ export class InvoicingService {
     @InjectRepository(Invoice) private invoiceRepository: Repository<Invoice>,
     @InjectRepository(Payment) private paymentRepository: Repository<Payment>,
     @InjectRepository(Estimate) private estimateRepository: Repository<Estimate>,
+    @InjectRepository(ServicePriceList) private priceListRepository: Repository<ServicePriceList>,
     private jobCardsService: JobCardsService,
     private glLedgerService: GlLedgerService,
   ) {}
@@ -89,6 +91,77 @@ export class InvoicingService {
   }
 
   /**
+   * Billing logic + Billing Channel routing (2026-09-22, Phase 4). Real gap found before
+   * writing this: an OOW Job Card can reach QC_PASSED/DELIVERED with NO Estimate at all -
+   * JobCardsService.approveCustomer's FR-06 manual stopgap sets customerApproved=true
+   * directly, bypassing the Estimate flow entirely - and getOrCreateForJobCard used to
+   * hard-block ("cannot determine an invoice amount") whenever that happened. This
+   * computes the Price List baseline for that case instead: an approved Estimate, when
+   * one exists, still always overrides this (the "billing tiebreaker" decision locked in
+   * the original 2026-09-22 request) - this method is only ever called when none does.
+   *
+   * Resolution mirrors DebitNotesService.resolveLaborCost exactly: category from the
+   * appointment's linked ApplianceModel (never the legacy modelNumber string), crossed
+   * with the appointment's own jobType. Same hard-stop philosophy on both failure modes
+   * (no Category set, no matching active Price List row) - a silently-invented price is
+   * a worse outcome than a clear 400 telling staff what master-data gap to fix first.
+   *
+   * Billing Channel routing: for a B2B_SALES_CHANNEL job (billed externally to the
+   * channel/department - only IN_WARRANTY B2B_SALES_CHANNEL jobs go through Debit Notes
+   * instead), a Billing Channel configured on the matched row overrides the plain
+   * priceB2B with that channel's own billingChannelRate, and the invoice records which
+   * channel. Plain B2B/B2C jobs never look at billingChannelId - it's specifically an
+   * interdepartment concept, per how this column is named/scoped.
+   */
+  private async resolveBaselinePricing(jobCard: JobCard): Promise<{
+    subtotal: number;
+    vatRate: number;
+    vatAmount: number;
+    amount: number;
+    billingChannelId: string | null;
+    billingChannelName: string | null;
+  }> {
+    const appointment: Appointment | null | undefined = jobCard.appointment;
+    const category = appointment?.applianceModel?.category ?? null;
+    if (!category) {
+      throw new BadRequestException(
+        "This appointment's Appliance Model has no Category set (or no model is linked at all) - set one on the Appliance Model master before an invoice can be generated for it without an approved Estimate.",
+      );
+    }
+    const jobType = appointment?.jobType ?? JobType.REPAIR;
+    const priceRow = await this.priceListRepository.findOne({
+      where: { category, jobType, isActive: true },
+      relations: { billingChannel: true },
+    });
+    if (!priceRow) {
+      throw new BadRequestException(
+        `No active Price List row exists for ${category} / ${jobType} - add one before an invoice can be generated without an approved Estimate.`,
+      );
+    }
+
+    let billingChannelId: string | null = null;
+    let billingChannelName: string | null = null;
+    let basePrice: number;
+
+    if (appointment?.customerType === CustomerType.B2C) {
+      basePrice = Number(priceRow.priceB2C);
+    } else if (appointment?.customerType === CustomerType.B2B_SALES_CHANNEL && priceRow.billingChannelId) {
+      basePrice = Number(priceRow.billingChannelRate);
+      billingChannelId = priceRow.billingChannelId;
+      billingChannelName = priceRow.billingChannel?.name ?? null;
+    } else {
+      basePrice = Number(priceRow.priceB2B);
+    }
+
+    const vatRate = Number(appointment?.serviceCentre?.vatRate ?? 5);
+    const subtotal = Math.round(basePrice * 100) / 100;
+    const vatAmount = Math.round(subtotal * (vatRate / 100) * 100) / 100;
+    const amount = Math.round((subtotal + vatAmount) * 100) / 100;
+
+    return { subtotal, vatRate, vatAmount, amount, billingChannelId, billingChannelName };
+  }
+
+  /**
    * Lazily creates a DRAFT invoice the first time one's needed for a QC_PASSED, OOW Job
    * Card - deliberately not eagerly created at QC-approve time (Phase 6 stays untouched).
    * Never called for IW jobs (nothing to invoice - warranty covers it).
@@ -120,24 +193,57 @@ export class InvoicingService {
       where: { jobCardId, status: EstimateStatus.APPROVED },
       order: { createdAt: 'DESC' },
     });
-    if (approvedEstimates.length === 0) {
-      throw new BadRequestException('No approved Estimate exists for this out-of-warranty Job Card - cannot determine an invoice amount.');
-    }
     if (approvedEstimates.length > 1) {
       throw new BadRequestException(`Data integrity error: Job Card ${jobCardId} has ${approvedEstimates.length} APPROVED estimates - expected at most one. Needs manual review before an invoice can be generated.`);
     }
 
-    const estimate = approvedEstimates[0];
+    let amount: number;
+    let subtotal: number;
+    let vatRate: number;
+    let vatAmount: number;
+    let priceSource: InvoicePriceSource;
+    let sourceEstimateId: string | null = null;
+    let billingChannelId: string | null = null;
+    let billingChannelName: string | null = null;
+
+    if (approvedEstimates.length === 1) {
+      // Approved Estimate always overrides the Price List baseline - the locked
+      // "billing tiebreaker" decision. Unchanged from before Phase 4.
+      const estimate = approvedEstimates[0];
+      amount = estimate.totalAmount;
+      subtotal = estimate.subtotal;
+      vatAmount = estimate.vatAmount;
+      vatRate = Number(jobCard.appointment?.serviceCentre?.vatRate ?? 5);
+      priceSource = InvoicePriceSource.ESTIMATE;
+      sourceEstimateId = estimate.id;
+    } else {
+      // No approved Estimate exists (most likely the FR-06 manual approve-customer
+      // stopgap was used instead of the real Estimate flow) - fall back to the Price
+      // List baseline rather than hard-blocking invoice generation.
+      const baseline = await this.resolveBaselinePricing(jobCard);
+      amount = baseline.amount;
+      subtotal = baseline.subtotal;
+      vatRate = baseline.vatRate;
+      vatAmount = baseline.vatAmount;
+      priceSource = InvoicePriceSource.PRICE_LIST_BASELINE;
+      billingChannelId = baseline.billingChannelId;
+      billingChannelName = baseline.billingChannelName;
+    }
+
     const now = new Date();
 
     try {
       const invoice = this.invoiceRepository.create({
         invoiceNumber: await this.generateInvoiceNumber(),
         jobCardId,
-        amount: estimate.totalAmount,
-        subtotal: estimate.subtotal,
-        vatRate: Number(jobCard.appointment?.serviceCentre?.vatRate ?? 5),
-        vatAmount: estimate.vatAmount,
+        amount,
+        subtotal,
+        vatRate,
+        vatAmount,
+        priceSource,
+        sourceEstimateId,
+        billingChannelId,
+        billingChannelName,
         status: InvoiceStatus.DRAFT,
         dueDate: new Date(now.getTime() + B2B_CREDIT_TERM_DAYS * 24 * 60 * 60 * 1000),
       });
