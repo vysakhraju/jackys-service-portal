@@ -10,6 +10,7 @@ import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { Appointment, CustomerType } from '../appointments/entities/appointment.entity';
 import { GlLedgerService } from '../gl-ledger/gl-ledger.service';
+import { resolveAppointmentBillingChannel } from '../master-data/billing-channel-resolution.util';
 
 const B2B_CREDIT_TERM_DAYS = 30;
 
@@ -112,6 +113,12 @@ export class InvoicingService {
    * priceB2B with that channel's own billingChannelRate, and the invoice records which
    * channel. Plain B2B/B2C jobs never look at billingChannelId - it's specifically an
    * interdepartment concept, per how this column is named/scoped.
+   *
+   * Phase 5 (2026-09-22): the appointment's own picked Billing Channel
+   * (Appointment.billingChannelId, see that entity), when set, now overrides the row's
+   * own channel - resolved via resolveAppointmentBillingChannel(), which also throws if
+   * the picked channel has no defaultRate configured. Still scoped to B2B_SALES_CHANNEL
+   * only, same as the row-level mechanism it extends.
    */
   private async resolveBaselinePricing(jobCard: JobCard): Promise<{
     subtotal: number;
@@ -145,10 +152,18 @@ export class InvoicingService {
 
     if (appointment?.customerType === CustomerType.B2C) {
       basePrice = Number(priceRow.priceB2C);
-    } else if (appointment?.customerType === CustomerType.B2B_SALES_CHANNEL && priceRow.billingChannelId) {
-      basePrice = Number(priceRow.billingChannelRate);
-      billingChannelId = priceRow.billingChannelId;
-      billingChannelName = priceRow.billingChannel?.name ?? null;
+    } else if (appointment?.customerType === CustomerType.B2B_SALES_CHANNEL) {
+      // Phase 5 (2026-09-22) - the appointment's own picked Billing Channel (when set)
+      // overrides the Price List row's own configured channel; see
+      // billing-channel-resolution.util.ts for the full precedence/throw rules.
+      const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
+      if (resolved) {
+        basePrice = resolved.rate;
+        billingChannelId = resolved.billingChannelId;
+        billingChannelName = resolved.billingChannelName;
+      } else {
+        basePrice = Number(priceRow.priceB2B);
+      }
     } else {
       basePrice = Number(priceRow.priceB2B);
     }

@@ -56,6 +56,9 @@ const DEFAULT_FIELD_CONFIGS: { fieldKey: string; fieldLabel: string; isMandatory
   { fieldKey: 'brand', fieldLabel: 'Brand (free text)', isMandatory: false },
   { fieldKey: 'modelNumber', fieldLabel: 'Model Number (free text)', isMandatory: false },
   { fieldKey: 'applianceModelId', fieldLabel: 'Appliance Model', isMandatory: false },
+  // Phase 5 (2026-09-22) - the New Appointment popup's "Billing Channel" dropdown, added
+  // by the same Phase 5 that fixed the point #4 gap (see billing-channel-resolution.util.ts).
+  { fieldKey: 'billingChannelId', fieldLabel: 'Billing Channel', isMandatory: false },
   { fieldKey: 'serialNumber', fieldLabel: 'Serial Number', isMandatory: false },
   { fieldKey: 'purchaseDate', fieldLabel: 'Purchase Date', isMandatory: false },
   { fieldKey: 'invoiceNumber', fieldLabel: 'Invoice Number', isMandatory: false },

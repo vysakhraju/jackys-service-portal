@@ -295,6 +295,54 @@ describe('InvoicingService', () => {
         expect(result.billingChannelName).toBe('Acme Partner');
       });
 
+      // Phase 5 (2026-09-22, per-appointment Billing Channel override) - the appointment's
+      // own picked channel now overrides the row's channel, using that channel's own
+      // defaultRate rather than the row's billingChannelRate.
+      it("uses the appointment's own picked Billing Channel and its defaultRate, overriding the Price List row's channel", async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(
+          jobCard({
+            appointment: {
+              customerType: CustomerType.B2B_SALES_CHANNEL,
+              jobType: 'REPAIR',
+              serviceCentre: { vatRate: 5 },
+              applianceModel: { category: 'REFRIGERATOR' },
+              billingChannel: { id: 'bc-appt', name: 'Appointment Channel', defaultRate: 650 },
+            },
+          }),
+        );
+        estimateRepository.find.mockResolvedValue([]);
+        priceListRepository.findOne.mockResolvedValue(
+          priceRow({ priceB2B: 300, billingChannelId: 'bc-row', billingChannelRate: 500, billingChannel: { id: 'bc-row', name: 'Row Channel' } }),
+        );
+        queryBuilder.getOne.mockResolvedValue(null);
+
+        const result = await service.getOrCreateForJobCard('jc-1');
+
+        expect(result.subtotal).toBe(650);
+        expect(result.billingChannelId).toBe('bc-appt');
+        expect(result.billingChannelName).toBe('Appointment Channel');
+      });
+
+      it("throws when the appointment's picked Billing Channel has no defaultRate set, rather than silently falling back", async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(
+          jobCard({
+            appointment: {
+              customerType: CustomerType.B2B_SALES_CHANNEL,
+              jobType: 'REPAIR',
+              serviceCentre: { vatRate: 5 },
+              applianceModel: { category: 'REFRIGERATOR' },
+              billingChannel: { id: 'bc-appt', name: 'No Rate Channel', defaultRate: null },
+            },
+          }),
+        );
+        estimateRepository.find.mockResolvedValue([]);
+        priceListRepository.findOne.mockResolvedValue(priceRow({ priceB2B: 300 }));
+
+        await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+      });
+
       it('falls back to plain priceB2B for a B2B_SALES_CHANNEL job whose Price List row has no Billing Channel set', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(

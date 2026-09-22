@@ -67,7 +67,12 @@ describe('AppointmentsService', () => {
     // Phase 2 mandatory-field config - defaults to no configured rows so every pre-existing
     // test (written before this table existed) keeps passing unchanged; the dedicated
     // 'mandatory field config' describe block below overrides this per-test.
-    masterDataService = { findAllAppointmentFieldConfigs: jest.fn().mockResolvedValue([]) };
+    // Phase 5 - Billing Channel override lookup used by update()'s relation-resync fix
+    // (see that fix's own comment); defaults unused unless a test sets billingChannelId.
+    masterDataService = {
+      findAllAppointmentFieldConfigs: jest.fn().mockResolvedValue([]),
+      findBillingChannelById: jest.fn(),
+    };
 
     service = new AppointmentsService(
       appointmentRepository,
@@ -694,6 +699,50 @@ describe('AppointmentsService', () => {
       const saved = appointmentRepository.save.mock.calls[0][0];
       expect(saved.technicianId).toBe('tech-2');
       expect(saved.technician).toEqual(newTechnician);
+    });
+
+    // Phase 5 (2026-09-22, per-appointment Billing Channel override) - the exact same
+    // stale-eager-relation footgun as `technician` above, now for `billingChannel`; see
+    // update()'s own comment on this fix.
+    it('resyncs the billingChannel relation object (not just the scalar id) when billingChannelId changes', async () => {
+      appointmentRepository.findOne.mockResolvedValue(
+        appointment({ billingChannelId: 'bc-old', billingChannel: { id: 'bc-old', name: 'Old Channel' } }),
+      );
+      const newChannel = { id: 'bc-new', name: 'New Channel', defaultRate: 100 };
+      masterDataService.findBillingChannelById.mockResolvedValue(newChannel);
+
+      await service.update('apt-1', { billingChannelId: 'bc-new' } as any, 'user-1');
+
+      const saved = appointmentRepository.save.mock.calls[0][0];
+      expect(saved.billingChannelId).toBe('bc-new');
+      expect(saved.billingChannel).toEqual(newChannel);
+      expect(masterDataService.findBillingChannelById).toHaveBeenCalledWith('bc-new');
+    });
+
+    it('clears the billingChannel relation object (not just leaving the scalar null) when billingChannelId is explicitly unset', async () => {
+      appointmentRepository.findOne.mockResolvedValue(
+        appointment({ billingChannelId: 'bc-old', billingChannel: { id: 'bc-old', name: 'Old Channel' } }),
+      );
+
+      await service.update('apt-1', { billingChannelId: null } as any, 'user-1');
+
+      const saved = appointmentRepository.save.mock.calls[0][0];
+      expect(saved.billingChannelId).toBeNull();
+      expect(saved.billingChannel).toBeNull();
+      expect(masterDataService.findBillingChannelById).not.toHaveBeenCalled();
+    });
+
+    it('never looks up a Billing Channel when billingChannelId is absent from the update DTO entirely', async () => {
+      appointmentRepository.findOne.mockResolvedValue(
+        appointment({ billingChannelId: 'bc-old', billingChannel: { id: 'bc-old', name: 'Old Channel' } }),
+      );
+
+      await service.update('apt-1', { notes: 'just a note update' } as any, 'user-1');
+
+      const saved = appointmentRepository.save.mock.calls[0][0];
+      expect(saved.billingChannelId).toBe('bc-old');
+      expect(saved.billingChannel).toEqual({ id: 'bc-old', name: 'Old Channel' });
+      expect(masterDataService.findBillingChannelById).not.toHaveBeenCalled();
     });
 
     // --- Mobile Phase 5 reassignment guardrail (the-fool pre-mortem finding) -----------

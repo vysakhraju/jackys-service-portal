@@ -719,6 +719,27 @@ describe('MasterDataService', () => {
       await expect(service.createBillingChannel({ name: 'Retail' })).rejects.toThrow(ConflictException);
     });
 
+    // Phase 5 (2026-09-22, per-appointment Billing Channel override) - createBillingChannel/
+    // updateBillingChannel take Partial<BillingChannel> straight through to the repository
+    // (no hand-curated field list), so the new defaultRate column needs no service-layer
+    // change - just confirming that generic passthrough actually carries it.
+    it('persists defaultRate when creating a billing channel', async () => {
+      billingChannelRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createBillingChannel({ name: 'Acme Partner', defaultRate: 450 });
+
+      expect(billingChannelRepository.save).toHaveBeenCalled();
+      expect(result).toMatchObject({ name: 'Acme Partner', defaultRate: 450 });
+    });
+
+    it('persists defaultRate when updating a billing channel', async () => {
+      billingChannelRepository.findOne.mockResolvedValue({ id: '1', name: 'Retail', isActive: true, defaultRate: null });
+
+      await service.updateBillingChannel('1', { defaultRate: 500 });
+
+      expect(billingChannelRepository.update).toHaveBeenCalledWith('1', { defaultRate: 500 });
+    });
+
     it('finds only active billing channels', async () => {
       billingChannelRepository.find.mockResolvedValue([{ id: '1', name: 'Retail', isActive: true }]);
 

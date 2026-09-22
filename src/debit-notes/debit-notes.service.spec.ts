@@ -160,6 +160,54 @@ describe('DebitNotesService', () => {
       expect(result.billingChannelName).toBe('Acme Partner');
     });
 
+    // Phase 5 (2026-09-22, per-appointment Billing Channel override) - the appointment's
+    // own picked channel now overrides the row's channel here too, using that channel's
+    // own defaultRate rather than the row's billingChannelRate.
+    it("uses the appointment's own picked Billing Channel and its defaultRate, overriding the Price List row's channel", async () => {
+      debitNoteRepository.findOne.mockResolvedValue(null);
+      jobCardsService.findById.mockResolvedValue(
+        interdeptJobCard({
+          appointment: {
+            customerType: CustomerType.B2B_SALES_CHANNEL,
+            jobType: JobType.REPAIR,
+            applianceModel: { category: 'REFRIGERATOR' },
+            billingChannel: { id: 'bc-appt', name: 'Appointment Channel', defaultRate: 90 },
+          },
+        }),
+      );
+      reservationRepository.find.mockResolvedValue([]);
+      priceListRepository.findOne.mockResolvedValue({
+        warrantyLaborCost: 50,
+        billingChannelId: 'bc-row',
+        billingChannelRate: 80,
+        billingChannel: { id: 'bc-row', name: 'Row Channel' },
+      });
+
+      const result = await service.getOrCreateForJobCard('jc-1');
+
+      expect(result.laborCost).toBe(90);
+      expect(result.billingChannelId).toBe('bc-appt');
+      expect(result.billingChannelName).toBe('Appointment Channel');
+    });
+
+    it("throws when the appointment's picked Billing Channel has no defaultRate set, rather than silently charging 0 labor", async () => {
+      debitNoteRepository.findOne.mockResolvedValue(null);
+      jobCardsService.findById.mockResolvedValue(
+        interdeptJobCard({
+          appointment: {
+            customerType: CustomerType.B2B_SALES_CHANNEL,
+            jobType: JobType.REPAIR,
+            applianceModel: { category: 'REFRIGERATOR' },
+            billingChannel: { id: 'bc-appt', name: 'No Rate Channel', defaultRate: null },
+          },
+        }),
+      );
+      reservationRepository.find.mockResolvedValue([]);
+      priceListRepository.findOne.mockResolvedValue({ warrantyLaborCost: 50, billingChannelId: null });
+
+      await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+    });
+
     it('throws when the appointment has no Appliance Model / Category linked, rather than silently charging 0 labor', async () => {
       debitNoteRepository.findOne.mockResolvedValue(null);
       jobCardsService.findById.mockResolvedValue(

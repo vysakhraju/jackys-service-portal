@@ -63,6 +63,8 @@ export function makeAppointment(overrides: Partial<Appointment> = {}): Appointme
     country: 'UAE',
     applianceModelId: null,
     applianceModel: null,
+    billingChannelId: null,
+    billingChannel: null,
     brand: 'Samsung',
     modelNumber: 'WA80J5710',
     serialNumber: 'SN150000',

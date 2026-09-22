@@ -337,6 +337,9 @@ export class AppointmentsService {
       // as every other relation this list already needs.
       .leftJoinAndSelect('apt.city', 'city')
       .leftJoinAndSelect('apt.applianceModel', 'am')
+      // Phase 5 (2026-09-22) - same createQueryBuilder-doesn't-apply-eager gap as
+      // city/applianceModel above, now for the new billingChannel relation.
+      .leftJoinAndSelect('apt.billingChannel', 'bc')
       // Partial select (id + jobCardNumber only, not the full Job Card) so the schedule
       // list can know whether an appointment is already "fulfilled" - see cancel()'s
       // guard - without hydrating the whole nested Job Card into every list row.
@@ -561,6 +564,22 @@ export class AppointmentsService {
       // and validated two lines up - not a second query.
       appointment.technician = technician;
       appointment.technicianId = technician.id;
+    }
+
+    // Phase 5 (2026-09-22) - the exact same "eager relation object wins on save()"
+    // footgun documented just above for `technician`, now for `billingChannel`: it's
+    // also `eager: true` with a `@JoinColumn`, and `appointment` was loaded by
+    // findById() above (a plain findOne(), so eager DOES apply there, unlike
+    // findAll()'s createQueryBuilder) still holding the OLD billingChannel object.
+    // Object.assign() below only overwrites the scalar billingChannelId column - left
+    // alone, the stale relation object would silently win on save() and revert it.
+    // Resynced explicitly whenever the id is actually changing, same fix shape as
+    // technician above; a no-op (skipped) on every update that doesn't touch this field.
+    if (updateAppointmentDto.billingChannelId !== undefined && updateAppointmentDto.billingChannelId !== appointment.billingChannelId) {
+      appointment.billingChannel = updateAppointmentDto.billingChannelId
+        ? await this.masterDataService.findBillingChannelById(updateAppointmentDto.billingChannelId)
+        : null;
+      appointment.billingChannelId = updateAppointmentDto.billingChannelId ?? null;
     }
 
     Object.assign(appointment, updateAppointmentDto);

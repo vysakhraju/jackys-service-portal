@@ -367,6 +367,10 @@ export interface BillingChannel {
   id: string;
   name: string;
   isActive: boolean;
+  // Phase 5 (2026-09-22, per-appointment Billing Channel override) - the flat rate this
+  // channel bills at when picked directly on an appointment, overriding a Price List
+  // row's own billingChannelRate. See billing-channel-resolution.util.ts on the backend.
+  defaultRate: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -374,6 +378,7 @@ export interface BillingChannel {
 export interface CreateBillingChannelInput {
   name: string;
   isActive?: boolean;
+  defaultRate?: number;
 }
 
 export interface AppointmentFieldConfig {

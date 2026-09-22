@@ -27,11 +27,14 @@ vi.mock('../../lib/appointmentsApi', () => ({
 // for the New Appointment popup's City and Brand+Model pickers.
 // Master-Data/New-Appointment billing modification Phase 2 (2026-09-22) - the New
 // Appointment popup's dynamic mandatory-field check reads this.
+// Phase 5 (2026-09-22) - the New Appointment popup's Billing Channel picker
+// (useBillingChannelOptions) also goes through listBillingChannels.
 vi.mock('../../lib/masterDataApi', () => ({
   listServiceCentres: vi.fn(),
   listCities: vi.fn(),
   listApplianceModels: vi.fn(),
   listAppointmentFieldConfigs: vi.fn(),
+  listBillingChannels: vi.fn(),
 }));
 // req.txt Issue F "+ Create Job" pill (widened 2026-09-21) - now backed by the same
 // eligible-appointments endpoint JobCardsPage's picker already calls, instead of
@@ -65,7 +68,7 @@ import {
   searchAppointments,
   updateAppointment,
 } from '../../lib/appointmentsApi';
-import { listApplianceModels, listAppointmentFieldConfigs, listCities, listServiceCentres } from '../../lib/masterDataApi';
+import { listApplianceModels, listAppointmentFieldConfigs, listBillingChannels, listCities, listServiceCentres } from '../../lib/masterDataApi';
 import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { getWorkshopIntake } from '../../lib/workshopIntakeApi';
@@ -142,6 +145,8 @@ beforeEach(() => {
   vi.mocked(listServiceCentres).mockReset().mockResolvedValue([{ id: 'sc-1', name: 'Dubai Service Centre' }] as any);
   vi.mocked(listCities).mockReset().mockResolvedValue([{ id: 'city-1', name: 'Dubai' }] as any);
   vi.mocked(listApplianceModels).mockReset().mockResolvedValue([{ id: 'model-1', brand: 'Samsung', model: 'WA80J5710' }] as any);
+  // Phase 5 (2026-09-22) - the New Appointment popup's Billing Channel picker.
+  vi.mocked(listBillingChannels).mockReset().mockResolvedValue([{ id: 'bc-1', name: 'Corporate Interdepartment', isActive: true, defaultRate: 450 }] as any);
   // Master-Data/New-Appointment billing modification Phase 2 (2026-09-22) - empty by
   // default so every pre-existing test (written before this table existed) keeps passing
   // unchanged; the dedicated describe block below overrides this per-test.
@@ -367,10 +372,12 @@ describe('SchedulePage - Service Desk channel', () => {
     const form = await openCreateModal();
     await fillRequiredCreateFields(form);
 
-    // Default should already be PHONE without the user touching the field.
-    expect(form.getByLabelText('Channel', { exact: false })).toHaveValue('PHONE');
+    // Default should already be PHONE without the user touching the field. Anchored regex
+    // (not a plain substring match) - "Channel" alone would also match the unrelated
+    // "Billing Channel (optional)" label added by Phase 5 below.
+    expect(form.getByLabelText(/^Channel/)).toHaveValue('PHONE');
 
-    fireEvent.change(form.getByLabelText('Channel', { exact: false }), { target: { value: 'WALK_IN' } });
+    fireEvent.change(form.getByLabelText(/^Channel/), { target: { value: 'WALK_IN' } });
     fireEvent.click(form.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => {
@@ -490,6 +497,39 @@ describe('SchedulePage - Phase 2 New Appointment popup fields', () => {
     await waitFor(() => {
       expect(vi.mocked(createAppointment)).toHaveBeenCalledWith(
         expect.objectContaining({ jobType: 'INSTALLATION', cityId: 'city-1', applianceModelId: 'model-1' }),
+      );
+    });
+  });
+
+  // Phase 5 (2026-09-22) - the New Appointment popup's "Billing Channel" dropdown, the
+  // gap the original request's point #4 asked for but Phases 1-4 never actually built.
+  it('submits a picked Billing Channel by id', async () => {
+    vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
+    const form = await openCreateModal();
+    await fillRequiredCreateFields(form);
+
+    fireEvent.focus(form.getByLabelText('Billing Channel (optional)', { exact: false }));
+    fireEvent.click(await form.findByText('Corporate Interdepartment'));
+
+    fireEvent.click(form.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(createAppointment)).toHaveBeenCalledWith(
+        expect.objectContaining({ billingChannelId: 'bc-1' }),
+      );
+    });
+  });
+
+  it('leaves billingChannelId undefined when no Billing Channel is picked', async () => {
+    vi.mocked(createAppointment).mockResolvedValue(makeAppointment());
+    const form = await openCreateModal();
+    await fillRequiredCreateFields(form);
+
+    fireEvent.click(form.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(createAppointment)).toHaveBeenCalledWith(
+        expect.objectContaining({ billingChannelId: undefined }),
       );
     });
   });

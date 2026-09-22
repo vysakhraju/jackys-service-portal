@@ -52,6 +52,7 @@ function billingChannel(overrides: Partial<BillingChannel> = {}): BillingChannel
     id: 'bc-1',
     name: 'Corporate Interdepartment',
     isActive: true,
+    defaultRate: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -118,6 +119,45 @@ describe('BillingChannelsPage - create/edit/delete', () => {
     await waitFor(() =>
       expect(createBillingChannel).toHaveBeenCalledWith({ name: 'Retail Direct', isActive: true }),
     );
+  });
+
+  // Phase 5 (2026-09-22, per-appointment Billing Channel override) - defaultRate is a
+  // plain string-backed number input (see FormValues' own comment), parsed at submit
+  // time; blank stays undefined rather than NaN/0.
+  it('parses and submits defaultRate when creating a billing channel', async () => {
+    vi.mocked(createBillingChannel).mockResolvedValue(billingChannel({ id: 'bc-2', name: 'Retail Direct', defaultRate: 450 }));
+    renderPage();
+
+    fireEvent.click(await screen.findByText('+ New Billing Channel'));
+    fireEvent.change(screen.getByPlaceholderText('Corporate Interdepartment'), { target: { value: 'Retail Direct' } });
+    fireEvent.change(screen.getByPlaceholderText('450'), { target: { value: '450' } });
+    fireEvent.click(screen.getByText('Create'));
+
+    await waitFor(() =>
+      expect(createBillingChannel).toHaveBeenCalledWith({ name: 'Retail Direct', isActive: true, defaultRate: 450 }),
+    );
+  });
+
+  it('leaves defaultRate undefined (not 0/NaN) when the field is left blank', async () => {
+    vi.mocked(createBillingChannel).mockResolvedValue(billingChannel({ id: 'bc-2', name: 'Retail Direct' }));
+    renderPage();
+
+    fireEvent.click(await screen.findByText('+ New Billing Channel'));
+    fireEvent.change(screen.getByPlaceholderText('Corporate Interdepartment'), { target: { value: 'Retail Direct' } });
+    fireEvent.click(screen.getByText('Create'));
+
+    await waitFor(() =>
+      expect(createBillingChannel).toHaveBeenCalledWith({ name: 'Retail Direct', isActive: true, defaultRate: undefined }),
+    );
+  });
+
+  it('pre-fills the defaultRate input when editing a channel that already has one set', async () => {
+    vi.mocked(listBillingChannels).mockResolvedValue([billingChannel({ defaultRate: 450 })]);
+    renderPage();
+
+    fireEvent.click(await screen.findByText('Edit'));
+
+    expect(await screen.findByDisplayValue('450')).toBeInTheDocument();
   });
 
   it('opens pre-filled from the row and saves an edit via updateBillingChannel', async () => {

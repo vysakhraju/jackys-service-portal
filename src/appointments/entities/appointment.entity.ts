@@ -13,6 +13,7 @@ import { ServiceCentre } from '../../master-data/entities/service-centre.entity'
 import { City } from '../../master-data/entities/city.entity';
 import { CancellationReason } from '../../master-data/entities/cancellation-reason.entity';
 import { ApplianceModel } from '../../master-data/entities/appliance-model.entity';
+import { BillingChannel } from '../../master-data/entities/billing-channel.entity';
 import { User } from '../../auth/entities/user.entity';
 import { JobCard } from '../../job-cards/entities/job-card.entity';
 // Price List rebuild (2026-09-22, Phase 3) moved JobType's definition into master-data
@@ -200,6 +201,23 @@ export class Appointment {
 
   @Column({ type: 'uuid', nullable: true })
   applianceModelId: string | null;
+
+  // Phase 5 (2026-09-22) - the New Appointment popup's "Billing Channel" dropdown the
+  // original request's point #4 asked for, but that Phases 1-4 never actually built (see
+  // billing-channel-resolution.util.ts's own doc comment for the full gap and the fix).
+  // Nullable/optional exactly like cityId/applianceModelId above: most appointments never
+  // set this, and InvoicingService/DebitNotesService fall back to the Price List row's
+  // own channel (or plain B2B/B2C/warranty pricing) when it's unset. Eager for the same
+  // reason as city/applianceModel - read everywhere an Appointment is loaded, never worth
+  // a manual join at every call site - EXCEPT AppointmentsService.findAll(), which uses
+  // createQueryBuilder() and therefore needs an explicit .leftJoinAndSelect() for this
+  // too (see that method's own comment on why eager doesn't apply there).
+  @ManyToOne(() => BillingChannel, { nullable: true, eager: true })
+  @JoinColumn({ name: 'billingChannelId' })
+  billingChannel: BillingChannel | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  billingChannelId: string | null;
 
   @Column({ nullable: true })
   serialNumber: string;

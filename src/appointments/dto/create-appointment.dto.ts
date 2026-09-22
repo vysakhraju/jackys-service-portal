@@ -139,6 +139,13 @@ export class CreateAppointmentDto {
   @IsUUID()
   applianceModelId?: string;
 
+  // Phase 5 (2026-09-22) - the New Appointment popup's "Billing Channel" dropdown, see
+  // billing-channel-resolution.util.ts for how it overrides invoice/debit-note routing.
+  @ApiPropertyOptional({ description: 'Billing Channel master id (see GET /master-data/billing-channels) - overrides the matched Price List row\'s own channel when set' })
+  @IsOptional()
+  @IsUUID()
+  billingChannelId?: string;
+
   @ApiPropertyOptional({ example: 'SN123456789' })
   @IsOptional()
   @IsString()

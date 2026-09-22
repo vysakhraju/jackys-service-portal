@@ -10,6 +10,7 @@ import { JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { Appointment, CustomerType, JobType } from '../appointments/entities/appointment.entity';
 import { GlLedgerService } from '../gl-ledger/gl-ledger.service';
+import { resolveAppointmentBillingChannel } from '../master-data/billing-channel-resolution.util';
 
 @Injectable()
 export class DebitNotesService {
@@ -71,6 +72,10 @@ export class DebitNotesService {
    * channel a recharge actually ran through, and at what rate, rather than always the
    * generic one. billingChannelId/Name below are only ever set in that case.
    *
+   * Phase 5 (2026-09-22): the appointment's own picked Billing Channel, when set, now
+   * overrides the row's own channel here too - see resolveAppointmentBillingChannel() in
+   * billing-channel-resolution.util.ts for the shared precedence/throw rules.
+   *
    * Both failure modes below throw rather than silently charging 0 labor - a silent 0
    * would understate every interdepartment recharge and is exactly the kind of gap a
    * real Finance audit would flag, so these are hard stops instead: (1) the model has no
@@ -97,11 +102,15 @@ export class DebitNotesService {
         `No active Price List row exists for ${category} / ${jobType} - add one before a Debit Note can be generated.`,
       );
     }
-    if (priceRow.billingChannelId) {
+    // Phase 5 (2026-09-22) - the appointment's own picked Billing Channel (when set)
+    // overrides the row's own configured channel here too, same precedence as
+    // InvoicingService.resolveBaselinePricing - see billing-channel-resolution.util.ts.
+    const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
+    if (resolved) {
       return {
-        laborCost: Number(priceRow.billingChannelRate),
-        billingChannelId: priceRow.billingChannelId,
-        billingChannelName: priceRow.billingChannel?.name ?? null,
+        laborCost: resolved.rate,
+        billingChannelId: resolved.billingChannelId,
+        billingChannelName: resolved.billingChannelName,
       };
     }
     return { laborCost: Number(priceRow.warrantyLaborCost), billingChannelId: null, billingChannelName: null };

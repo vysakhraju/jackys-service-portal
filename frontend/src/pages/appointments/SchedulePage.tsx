@@ -47,6 +47,7 @@ import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } f
 import { blockedJobCardReasonText } from '../../lib/jobCardsTypes';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
+import { useBillingChannelOptions } from '../../lib/useBillingChannelOptions';
 
 type FormValues = {
   type: string;
@@ -75,6 +76,10 @@ type FormValues = {
   customerVatNumber: string;
   // Phase 2 - Appliance Model master replaces the old free-text brand/modelNumber inputs.
   applianceModelId: string;
+  // Phase 5 (2026-09-22) - the New Appointment popup's "Billing Channel" dropdown, the
+  // gap the original request's point #4 asked for but Phases 1-4 never actually built.
+  // Optional, NamePicker-driven exactly like cityId/applianceModelId above.
+  billingChannelId: string;
   serialNumber: string;
   purchaseDate: string;
   invoiceNumber: string;
@@ -98,6 +103,7 @@ const EMPTY_FORM: FormValues = {
   country: 'UAE',
   customerVatNumber: '',
   applianceModelId: '',
+  billingChannelId: '',
   serialNumber: '',
   purchaseDate: '',
   invoiceNumber: '',
@@ -239,6 +245,11 @@ export function SchedulePage() {
     name: `${m.brand} — ${m.model}`,
   }));
 
+  // Phase 5 (2026-09-22) - the New Appointment popup's "Billing Channel" dropdown, the
+  // gap the original request's point #4 asked for but Phases 1-4 never actually built.
+  // Reuses the same options hook the Price List form's own Billing Channel picker uses.
+  const billingChannelOptions = useBillingChannelOptions();
+
   // Master-Data/New-Appointment billing modification Phase 2 (2026-09-22), req. 1 -
   // Super-Admin-editable mandatory-field config, read once and applied to every optional
   // field on this popup below (asterisked label + a submit-time check, since several of
@@ -353,6 +364,7 @@ export function SchedulePage() {
   // serviceCentreId above, but both optional so no register()/required needed.
   const watchedCityId = watch('cityId');
   const watchedApplianceModelId = watch('applianceModelId');
+  const watchedBillingChannelId = watch('billingChannelId');
 
   // Phase 2 (2026-09-16, req. 1b) - which past appointment (if any) the customer-lookup
   // search below was filled in from, so a "view repair history" link can show once
@@ -509,6 +521,7 @@ export function SchedulePage() {
       country: appointment.country || 'UAE',
       customerVatNumber: appointment.customerVatNumber ?? '',
       applianceModelId: appointment.applianceModelId ?? '',
+      billingChannelId: appointment.billingChannelId ?? '',
       serialNumber: appointment.serialNumber ?? '',
       purchaseDate: appointment.purchaseDate ? appointment.purchaseDate.slice(0, 10) : '',
       invoiceNumber: appointment.invoiceNumber ?? '',
@@ -572,6 +585,7 @@ export function SchedulePage() {
       country: (values.country || undefined) as CreateAppointmentInput['country'],
       customerVatNumber: values.customerVatNumber || undefined,
       applianceModelId: values.applianceModelId || undefined,
+      billingChannelId: values.billingChannelId || undefined,
       serialNumber: values.serialNumber || undefined,
       purchaseDate: values.purchaseDate || undefined,
       invoiceNumber: values.invoiceNumber || undefined,
@@ -1028,6 +1042,7 @@ export function SchedulePage() {
                   if (a.country) setValue('country', a.country);
                   if (a.customerVatNumber) setValue('customerVatNumber', a.customerVatNumber);
                   if (a.applianceModelId) setValue('applianceModelId', a.applianceModelId);
+                  if (a.billingChannelId) setValue('billingChannelId', a.billingChannelId);
                   if (a.serialNumber) setValue('serialNumber', a.serialNumber);
                   setCustomerLookupHistory(a);
                 }}
@@ -1173,6 +1188,17 @@ export function SchedulePage() {
               options={applianceModelOptions}
               onChange={(id) => setValue('applianceModelId', id ?? '')}
               placeholder="Type a brand or model…"
+            />
+          </Field>
+          <Field
+            label={isFieldMandatory('billingChannelId') ? 'Billing Channel *' : 'Billing Channel (optional)'}
+            hint="Finance routing for B2B interdepartment billing - separate from the intake Channel above"
+          >
+            <NamePicker
+              value={watchedBillingChannelId || null}
+              options={billingChannelOptions.options}
+              loading={billingChannelOptions.loading}
+              onChange={(id) => setValue('billingChannelId', id ?? '')}
             />
           </Field>
           <div className="grid grid-cols-2 gap-4">
@@ -1372,6 +1398,7 @@ function ViewAppointmentModal({
               ? `${appointment.applianceModel.brand} / ${appointment.applianceModel.model}`
               : [appointment.brand, appointment.modelNumber].filter(Boolean).join(' / ') || '—'}
           </DetailRow>
+          <DetailRow label="Billing Channel">{appointment.billingChannel?.name ?? '—'}</DetailRow>
           <DetailRow label="Serial number">{appointment.serialNumber ?? '—'}</DetailRow>
           <DetailRow label="Invoice number"><InvoiceNumberField appointment={appointment} /></DetailRow>
           <DetailRow label="Service address coordinates">

@@ -102,6 +102,13 @@ export interface CityRef {
   name: string;
 }
 
+// Phase 5 (2026-09-22, per-appointment Billing Channel override) - same eager-loaded
+// FK-ref pattern as CityRef/ApplianceModelRef above.
+export interface BillingChannelRef {
+  id: string;
+  name: string;
+}
+
 export interface Appointment {
   id: string;
   appointmentNumber: string;
@@ -135,6 +142,10 @@ export interface Appointment {
   country: AppointmentCountryValue;
   applianceModelId: string | null;
   applianceModel?: ApplianceModelRef | null;
+  // Phase 5 (2026-09-22) - the New Appointment popup's "Billing Channel" dropdown, see
+  // billing-channel-resolution.util.ts on the backend for how it overrides billing.
+  billingChannelId: string | null;
+  billingChannel?: BillingChannelRef | null;
   serialNumber: string | null;
   purchaseDate: string | null;
   invoiceNumber: string | null;
@@ -196,6 +207,8 @@ export interface CreateAppointmentInput {
   brand?: string;
   modelNumber?: string;
   applianceModelId?: string;
+  // Phase 5 (2026-09-22) - the New Appointment popup's "Billing Channel" dropdown.
+  billingChannelId?: string;
   serialNumber?: string;
   purchaseDate?: string;
   invoiceNumber?: string;
