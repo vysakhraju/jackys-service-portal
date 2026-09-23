@@ -56,6 +56,7 @@ function appt(overrides: Partial<ScheduledAppointment> = {}): ScheduledAppointme
     problemDescription: 'Fridge not cooling',
     scheduledAt: '2026-09-03T10:00:00.000Z',
     estimatedDurationMinutes: 60,
+    jobType: 'REPAIR',
     ...overrides,
   };
 }

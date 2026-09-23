@@ -33,6 +33,7 @@ import {
   captureFaultSymptom,
   captureSerialNumber,
   completeVisit,
+  correctJobType,
   markCollectedToWorkshop,
   requestNeedSpare,
   startVisit,
@@ -43,6 +44,7 @@ import type {
   CaptureSerialNumberInput,
   CollectedToWorkshopInput,
   CompleteVisitInput,
+  CorrectJobTypeInput,
   NeedSpareInput,
   StartVisitInput,
 } from './types';
@@ -64,6 +66,9 @@ const STORAGE_KEY = '@jackys/offline-queue';
 // same storage, same replay/dedup rules as every earlier phase. Both are idempotent
 // server-side (see appointments.service.ts#markCollectedToWorkshop/#cancel), so a queued
 // retry racing a CCE's manual web override is always safe to replay as a no-op.
+// Job Type split (2026-09-22) Phase 7 adds CORRECT_JOB_TYPE - also idempotent
+// server-side (appointments.service.ts#correctJobType just re-sets the same column and
+// re-logs an audit row on a replayed retry, same shape as every action above).
 export type QueuedActionType =
   | 'START_VISIT'
   | 'CAPTURE_SERIAL_NUMBER'
@@ -71,7 +76,8 @@ export type QueuedActionType =
   | 'NEED_SPARE'
   | 'COMPLETE_VISIT'
   | 'COLLECTED_TO_WS'
-  | 'CANCEL_APPOINTMENT';
+  | 'CANCEL_APPOINTMENT'
+  | 'CORRECT_JOB_TYPE';
 
 type PayloadFor<T extends QueuedActionType> = T extends 'START_VISIT'
   ? StartVisitInput
@@ -85,7 +91,9 @@ type PayloadFor<T extends QueuedActionType> = T extends 'START_VISIT'
           ? CompleteVisitInput
           : T extends 'COLLECTED_TO_WS'
             ? CollectedToWorkshopInput
-            : CancelAppointmentInput;
+            : T extends 'CANCEL_APPOINTMENT'
+              ? CancelAppointmentInput
+              : CorrectJobTypeInput;
 
 export interface QueuedAction {
   id: string;
@@ -102,7 +110,8 @@ export interface QueuedAction {
     | NeedSpareInput
     | CompleteVisitInput
     | CollectedToWorkshopInput
-    | CancelAppointmentInput;
+    | CancelAppointmentInput
+    | CorrectJobTypeInput;
   clientTimestamp: string;
   status: 'pending' | 'failed';
   errorMessage: string | null;
@@ -218,6 +227,9 @@ async function executeAction(action: QueuedAction): Promise<void> {
       return;
     case 'CANCEL_APPOINTMENT':
       await cancelAppointment(action.appointmentId, action.payload as CancelAppointmentInput);
+      return;
+    case 'CORRECT_JOB_TYPE':
+      await correctJobType(action.appointmentId, action.payload as CorrectJobTypeInput);
       return;
   }
 }

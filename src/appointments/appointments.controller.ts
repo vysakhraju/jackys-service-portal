@@ -18,6 +18,7 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
 import { AssignTechnicianDto } from './dto/assign-technician.dto';
+import { CorrectJobTypeDto } from './dto/correct-job-type.dto';
 import { ResolveMapLinkDto } from './dto/resolve-map-link.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -332,6 +333,36 @@ export class AppointmentsController {
     @Request() req: any,
   ) {
     return this.appointmentsService.markCollectedToWorkshop(id, user.id, req);
+  }
+
+  // Job Type split (2026-09-22) Phase 7 - mobile's on-site "Correct Job Type" action. Same
+  // capability as on-site/collected-to-ws/complete above - a field technician can already
+  // act on this appointment via those, so the same gate covers correcting a mis-picked Job
+  // Type. Decorator here mirrors every other action on this controller (always applied even
+  // though AppointmentsService.correctJobType() also calls logAudit() directly - see that
+  // method's own doc comment for why the direct call is needed to capture the old value;
+  // this decorator row only ever captures new-side values from the response body, same as
+  // every other endpoint above, so this one extra audit row is the established convention,
+  // not a new double-logging bug).
+  @Put(':id/job-type')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.JOB_TYPE_CORRECTED,
+    entityType: 'Appointment',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Correct Job Type on-site (mobile "Correct Job Type" action)' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200, type: Appointment })
+  @ApiResponse({ status: 400, description: 'Cannot correct Job Type once collected to workshop, completed, or cancelled' })
+  async correctJobType(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CorrectJobTypeDto,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.appointmentsService.correctJobType(id, body.jobType, user.id, req);
   }
 
   @Put(':id/complete')

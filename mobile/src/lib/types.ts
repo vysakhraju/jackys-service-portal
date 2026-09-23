@@ -50,6 +50,18 @@ export const APPOINTMENT_STATUSES = [
 ] as const;
 export type AppointmentStatusValue = (typeof APPOINTMENT_STATUSES)[number];
 
+// Job Type split (2026-09-22) Phase 7 - mirrors the backend's JobType enum
+// (src/master-data/entities/service-price-list.entity.ts, re-exported from
+// appointment.entity.ts). MAINTENANCE is deliberately left out of CORRECTABLE_JOB_TYPES
+// (not JOB_TYPES) - see the backend's CorrectJobTypeDto doc comment: Phase 6 already
+// soft-hid MAINTENANCE from every NEW-pick dropdown, so the on-site "Correct Job Type"
+// action must not be able to introduce a fresh MAINTENANCE value either. JOB_TYPES stays
+// the full set so a pre-existing MAINTENANCE appointment can still be *displayed*
+// correctly - it's only excluded from the correction picker's options.
+export const JOB_TYPES = ['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION', 'MAINTENANCE'] as const;
+export type JobTypeValue = (typeof JOB_TYPES)[number];
+export const CORRECTABLE_JOB_TYPES = ['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION'] as const;
+
 // Today's Schedule (GET /technician/schedule) only needs a subset of the full
 // Appointment entity - trimmed here to what the schedule list/detail screens show.
 // Widen this (matching the web app's fuller AppointmentsTypes.Appointment) if a later
@@ -67,6 +79,10 @@ export interface ScheduledAppointment {
   problemDescription: string | null;
   scheduledAt: string;
   estimatedDurationMinutes: number | null;
+  // Job Type split (2026-09-22) Phase 7 - already returned by the backend's unrestricted
+  // find() in getTechnicianSchedule(), just not previously declared here. Nullable because
+  // the 2 pre-Phase-6 seeded appointments (if any survive) predate this field.
+  jobType: JobTypeValue | null;
 }
 
 // Mirrors the backend's TechnicianVisit entity / the web app's
@@ -118,6 +134,13 @@ export type CollectedToWorkshopInput = Record<string, never>;
 export interface CancelAppointmentInput {
   reason: string;
   cancellationReasonId: string;
+}
+
+// Job Type split (2026-09-22) Phase 7: PUT /appointments/:id/job-type. Restricted to
+// CORRECTABLE_JOB_TYPES above (not the full JobTypeValue) so this input type can't
+// represent picking MAINTENANCE even by mistake.
+export interface CorrectJobTypeInput {
+  jobType: (typeof CORRECTABLE_JOB_TYPES)[number];
 }
 
 export interface CaptureSerialNumberInput {

@@ -7,6 +7,7 @@ import type {
   CaptureSerialNumberInput,
   CollectedToWorkshopInput,
   CompleteVisitInput,
+  CorrectJobTypeInput,
   JobCardSummary,
   JobCardTaskPause,
   MonthDayCount,
@@ -108,3 +109,8 @@ export const markCollectedToWorkshop = (appointmentId: string, data: CollectedTo
 
 export const cancelAppointment = (appointmentId: string, data: CancelAppointmentInput) =>
   api.put(`${APPOINTMENTS_BASE}/${appointmentId}/field-cancel`, data).then((r) => r.data);
+
+// Job Type split (2026-09-22) Phase 7 - mobile's on-site "Correct Job Type" action. Same
+// APPOINTMENTS_BASE-direct pattern as the two actions above (no /technician wrapper).
+export const correctJobType = (appointmentId: string, data: CorrectJobTypeInput) =>
+  api.put(`${APPOINTMENTS_BASE}/${appointmentId}/job-type`, data).then((r) => r.data);

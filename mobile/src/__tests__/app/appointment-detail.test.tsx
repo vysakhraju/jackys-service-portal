@@ -8,6 +8,7 @@ import {
   captureFaultSymptom,
   captureSerialNumber,
   completeVisit,
+  correctJobType,
   getOwnJobCard,
   getTaskPauses,
   getVisit,
@@ -48,6 +49,7 @@ jest.mock('../../lib/technicianApi', () => ({
   resumeTask: jest.fn(),
   markCollectedToWorkshop: jest.fn(),
   cancelAppointment: jest.fn(),
+  correctJobType: jest.fn(),
 }));
 jest.mock('../../lib/masterDataApi', () => ({
   listFaultSymptoms: jest.fn(),
@@ -84,6 +86,7 @@ const mockedListSpareParts = listSpareParts as jest.Mock;
 const mockedListCancellationReasons = listCancellationReasons as jest.Mock;
 const mockedMarkCollectedToWorkshop = markCollectedToWorkshop as jest.Mock;
 const mockedCancelAppointment = cancelAppointment as jest.Mock;
+const mockedCorrectJobType = correctJobType as jest.Mock;
 const mockedUseOfflineQueue = useOfflineQueue as jest.Mock;
 const mockEnqueue = jest.fn();
 
@@ -105,6 +108,7 @@ function appt(overrides: Partial<ScheduledAppointment> = {}): ScheduledAppointme
     problemDescription: 'Fridge not cooling',
     scheduledAt: '2026-09-07T10:00:00.000Z',
     estimatedDurationMinutes: 60,
+    jobType: 'REPAIR',
     ...overrides,
   };
 }
@@ -703,6 +707,119 @@ describe('AppointmentDetailScreen - Collection to WS & Cancellation', () => {
 
     await waitFor(() => expect(screen.getByTestId('cancel-success')).toBeOnTheScreen());
     expect(screen.queryByTestId('open-cancel-section')).toBeNull();
+  });
+});
+
+// Job Type split (2026-09-22) Phase 7: mobile's on-site "Correct Job Type" action -
+// same reveal-a-chip-row-then-separate-confirm pattern as Cancellation above. Online
+// behavior only - the offline branch is covered alongside the others in the
+// offline-queue describe block below.
+describe('AppointmentDetailScreen - Correct Job Type', () => {
+  it('shows the current Job Type prominently on the header card', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt({ jobType: 'REPAIR' }));
+
+    await waitFor(() => expect(screen.getByTestId('appointment-job-type')).toHaveTextContent('Job Type: Repair'));
+  });
+
+  it('offers the action for an appointment that is still active', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt({ status: 'TECHNICIAN_ASSIGNED' }));
+
+    await waitFor(() => expect(screen.getByTestId('open-job-type-section')).toBeOnTheScreen());
+  });
+
+  it('hides the action once collected to workshop, completed, or cancelled', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt({ status: 'COLLECTED_TO_WS' }));
+
+    await waitFor(() => expect(screen.getByText('Fatima Al Sayed')).toBeOnTheScreen());
+    expect(screen.queryByTestId('open-job-type-section')).toBeNull();
+  });
+
+  it('never offers MAINTENANCE as a correction option', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-job-type-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-job-type-section'));
+
+    await waitFor(() => expect(screen.getByTestId('job-type-option-REPAIR')).toBeOnTheScreen());
+    expect(screen.getByTestId('job-type-option-INSTALLATION')).toBeOnTheScreen();
+    expect(screen.getByTestId('job-type-option-DELIVERY_INSTALLATION')).toBeOnTheScreen();
+    expect(screen.queryByTestId('job-type-option-MAINTENANCE')).toBeNull();
+  });
+
+  it('opens the option row, requires a selection before Confirm enables, and corrects on confirm', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedCorrectJobType.mockResolvedValue({ id: 'appt-1', jobType: 'INSTALLATION' });
+    await renderScreen(appt({ jobType: 'REPAIR' }));
+
+    await waitFor(() => expect(screen.getByTestId('open-job-type-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-job-type-section'));
+
+    await waitFor(() => expect(screen.getByTestId('job-type-option-INSTALLATION')).toBeOnTheScreen());
+    // Confirm is disabled with no option selected yet.
+    await fireEvent.press(screen.getByTestId('confirm-job-type-button'));
+    expect(mockedCorrectJobType).not.toHaveBeenCalled();
+
+    await fireEvent.press(screen.getByTestId('job-type-option-INSTALLATION'));
+    await fireEvent.press(screen.getByTestId('confirm-job-type-button'));
+
+    await waitFor(() =>
+      expect(mockedCorrectJobType).toHaveBeenCalledWith('appt-1', { jobType: 'INSTALLATION' }),
+    );
+  });
+
+  it('closes the option section without correcting when "Never mind" is pressed', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-job-type-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-job-type-section'));
+    await waitFor(() => expect(screen.getByTestId('job-type-option-REPAIR')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('job-type-option-REPAIR'));
+
+    await fireEvent.press(screen.getByTestId('dismiss-job-type-section'));
+
+    await waitFor(() => expect(screen.getByTestId('open-job-type-section')).toBeOnTheScreen());
+    expect(mockedCorrectJobType).not.toHaveBeenCalled();
+  });
+
+  it('shows the backend error message when correcting the Job Type fails', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedCorrectJobType.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 400, data: { message: 'Cannot correct Job Type once an appointment is COLLECTED_TO_WS.' } },
+    });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-job-type-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-job-type-section'));
+    await waitFor(() => expect(screen.getByTestId('job-type-option-REPAIR')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('job-type-option-REPAIR'));
+    await fireEvent.press(screen.getByTestId('confirm-job-type-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('correct-job-type-error')).toHaveTextContent(
+        'Cannot correct Job Type once an appointment is COLLECTED_TO_WS.',
+      ),
+    );
+  });
+
+  it('shows a success confirmation after correcting the Job Type online (no queued item)', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedCorrectJobType.mockResolvedValue({ id: 'appt-1', jobType: 'INSTALLATION' });
+    await renderScreen(appt());
+
+    await waitFor(() => expect(screen.getByTestId('open-job-type-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-job-type-section'));
+    await waitFor(() => expect(screen.getByTestId('job-type-option-REPAIR')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('job-type-option-REPAIR'));
+    await fireEvent.press(screen.getByTestId('confirm-job-type-button'));
+
+    await waitFor(() => expect(screen.getByTestId('correct-job-type-success')).toBeOnTheScreen());
+    expect(screen.queryByTestId('open-job-type-section')).toBeNull();
   });
 });
 
@@ -1414,6 +1531,64 @@ describe('AppointmentDetailScreen - offline queue', () => {
     await waitFor(() =>
       expect(screen.getByTestId('cancel-queued')).toHaveTextContent(
         'Could not sync cancelling this appointment - see the sync status above to retry or discard.',
+      ),
+    );
+  });
+
+  // Job Type split (2026-09-22) Phase 7 - same offline-queue engine, same
+  // if-offline-enqueue-else-mutate branch every action above already follows.
+  it('enqueues the Job Type correction instead of calling the mutation when offline', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(offlineQueueValue());
+    await renderScreen(appt({ jobType: 'REPAIR' }));
+
+    await waitFor(() => expect(screen.getByTestId('open-job-type-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-job-type-section'));
+    await waitFor(() => expect(screen.getByTestId('job-type-option-INSTALLATION')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('job-type-option-INSTALLATION'));
+    await fireEvent.press(screen.getByTestId('confirm-job-type-button'));
+
+    await waitFor(() =>
+      expect(mockEnqueue).toHaveBeenCalledWith({
+        type: 'CORRECT_JOB_TYPE',
+        appointmentId: 'appt-1',
+        label: 'Fatima Al Sayed (APT-0001)',
+        payload: { jobType: 'INSTALLATION' },
+      }),
+    );
+    expect(mockedCorrectJobType).not.toHaveBeenCalled();
+  });
+
+  it('shows a queued message instead of the Correct Job Type button when an item is pending', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({ pendingItems: [queuedAction({ type: 'CORRECT_JOB_TYPE', appointmentId: 'appt-1' })] }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('correct-job-type-queued')).toHaveTextContent(
+        'Queued - will correct the Job Type as soon as you’re back online.',
+      ),
+    );
+    expect(screen.queryByTestId('open-job-type-section')).toBeNull();
+  });
+
+  it('shows a sync-failed message instead of the Correct Job Type button when an item failed', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedUseOfflineQueue.mockReturnValue(
+      offlineQueueValue({
+        isOnline: true,
+        failedItems: [
+          queuedAction({ type: 'CORRECT_JOB_TYPE', appointmentId: 'appt-1', status: 'failed', errorMessage: 'nope' }),
+        ],
+      }),
+    );
+    await renderScreen(appt());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('correct-job-type-queued')).toHaveTextContent(
+        'Could not sync this Job Type correction - see the sync status above to retry or discard.',
       ),
     );
   });

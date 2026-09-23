@@ -17,6 +17,7 @@ import {
   captureFaultSymptom,
   captureSerialNumber,
   completeVisit,
+  correctJobType,
   getOwnJobCard,
   getTaskPauses,
   getVisit,
@@ -26,8 +27,15 @@ import {
   resumeTask,
   startVisit,
 } from '../../lib/technicianApi';
-import { TASK_PAUSE_REASONS } from '../../lib/types';
-import type { CancellationReason, FaultSymptom, ScheduledAppointment, SparePart, TaskPauseReasonValue } from '../../lib/types';
+import { CORRECTABLE_JOB_TYPES, TASK_PAUSE_REASONS } from '../../lib/types';
+import type {
+  CancellationReason,
+  FaultSymptom,
+  JobTypeValue,
+  ScheduledAppointment,
+  SparePart,
+  TaskPauseReasonValue,
+} from '../../lib/types';
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -46,8 +54,19 @@ const STARTABLE_STATUSES = new Set(['SCHEDULED', 'CONFIRMED', 'TECHNICIAN_ASSIGN
 // Workshop's "not confirmed/assigned/on-site yet") instead of the button just vanishing.
 const NOT_COLLECTIBLE_TO_WS_STATUSES = new Set(['COLLECTED_TO_WS', 'COMPLETED', 'CANCELLED']);
 const NOT_CANCELLABLE_STATUSES = new Set(['COMPLETED', 'CANCELLED']);
+// Job Type split (2026-09-22) Phase 7 - mirrors the backend's correctJobType() guard
+// (AppointmentsService#correctJobType blocks COLLECTED_TO_WS/COMPLETED/CANCELLED), same
+// "offer rather than hide" set as NOT_COLLECTIBLE_TO_WS_STATUSES above.
+const NOT_JOB_TYPE_CORRECTABLE_STATUSES = new Set(['COLLECTED_TO_WS', 'COMPLETED', 'CANCELLED']);
 
 const WARRANTY_LABELS: Record<string, string> = { IW: 'In Warranty', OOW: 'Out of Warranty' };
+
+const JOB_TYPE_LABELS: Record<JobTypeValue, string> = {
+  REPAIR: 'Repair',
+  INSTALLATION: 'Installation',
+  DELIVERY_INSTALLATION: 'Delivery + Installation',
+  MAINTENANCE: 'Maintenance',
+};
 
 // Task timer pause/resume - short labels for the mobile chip row. Mirrors the backend's
 // TaskPauseReason enum and the web app's own label set (jobCardsTypes.ts).
@@ -102,6 +121,7 @@ export default function AppointmentDetailScreen() {
   const queuedComplete = findQueued(queuedItems, 'COMPLETE_VISIT', params.id);
   const queuedCollectedToWs = findQueued(queuedItems, 'COLLECTED_TO_WS', params.id);
   const queuedCancel = findQueued(queuedItems, 'CANCEL_APPOINTMENT', params.id);
+  const queuedJobTypeCorrection = findQueued(queuedItems, 'CORRECT_JOB_TYPE', params.id);
 
   const {
     data: visit,
@@ -400,6 +420,40 @@ export default function AppointmentDetailScreen() {
     cancelMutation.mutate();
   }
 
+  // --- Correct Job Type (Job Type split, 2026-09-22, Phase 7) ---
+  // Same reveal-a-chip-row-then-separate-confirm pattern as Cancellation above. Offered
+  // for CORRECTABLE_JOB_TYPES only (never MAINTENANCE - see that constant's own doc
+  // comment in lib/types.ts), regardless of the appointment's current Job Type, since a
+  // technician correcting a mis-pick needs every valid destination available, not just
+  // ones that differ from today's value.
+  const [jobTypeSectionOpen, setJobTypeSectionOpen] = useState(false);
+  const [selectedJobType, setSelectedJobType] = useState<JobTypeValue | null>(null);
+
+  const correctJobTypeMutation = useMutation({
+    mutationFn: () => correctJobType(params.id, { jobType: selectedJobType as (typeof CORRECTABLE_JOB_TYPES)[number] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['technician-schedule'] });
+      setJobTypeSectionOpen(false);
+      setSelectedJobType(null);
+    },
+  });
+
+  function closeJobTypeSection() {
+    setJobTypeSectionOpen(false);
+    setSelectedJobType(null);
+  }
+
+  async function handleConfirmJobTypeCorrection() {
+    if (!selectedJobType) return;
+    const payload = { jobType: selectedJobType as (typeof CORRECTABLE_JOB_TYPES)[number] };
+    if (!isOnline) {
+      await enqueue({ type: 'CORRECT_JOB_TYPE', appointmentId: params.id, label: queueLabel, payload });
+      closeJobTypeSection();
+      return;
+    }
+    correctJobTypeMutation.mutate();
+  }
+
   // --- Task timer pause/resume (SLA-safe pausing) ---
   // Only reachable while the on-site job is actually being worked (jobCardReady below) -
   // this app never shows a workshop job's own pause state (its auto-opened
@@ -467,8 +521,14 @@ export default function AppointmentDetailScreen() {
   const canMarkCollectedToWorkshop =
     !NOT_COLLECTIBLE_TO_WS_STATUSES.has(appointment.status) && !queuedCollectedToWs && !collectedToWsMutation.isSuccess;
   const canCancel = !NOT_CANCELLABLE_STATUSES.has(appointment.status) && !queuedCancel && !cancelMutation.isSuccess;
+  // Same frozen-appointment-status reasoning as canMarkCollectedToWorkshop above - gate on
+  // the mutation's own isSuccess, not appointment.status, so a correction's confirmation
+  // shows and stays shown for the life of this screen instance.
+  const canCorrectJobType =
+    !NOT_JOB_TYPE_CORRECTABLE_STATUSES.has(appointment.status) && !queuedJobTypeCorrection && !correctJobTypeMutation.isSuccess;
   const justCollectedToWs = collectedToWsMutation.isSuccess && !queuedCollectedToWs;
   const justCancelled = cancelMutation.isSuccess && !queuedCancel;
+  const justCorrectedJobType = correctJobTypeMutation.isSuccess && !queuedJobTypeCorrection;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -497,6 +557,11 @@ export default function AppointmentDetailScreen() {
           {(appointment.brand || appointment.modelNumber) && (
             <Text style={styles.meta}>{[appointment.brand, appointment.modelNumber].filter(Boolean).join(' · ')}</Text>
           )}
+          {appointment.jobType && (
+            <Text style={styles.jobTypeText} testID="appointment-job-type">
+              Job Type: {JOB_TYPE_LABELS[appointment.jobType] ?? appointment.jobType}
+            </Text>
+          )}
           {appointment.problemDescription && <Text style={styles.problem}>{appointment.problemDescription}</Text>}
         </View>
 
@@ -504,8 +569,11 @@ export default function AppointmentDetailScreen() {
           queuedCollectedToWs ||
           canCancel ||
           queuedCancel ||
+          canCorrectJobType ||
+          queuedJobTypeCorrection ||
           justCollectedToWs ||
-          justCancelled) && (
+          justCancelled ||
+          justCorrectedJobType) && (
           <View style={styles.card} testID="mobile-actions-card">
             <Text style={styles.sectionTitle}>Actions</Text>
 
@@ -517,6 +585,11 @@ export default function AppointmentDetailScreen() {
             {justCancelled && (
               <Text style={styles.successText} testID="cancel-success">
                 ✓ This appointment was cancelled.
+              </Text>
+            )}
+            {justCorrectedJobType && (
+              <Text style={styles.successText} testID="correct-job-type-success">
+                ✓ Job Type corrected.
               </Text>
             )}
 
@@ -615,6 +688,71 @@ export default function AppointmentDetailScreen() {
                       </Pressable>
 
                       <Pressable onPress={closeCancelSection} testID="dismiss-cancel-section">
+                        <Text style={styles.linkText}>Never mind</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              )
+            )}
+
+            {queuedJobTypeCorrection ? (
+              <Text style={styles.meta} testID="correct-job-type-queued">
+                {queuedJobTypeCorrection.status === 'failed'
+                  ? 'Could not sync this Job Type correction - see the sync status above to retry or discard.'
+                  : 'Queued - will correct the Job Type as soon as you’re back online.'}
+              </Text>
+            ) : (
+              canCorrectJobType && (
+                <View style={styles.actionBlock}>
+                  {!jobTypeSectionOpen ? (
+                    <Pressable
+                      style={styles.secondaryButton}
+                      onPress={() => setJobTypeSectionOpen(true)}
+                      testID="open-job-type-section"
+                    >
+                      <Text style={styles.secondaryButtonText}>Correct Job Type</Text>
+                    </Pressable>
+                  ) : (
+                    <View testID="job-type-section">
+                      {correctJobTypeMutation.isError && (
+                        <Text style={styles.errorBoxText} testID="correct-job-type-error">
+                          {extractErrorMessage(correctJobTypeMutation.error, 'Could not correct the Job Type. Try again.')}
+                        </Text>
+                      )}
+
+                      <View style={styles.reasonRow}>
+                        {CORRECTABLE_JOB_TYPES.map((jt) => (
+                          <Pressable
+                            key={jt}
+                            style={[styles.reasonChip, selectedJobType === jt && styles.reasonChipSelected]}
+                            onPress={() => setSelectedJobType(jt)}
+                            testID={`job-type-option-${jt}`}
+                          >
+                            <Text style={[styles.reasonChipText, selectedJobType === jt && styles.reasonChipTextSelected]}>
+                              {JOB_TYPE_LABELS[jt]}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      <Pressable
+                        style={[
+                          styles.correctJobTypeButton,
+                          (!selectedJobType || correctJobTypeMutation.isPending) && styles.buttonDisabled,
+                        ]}
+                        onPress={handleConfirmJobTypeCorrection}
+                        disabled={!selectedJobType || correctJobTypeMutation.isPending}
+                        testID="confirm-job-type-button"
+                      >
+                        {correctJobTypeMutation.isPending ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : (
+                          <Text style={styles.buttonText}>Confirm Job Type</Text>
+                        )}
+                      </Pressable>
+
+                      <Pressable onPress={closeJobTypeSection} testID="dismiss-job-type-section">
                         <Text style={styles.linkText}>Never mind</Text>
                       </Pressable>
                     </View>
@@ -1124,6 +1262,9 @@ const styles = StyleSheet.create({
   appointmentNumber: { fontSize: 12, color: '#94a3b8', marginBottom: 4 },
   customerName: { fontSize: 18, fontWeight: '700', color: '#0f172a', marginBottom: 4 },
   meta: { fontSize: 14, color: '#64748b', marginBottom: 4 },
+  // Job Type split (2026-09-22) Phase 7 - deliberately its own weight/color (not just
+  // `meta`) so the header card surfaces it prominently, per the phase's own spec.
+  jobTypeText: { fontSize: 14, fontWeight: '600', color: '#334155', marginBottom: 4 },
   problem: { fontSize: 14, color: '#334155', marginTop: 8 },
   sectionTitle: { fontSize: 13, fontWeight: '600', color: '#334155', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 },
   spinner: { marginVertical: 8 },
@@ -1152,6 +1293,9 @@ const styles = StyleSheet.create({
   collectedToWsButton: { backgroundColor: '#6d28d9', borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
   // Red - matches StatusPill's own CANCELLED color.
   cancelButton: { backgroundColor: '#b91c1c', borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginBottom: 8 },
+  // Job Type split (2026-09-22) Phase 7 - blue, distinct from the violet/red actions
+  // above; matches linkText's own blue so "correcting" reads as its own action color.
+  correctJobTypeButton: { backgroundColor: '#2563eb', borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginBottom: 8 },
   hint: { fontSize: 12, color: '#94a3b8', marginTop: 8, textAlign: 'center' },
   input: {
     borderWidth: 1,

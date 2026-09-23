@@ -19,6 +19,7 @@ import {
   captureFaultSymptom,
   captureSerialNumber,
   completeVisit,
+  correctJobType,
   markCollectedToWorkshop,
   requestNeedSpare,
   startVisit,
@@ -32,6 +33,7 @@ jest.mock('./technicianApi', () => ({
   completeVisit: jest.fn(),
   markCollectedToWorkshop: jest.fn(),
   cancelAppointment: jest.fn(),
+  correctJobType: jest.fn(),
   getOwnJobCard: jest.fn(),
   getVisit: jest.fn(),
   getMySchedule: jest.fn(),
@@ -44,6 +46,7 @@ const mockedRequestNeedSpare = requestNeedSpare as jest.Mock;
 const mockedCompleteVisit = completeVisit as jest.Mock;
 const mockedMarkCollectedToWorkshop = markCollectedToWorkshop as jest.Mock;
 const mockedCancelAppointment = cancelAppointment as jest.Mock;
+const mockedCorrectJobType = correctJobType as jest.Mock;
 
 function networkError() {
   // Axios's shape for "request went out, nothing came back" - no `.response` at all.
@@ -293,6 +296,20 @@ describe('processQueue', () => {
       reason: 'Customer not available',
       cancellationReasonId: 'reason-1',
     });
+  });
+
+  it('dispatches CORRECT_JOB_TYPE actions to correctJobType', async () => {
+    mockedCorrectJobType.mockResolvedValue({ id: 'appt-1', jobType: 'INSTALLATION' });
+    await enqueueAction({
+      type: 'CORRECT_JOB_TYPE',
+      appointmentId: 'appt-1',
+      label: 'A',
+      payload: { jobType: 'INSTALLATION' },
+    });
+
+    await processQueue();
+
+    expect(mockedCorrectJobType).toHaveBeenCalledWith('appt-1', { jobType: 'INSTALLATION' });
   });
 
   it('a rejected NEED_SPARE retry keeps the queued item pending on a network failure rather than dropping the idempotencyKey', async () => {

@@ -1,7 +1,7 @@
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { In } from 'typeorm';
 import { AppointmentsService } from './appointments.service';
-import { AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType } from './entities/appointment.entity';
+import { AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType, JobType } from './entities/appointment.entity';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import * as googleMapsLinkUtil from './google-maps-link.util';
 import { GoogleMapsLinkError } from './google-maps-link.util';
@@ -1315,6 +1315,55 @@ describe('AppointmentsService', () => {
 
       expect(result).toEqual(already);
       expect(appointmentRepository.save).not.toHaveBeenCalled();
+    });
+
+    // Job Type split (2026-09-22) Phase 7 - mobile's on-site "Correct Job Type" action.
+    describe('correctJobType', () => {
+      it('corrects the Job Type and logs the old/new value on the audit trail', async () => {
+        appointmentRepository.findOne.mockResolvedValue(
+          appointment({ status: AppointmentStatus.ON_SITE, jobType: JobType.REPAIR }),
+        );
+
+        await service.correctJobType('apt-1', JobType.INSTALLATION, 'user-1');
+
+        expect(appointmentRepository.save).toHaveBeenCalledWith(
+          expect.objectContaining({ jobType: JobType.INSTALLATION }),
+        );
+        expect(auditLogRepository.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: AuditAction.JOB_TYPE_CORRECTED,
+            entityType: 'Appointment',
+            entityId: 'apt-1',
+            oldValues: { jobType: JobType.REPAIR },
+            newValues: { jobType: JobType.INSTALLATION },
+          }),
+        );
+      });
+
+      it.each([AppointmentStatus.COLLECTED_TO_WS, AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED])(
+        'rejects correcting the Job Type once the appointment is %s',
+        async (status) => {
+          appointmentRepository.findOne.mockResolvedValue(appointment({ status, jobType: JobType.REPAIR }));
+
+          await expect(service.correctJobType('apt-1', JobType.INSTALLATION, 'user-1')).rejects.toThrow(
+            BadRequestException,
+          );
+          expect(appointmentRepository.save).not.toHaveBeenCalled();
+        },
+      );
+
+      it.each([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED])(
+        'allows correcting the Job Type while %s (any status before Collected-to-WS/Completed/Cancelled)',
+        async (status) => {
+          appointmentRepository.findOne.mockResolvedValue(appointment({ status, jobType: JobType.REPAIR }));
+
+          await service.correctJobType('apt-1', JobType.DELIVERY_INSTALLATION, 'user-1');
+
+          expect(appointmentRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ jobType: JobType.DELIVERY_INSTALLATION }),
+          );
+        },
+      );
     });
   });
 

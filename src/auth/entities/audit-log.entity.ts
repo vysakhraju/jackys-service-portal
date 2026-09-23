@@ -42,6 +42,8 @@ export enum AuditAction {
   ROLE_CAPABILITIES_UPDATE = 'ROLE_CAPABILITIES_UPDATE',
   // Field/workshop technician scheduling split (2026-09-10)
   FIELD_SCHEDULE_REORDER = 'FIELD_SCHEDULE_REORDER',
+  // Job Type split (2026-09-22) Phase 7 - field technician's on-site Job Type correction
+  JOB_TYPE_CORRECTED = 'JOB_TYPE_CORRECTED',
 }
 
 @Entity('audit_logs')

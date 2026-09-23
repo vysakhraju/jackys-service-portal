@@ -20,6 +20,7 @@ import type {
   CaptureSerialNumberInput,
   CollectedToWorkshopInput,
   CompleteVisitInput,
+  CorrectJobTypeInput,
   NeedSpareInput,
   StartVisitInput,
 } from '../lib/types';
@@ -35,7 +36,8 @@ interface EnqueueInput {
     | NeedSpareInput
     | CompleteVisitInput
     | CollectedToWorkshopInput
-    | CancelAppointmentInput;
+    | CancelAppointmentInput
+    | CorrectJobTypeInput;
 }
 
 interface OfflineQueueContextValue {

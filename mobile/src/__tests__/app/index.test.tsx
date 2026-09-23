@@ -59,6 +59,7 @@ function appt(overrides: Partial<ScheduledAppointment> = {}): ScheduledAppointme
     problemDescription: 'Fridge not cooling',
     scheduledAt: new Date().toISOString(),
     estimatedDurationMinutes: 60,
+    jobType: 'REPAIR',
     ...overrides,
   };
 }

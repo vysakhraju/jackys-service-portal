@@ -15,6 +15,7 @@ const ACTION_LABELS: Record<QueuedActionType, string> = {
   COMPLETE_VISIT: 'Complete visit',
   COLLECTED_TO_WS: 'Collection to WS',
   CANCEL_APPOINTMENT: 'Cancellation',
+  CORRECT_JOB_TYPE: 'Job Type correction',
 };
 
 export function OfflineBanner() {

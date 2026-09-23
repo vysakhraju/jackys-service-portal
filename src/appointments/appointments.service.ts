@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
-import { Appointment, AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType } from './entities/appointment.entity';
+import { Appointment, AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType, JobType } from './entities/appointment.entity';
 import { resolveGoogleMapsLink, GoogleMapsLinkError, LatLng } from './google-maps-link.util';
 import { ServiceCentre } from '../master-data/entities/service-centre.entity';
 import { User, UserStatus } from '../auth/entities/user.entity';
@@ -1129,6 +1129,53 @@ export class AppointmentsService {
       id,
       { status: oldStatus },
       { status: saved.status },
+      req,
+    );
+
+    return this.findById(id);
+  }
+
+  // Job Type split (2026-09-22) Phase 7 - the field technician's on-site "Correct Job
+  // Type" action. CCE's pick at appointment creation stays authoritative for deciding
+  // Phase 6's field-visibility matrix (this method never re-runs validateMandatoryFields
+  // or touches any other field - it only ever changes jobType itself), but a technician
+  // who finds the CCE picked wrong once they're on-site gets a correction path instead of
+  // no recourse. Blocked past the same 3 statuses mobile's own Collection-to-WS/Cancel
+  // actions are blocked past (see NOT_COLLECTIBLE_TO_WS_STATUSES/NOT_CANCELLABLE_STATUSES
+  // on the mobile appointment-detail screen) - once collected to workshop, completed, or
+  // cancelled, the appointment's Job Type is no longer this screen's to correct. Every
+  // correction is audit-logged with the old and new value, same discipline as every other
+  // state-changing action in this app (see e.g. ROLE_CHANGE in auth.service.ts) - NOT via
+  // the controller-level @Audit()/AuditInterceptor pattern used elsewhere in this file,
+  // since that interceptor only ever captures new-side values from the response body
+  // (see AuditInterceptor's own doc comment); capturing the OLD value requires reading it
+  // here, before the save, and calling logAudit() directly.
+  async correctJobType(id: string, newJobType: JobType, userId: string, req?: any): Promise<Appointment> {
+    const appointment = await this.findById(id);
+
+    if (
+      [
+        AppointmentStatus.COLLECTED_TO_WS,
+        AppointmentStatus.COMPLETED,
+        AppointmentStatus.CANCELLED,
+      ].includes(appointment.status)
+    ) {
+      throw new BadRequestException(
+        `Cannot correct Job Type once an appointment is ${appointment.status}.`,
+      );
+    }
+
+    const previousJobType = appointment.jobType;
+    appointment.jobType = newJobType;
+    const saved = await this.appointmentRepository.save(appointment);
+
+    await this.logAudit(
+      userId,
+      AuditAction.JOB_TYPE_CORRECTED,
+      'Appointment',
+      id,
+      { jobType: previousJobType },
+      { jobType: saved.jobType },
       req,
     );
 
