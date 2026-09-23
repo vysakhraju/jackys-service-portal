@@ -137,6 +137,14 @@ export class DebitNotesService {
    * interdepartment (B2B_SALES_CHANNEL + IN_WARRANTY) Job Card. Mirrors
    * InvoicingService.getOrCreateForJobCard exactly, including the same unique-index +
    * 23505 race-safety pattern.
+   *
+   * Phase 11 note (2026-09-24): deliberately NOT extended to COMPLETED (ERP-sourced)
+   * Job Cards the way InvoicingService.getOrCreateForJobCard was - a COMPLETED Job Card's
+   * warrantyStatus is always null (nulled per Phase 10, since S/N/warranty capture is
+   * N/A for these), so the IN_WARRANTY check below already excludes it naturally, and
+   * correctly: warranty/interdepartment recharge is a REPAIR-flow-only concept for a
+   * repaired unit still under warranty, which has no equivalent for a fresh ERP install.
+   * These jobs always bill through InvoicingService instead, whatever the customerType.
    */
   async getOrCreateForJobCard(jobCardId: string): Promise<DebitNote> {
     const existing = await this.findByJobCardId(jobCardId);

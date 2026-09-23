@@ -395,6 +395,127 @@ describe('InvoicingService', () => {
       });
     });
 
+    // Phase 11 (2026-09-24, billing verification for the Job Type split's Installation/
+    // Delivery Installation flow) - a COMPLETED Job Card never goes through QC/Estimates
+    // at all, and its category/jobType come from its own line items rather than a single
+    // appointment-level Appliance Model (Phase 6 hides that field for these job types).
+    describe('COMPLETED (ERP-sourced) Job Card line-item pricing', () => {
+      const activityLineItem = (overrides: any = {}) =>
+        ({
+          applianceModelId: 'model-1',
+          applianceModel: { id: 'model-1', brand: 'LG', model: 'GR-B247', category: 'REFRIGERATOR' },
+          jobType: 'INSTALLATION',
+          quantity: 1,
+          finished: true,
+          ...overrides,
+        } as any);
+
+      const activityJobCard = (overrides: any = {}) =>
+        jobCard({
+          status: JobCardStatus.COMPLETED,
+          warrantyStatus: null,
+          erpReferenceNumber: 'ERP-2026-04512',
+          appointment: { customerType: CustomerType.B2C, jobType: 'INSTALLATION', serviceCentre: { vatRate: 5 } },
+          activityLineItems: [activityLineItem()],
+          ...overrides,
+        });
+
+      it('skips the QC/warranty gate entirely for a COMPLETED Job Card', async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(activityJobCard());
+        priceListRepository.findOne.mockResolvedValue(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', priceB2C: 400 }));
+        queryBuilder.getOne.mockResolvedValue(null);
+
+        const result = await service.getOrCreateForJobCard('jc-1');
+
+        expect(result.subtotal).toBe(400);
+        expect(estimateRepository.find).not.toHaveBeenCalled();
+      });
+
+      it('prices a single-line-item B2C job off that line\'s own category/jobType and quantity, tagged ACTIVITY_LINE_ITEMS', async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(
+          activityJobCard({ activityLineItems: [activityLineItem({ quantity: 2 })] }),
+        );
+        priceListRepository.findOne.mockResolvedValue(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', priceB2C: 400 }));
+        queryBuilder.getOne.mockResolvedValue(null);
+
+        const result = await service.getOrCreateForJobCard('jc-1');
+
+        expect(result.subtotal).toBe(800);
+        expect(result.vatAmount).toBe(40);
+        expect(result.amount).toBe(840);
+        expect(result.priceSource).toBe(InvoicePriceSource.ACTIVITY_LINE_ITEMS);
+        expect(result.lineItemsBreakdown).toEqual([
+          expect.objectContaining({ applianceModelId: 'model-1', category: 'REFRIGERATOR', jobType: 'INSTALLATION', quantity: 2, unitPrice: 400, lineTotal: 800 }),
+        ]);
+      });
+
+      it('sums several line items with different categories/job types into one invoice', async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(
+          activityJobCard({
+            activityLineItems: [
+              activityLineItem({ applianceModelId: 'model-1', applianceModel: { id: 'model-1', brand: 'LG', model: 'GR-B247', category: 'REFRIGERATOR' }, jobType: 'INSTALLATION', quantity: 2 }),
+              activityLineItem({ applianceModelId: 'model-2', applianceModel: { id: 'model-2', brand: 'Samsung', model: 'WW90', category: 'WASHING_MACHINE' }, jobType: 'DELIVERY_INSTALLATION', quantity: 1 }),
+            ],
+          }),
+        );
+        priceListRepository.findOne
+          .mockResolvedValueOnce(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', priceB2C: 400 }))
+          .mockResolvedValueOnce(priceRow({ category: 'WASHING_MACHINE', jobType: 'DELIVERY_INSTALLATION', priceB2C: 250 }));
+        queryBuilder.getOne.mockResolvedValue(null);
+
+        const result = await service.getOrCreateForJobCard('jc-1');
+
+        // 2 x 400 (fridge installs) + 1 x 250 (washer delivery+install) = 1050
+        expect(result.subtotal).toBe(1050);
+        expect(result.lineItemsBreakdown).toHaveLength(2);
+      });
+
+      it('applies billingChannelRate per line for a B2B_SALES_CHANNEL job whose Price List row has a channel configured', async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(
+          activityJobCard({ appointment: { customerType: CustomerType.B2B_SALES_CHANNEL, jobType: 'INSTALLATION', serviceCentre: { vatRate: 5 } } }),
+        );
+        priceListRepository.findOne.mockResolvedValue(
+          priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', priceB2B: 300, billingChannelId: 'bc-1', billingChannelRate: 500, billingChannel: { id: 'bc-1', name: 'Acme Partner' } }),
+        );
+        queryBuilder.getOne.mockResolvedValue(null);
+
+        const result = await service.getOrCreateForJobCard('jc-1');
+
+        expect(result.subtotal).toBe(500);
+        expect(result.billingChannelId).toBe('bc-1');
+        expect(result.billingChannelName).toBe('Acme Partner');
+      });
+
+      it('rejects a COMPLETED Job Card with zero line items - a data-integrity gap, not a normal state', async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(activityJobCard({ activityLineItems: [] }));
+
+        await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+        expect(priceListRepository.findOne).not.toHaveBeenCalled();
+      });
+
+      it('throws, naming the line, when a line item\'s Appliance Model has no Category set', async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(
+          activityJobCard({ activityLineItems: [activityLineItem({ applianceModel: { id: 'model-1', brand: 'LG', model: 'GR-B247', category: null } })] }),
+        );
+
+        await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+      });
+
+      it('throws when no active Price List row matches a line\'s category/jobType', async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(activityJobCard());
+        priceListRepository.findOne.mockResolvedValue(null);
+
+        await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+      });
+    });
+
     it('rejects (data integrity error) when more than one approved Estimate exists', async () => {
       invoiceRepository.findOne.mockResolvedValue(null);
       jobCardsService.findById.mockResolvedValue(jobCard());

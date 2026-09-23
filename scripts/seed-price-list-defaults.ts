@@ -1,18 +1,25 @@
 /**
- * One-time bootstrap script: seeds a default REPAIR price row (priceB2B/priceB2C/
+ * One-time bootstrap script: seeds a default price row (priceB2B/priceB2C/
  * billingChannelRate/warrantyLaborCost all 0.00, isActive true) for every
- * ApplianceCategory - the Price List rebuild's (requested 2026-09-22, Phase 3) direct
- * fix for the gap flagged during Phase 1's live-DB check: the original
- * ServiceActivityType-based Price List had zero rows for REPAIR at all, despite REPAIR
- * being the default JobType for every appointment. Rows land at price 0 so nothing is
- * silently invented - an admin still edits real numbers in via the Price Lists screen,
- * this script just guarantees the row EXISTS to edit rather than needing to be created
- * by hand, category by category, before Finance can start filling in real rates.
+ * (ApplianceCategory, JobType) combination that's actually in active use - the Price
+ * List rebuild's (requested 2026-09-22, Phase 3) direct fix for the gap flagged during
+ * Phase 1's live-DB check: the original ServiceActivityType-based Price List had zero
+ * rows for REPAIR at all, despite REPAIR being the default JobType for every
+ * appointment. Rows land at price 0 so nothing is silently invented - an admin still
+ * edits real numbers in via the Price Lists screen, this script just guarantees the row
+ * EXISTS to edit rather than needing to be created by hand, category by category, before
+ * Finance can start filling in real rates.
  *
- * Only REPAIR is seeded (not INSTALLATION/DELIVERY_INSTALLATION/MAINTENANCE) - REPAIR is
- * the one JobType every appointment defaults to today, so it's the one gap that actually
- * blocks something; the other 3 combos are created via the admin UI as the business
- * starts using them, same as every other master in this app.
+ * Extended Phase 11 (2026-09-24, billing verification for the Job Type split's
+ * Installation/Delivery Installation flow): now also seeds INSTALLATION and
+ * DELIVERY_INSTALLATION rows per category, alongside the original REPAIR rows - Phase 10
+ * shipped a real COMPLETED-Job-Card billing path for these 2 job types
+ * (InvoicingService.resolveActivityLineItemsPricing), so leaving them out here would
+ * mean every single install/delivery invoice 400s on "no active Price List row exists"
+ * until someone clicks through and hand-creates 20 rows (10 categories x 2 job types)
+ * first. MAINTENANCE is still deliberately excluded - it's been soft-hidden from every
+ * NEW-pick Job Type dropdown since Phase 6 and has zero live Price List rows already, so
+ * seeding rows for a job type nobody can newly select would just be clutter.
  *
  * Same self-contained raw-pg.Client pattern as seed-appointment-field-config.ts.
  *
@@ -54,6 +61,9 @@ const APPLIANCE_CATEGORIES = [
   'OTHER',
 ];
 
+// Phase 11 (2026-09-24) - MAINTENANCE deliberately excluded, see the file doc comment.
+const JOB_TYPES = ['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION'];
+
 async function main(): Promise<void> {
   loadEnvFile();
 
@@ -72,23 +82,25 @@ async function main(): Promise<void> {
     let skipped = 0;
 
     for (const category of APPLIANCE_CATEGORIES) {
-      const existing = await client.query(
-        `SELECT id FROM service_price_lists WHERE category = $1 AND "jobType" = 'REPAIR'`,
-        [category],
-      );
-      if (existing.rows.length > 0) {
-        console.log(`${category} / REPAIR already exists - skipping.`);
-        skipped += 1;
-        continue;
-      }
+      for (const jobType of JOB_TYPES) {
+        const existing = await client.query(
+          `SELECT id FROM service_price_lists WHERE category = $1 AND "jobType" = $2`,
+          [category, jobType],
+        );
+        if (existing.rows.length > 0) {
+          console.log(`${category} / ${jobType} already exists - skipping.`);
+          skipped += 1;
+          continue;
+        }
 
-      await client.query(
-        `INSERT INTO service_price_lists (category, "jobType", "priceB2B", "priceB2C", "billingChannelRate", "warrantyLaborCost", "isActive")
-         VALUES ($1, 'REPAIR', 0, 0, 0, 0, true)`,
-        [category],
-      );
-      console.log(`Created ${category} / REPAIR at price 0.00 - edit real rates in via the Price Lists screen.`);
-      created += 1;
+        await client.query(
+          `INSERT INTO service_price_lists (category, "jobType", "priceB2B", "priceB2C", "billingChannelRate", "warrantyLaborCost", "isActive")
+           VALUES ($1, $2, 0, 0, 0, 0, true)`,
+          [category, jobType],
+        );
+        console.log(`Created ${category} / ${jobType} at price 0.00 - edit real rates in via the Price Lists screen.`);
+        created += 1;
+      }
     }
 
     console.log('');

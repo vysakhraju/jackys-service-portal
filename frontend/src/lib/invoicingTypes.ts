@@ -29,6 +29,31 @@ export interface Invoice {
   paidAt: string | null;
   recordedByUser?: UserRef | null;
   recordedByUserId: string | null;
+  // Phase 4/11 - which path priced this invoice: an approved Estimate (REPAIR), a Price
+  // List baseline fallback (REPAIR with no Estimate), or per-line-item activity pricing
+  // (COMPLETED ERP-sourced Installation/Delivery Installation jobs). sourceEstimateId is
+  // only ever set for ESTIMATE. billingChannelId/Name are only ever set for
+  // PRICE_LIST_BASELINE (B2B_SALES_CHANNEL) or, per line, inside lineItemsBreakdown for
+  // ACTIVITY_LINE_ITEMS. lineItemsBreakdown is only ever set for ACTIVITY_LINE_ITEMS -
+  // see invoice.entity.ts's own doc comment for why this stays a loose jsonb shape.
+  priceSource?: 'ESTIMATE' | 'PRICE_LIST_BASELINE' | 'ACTIVITY_LINE_ITEMS';
+  sourceEstimateId?: string | null;
+  billingChannelId?: string | null;
+  billingChannelName?: string | null;
+  lineItemsBreakdown?:
+    | {
+        applianceModelId: string;
+        brand: string;
+        model: string;
+        category: string;
+        jobType: string;
+        quantity: number;
+        unitPrice: number;
+        lineTotal: number;
+        billingChannelId: string | null;
+        billingChannelName: string | null;
+      }[]
+    | null;
   createdAt: string;
   updatedAt: string;
 }

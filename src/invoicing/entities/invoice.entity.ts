@@ -55,9 +55,18 @@ export enum PaymentMethod {
 // falls back to a Price List baseline (see InvoicingService.resolveBaselinePricing) - an
 // approved Estimate still always overrides the baseline whenever one exists (the
 // "billing tiebreaker" decision locked back in the original 2026-09-22 request).
+// ACTIVITY_LINE_ITEMS added Phase 11 (2026-09-24, billing verification for the Job Type
+// split's Installation/Delivery Installation flow) - a COMPLETED (ERP-sourced) Job Card
+// never has an Estimate (Estimates are REPAIR-only) and its Category comes from its own
+// JobCardActivityLineItem rows rather than a single appointment-level ApplianceModel, so
+// it gets its own price source tag distinct from PRICE_LIST_BASELINE - Finance can tell
+// "REPAIR job priced off the Price List because no Estimate existed" apart from "ERP
+// install/delivery job priced per line item" at a glance, without having to cross-
+// reference the Job Card's own status/section.
 export enum InvoicePriceSource {
   ESTIMATE = 'ESTIMATE',
   PRICE_LIST_BASELINE = 'PRICE_LIST_BASELINE',
+  ACTIVITY_LINE_ITEMS = 'ACTIVITY_LINE_ITEMS',
 }
 
 @Entity('invoices')
@@ -123,6 +132,30 @@ export class Invoice {
 
   @Column({ type: 'varchar', length: 100, nullable: true })
   billingChannelName: string | null;
+
+  // Phase 11 (2026-09-24) - only ever set when priceSource is ACTIVITY_LINE_ITEMS. One
+  // entry per JobCardActivityLineItem this invoice's subtotal was built from, snapshotted
+  // at creation time (same "copy, not a live join" convention as billingChannelName
+  // above) so a later Price List edit doesn't retroactively change what this invoice says
+  // it was billed for. Kept as a loose jsonb shape rather than its own child table -
+  // there is nothing here a report needs to query/filter by independently of its parent
+  // invoice (unlike JobCardActivityLineItem itself, which genuinely needed to be
+  // individually reportable per the original request) - this exists purely so Finance
+  // can see the per-line math behind a multi-line total without re-deriving it from the
+  // Price List after the fact.
+  @Column({ type: 'jsonb', nullable: true })
+  lineItemsBreakdown: {
+    applianceModelId: string;
+    brand: string;
+    model: string;
+    category: string;
+    jobType: string;
+    quantity: number;
+    unitPrice: number;
+    lineTotal: number;
+    billingChannelId: string | null;
+    billingChannelName: string | null;
+  }[] | null;
 
   @Column({ type: 'enum', enum: PaymentMethod, nullable: true })
   paymentMethod: PaymentMethod | null;

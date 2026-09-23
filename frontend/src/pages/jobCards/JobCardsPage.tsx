@@ -8,6 +8,7 @@ import { Field, inputClass } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
+import { RecordPaymentModal } from '../delivery/RecordPaymentModal';
 import { getAppointment } from '../../lib/appointmentsApi';
 import { listApplianceModels } from '../../lib/masterDataApi';
 import {
@@ -606,6 +607,12 @@ export function JobCardsPage() {
   // every logged-in user regardless of role, and only 403'd on click (backend already
   // gates all four actions on @RequiresCapability('JOB_CARD_MANAGE')). This mirrors that.
   const canManage = has('JOB_CARD_MANAGE');
+  // Phase 11 (2026-09-24) - mirrors invoicing.controller.ts's own
+  // @RequiresCapability('INVOICING_JOB_CARD_VIEW') on GET /invoicing/job-card/:jobCardId,
+  // the endpoint the new Invoice card below calls. A COMPLETED (ERP-sourced) Job Card
+  // never reaches Delivery (see the Job Type split's locked decision), so this is the
+  // only place in the app such a job's invoice can be viewed/generated from.
+  const canViewInvoice = has('INVOICING_JOB_CARD_VIEW');
 
   const appointmentQuery = useQuery({
     queryKey: ['appointment', activeAppointmentId],
@@ -774,6 +781,7 @@ export function JobCardsPage() {
               jobCard={jobCardQuery.data}
               canWarrantyOverride={canWarrantyOverride}
               canManage={canManage}
+              canViewInvoice={canViewInvoice}
               onChanged={invalidateJobCard}
             />
           )}
@@ -787,13 +795,16 @@ function JobCardDetail({
   jobCard,
   canWarrantyOverride,
   canManage,
+  canViewInvoice,
   onChanged,
 }: {
   jobCard: JobCard;
   canWarrantyOverride: boolean;
   canManage: boolean;
+  canViewInvoice: boolean;
   onChanged: () => void;
 }) {
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const validateSnMutation = useMutation({
     mutationFn: (matches: boolean) => validateSn(jobCard.id, { matches }),
     onSuccess: onChanged,
@@ -1017,6 +1028,33 @@ function JobCardDetail({
       {canOverride && <WarrantyOverrideCard jobCard={jobCard} mutation={overrideMutation} />}
 
       {canCancel && <CancelCard mutation={cancelMutation} />}
+
+      {jobCard.status === 'COMPLETED' && canViewInvoice && (
+        <ActionCard title="Invoice">
+          <p className="mb-2 text-xs text-slate-400">
+            Billing verification (Phase 11) - Installation / Delivery Installation jobs bill
+            per line item through the same Price List + Billing Channel logic as REPAIR,
+            since a COMPLETED job never reaches Delivery. Opening this generates the invoice
+            the first time it's requested, if one doesn't exist yet.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowInvoiceModal(true)}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            View / Generate Invoice
+          </button>
+        </ActionCard>
+      )}
+
+      {showInvoiceModal && (
+        <RecordPaymentModal
+          open={showInvoiceModal}
+          onClose={() => setShowInvoiceModal(false)}
+          jobCardId={jobCard.id}
+          onPaid={onChanged}
+        />
+      )}
     </div>
   );
 }

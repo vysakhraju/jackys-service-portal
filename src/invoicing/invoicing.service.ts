@@ -128,6 +128,13 @@ export class InvoicingService {
     billingChannelId: string | null;
     billingChannelName: string | null;
   }> {
+    // Never called for a COMPLETED (ERP-sourced) Job Card - see
+    // resolveActivityLineItemsPricing below, which getOrCreateForJobCard routes to
+    // instead. Guarded here too since this method's own category resolution
+    // (appointment.applianceModel) is meaningless for that flow - Phase 6 hides the
+    // Brand/Model field entirely for INSTALLATION/DELIVERY_INSTALLATION appointments, so
+    // appointment.applianceModel is always null for them regardless of what a caller
+    // passes in.
     const appointment: Appointment | null | undefined = jobCard.appointment;
     const category = appointment?.applianceModel?.category ?? null;
     if (!category) {
@@ -177,9 +184,141 @@ export class InvoicingService {
   }
 
   /**
+   * Phase 11 (2026-09-24) - billing for a COMPLETED (ERP-sourced) Job Card from the Job
+   * Type split's Installation/Delivery Installation flow (Phase 10). These Job Cards
+   * never go through QC/Estimates at all (point 11 of the original 2026-09-22 request:
+   * "financial billing routes through the existing Billing Channel/Price List logic
+   * unchanged" - reaching COMPLETED is itself the billing trigger, not a QC pass), and
+   * their appointment never carries an ApplianceModel (Phase 6 hides that field entirely
+   * for these 2 job types) - so unlike resolveBaselinePricing above, Category/JobType
+   * come from the Job Card's own JobCardActivityLineItem rows (Phase 10), one line per
+   * appliance/quantity the CCE or technician recorded, not from a single appointment-wide
+   * model. A Job Card can carry several lines with different categories/job types (e.g.
+   * deliver 2 units, install 3 others under one ERP reference) - each line is priced
+   * independently against the Price List and the results summed into one invoice, per
+   * your own confirmation this round ("several line items, potentially different
+   * appliance categories & qty... price is calculated based on that from price master").
+   *
+   * B2C/B2B/B2B_SALES_CHANNEL routing and the appointment's own Billing Channel override
+   * (Phase 5) are unchanged in spirit from resolveBaselinePricing, just applied per line:
+   * for a B2B_SALES_CHANNEL job whose appointment has its own picked Billing Channel, that
+   * channel's flat `defaultRate` (originally designed as a single per-job rate on a
+   * REPAIR-flow, one-appliance job) is applied here as a PER-UNIT rate on every line -
+   * documented as-designed rather than silently guessed, since there's no existing
+   * multi-line precedent to follow; revisit this specific rule if it turns out wrong once
+   * a real multi-line B2B_SALES_CHANNEL install is billed. A line whose Price List row has
+   * its OWN configured Billing Channel (no appointment-level override) is unaffected by
+   * this note - that per-row rate was already designed to be a per-unit rate.
+   *
+   * Same hard-stop philosophy as resolveBaselinePricing on every failure mode (missing
+   * Category, no matching active Price List row, no Billing Channel defaultRate) - a
+   * silently-invented price is worse than a clear 400 naming which line and what master-
+   * data gap to fix. "Keep room for pricing new logic later" (your own framing this
+   * round): this method is the one, single place per-line activity pricing happens, so a
+   * future pricing rule change has one call site to touch, not several.
+   */
+  private async resolveActivityLineItemsPricing(jobCard: JobCard): Promise<{
+    subtotal: number;
+    vatRate: number;
+    vatAmount: number;
+    amount: number;
+    billingChannelId: string | null;
+    billingChannelName: string | null;
+    lineItemsBreakdown: NonNullable<Invoice['lineItemsBreakdown']>;
+  }> {
+    const appointment: Appointment | null | undefined = jobCard.appointment;
+    const lineItems = jobCard.activityLineItems ?? [];
+    if (lineItems.length === 0) {
+      throw new BadRequestException(
+        `Job Card ${jobCard.jobCardNumber} is COMPLETED but has no line items recorded - nothing to invoice. This indicates a data-integrity gap, not a normal state.`,
+      );
+    }
+
+    let runningBillingChannelId: string | null = null;
+    let runningBillingChannelName: string | null = null;
+    let subtotal = 0;
+    const lineItemsBreakdown: NonNullable<Invoice['lineItemsBreakdown']> = [];
+
+    for (const line of lineItems) {
+      const category = line.applianceModel?.category ?? null;
+      if (!category) {
+        throw new BadRequestException(
+          `Line item for Appliance Model ${line.applianceModelId} on Job Card ${jobCard.jobCardNumber} has no Category set - set one on the Appliance Model master before an invoice can be generated.`,
+        );
+      }
+      const priceRow = await this.priceListRepository.findOne({
+        where: { category, jobType: line.jobType, isActive: true },
+        relations: { billingChannel: true },
+      });
+      if (!priceRow) {
+        throw new BadRequestException(
+          `No active Price List row exists for ${category} / ${line.jobType} - add one before an invoice can be generated for Job Card ${jobCard.jobCardNumber}.`,
+        );
+      }
+
+      let billingChannelId: string | null = null;
+      let billingChannelName: string | null = null;
+      let unitPrice: number;
+
+      if (appointment?.customerType === CustomerType.B2C) {
+        unitPrice = Number(priceRow.priceB2C);
+      } else if (appointment?.customerType === CustomerType.B2B_SALES_CHANNEL) {
+        const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
+        if (resolved) {
+          unitPrice = resolved.rate;
+          billingChannelId = resolved.billingChannelId;
+          billingChannelName = resolved.billingChannelName;
+        } else {
+          unitPrice = Number(priceRow.priceB2B);
+        }
+      } else {
+        unitPrice = Number(priceRow.priceB2B);
+      }
+
+      const lineTotal = Math.round(unitPrice * line.quantity * 100) / 100;
+      subtotal = Math.round((subtotal + lineTotal) * 100) / 100;
+      if (billingChannelId) {
+        runningBillingChannelId = billingChannelId;
+        runningBillingChannelName = billingChannelName;
+      }
+
+      lineItemsBreakdown.push({
+        applianceModelId: line.applianceModelId,
+        brand: line.applianceModel?.brand ?? '',
+        model: line.applianceModel?.model ?? '',
+        category,
+        jobType: line.jobType,
+        quantity: line.quantity,
+        unitPrice,
+        lineTotal,
+        billingChannelId,
+        billingChannelName,
+      });
+    }
+
+    const vatRate = Number(appointment?.serviceCentre?.vatRate ?? 5);
+    const vatAmount = Math.round(subtotal * (vatRate / 100) * 100) / 100;
+    const amount = Math.round((subtotal + vatAmount) * 100) / 100;
+
+    return {
+      subtotal,
+      vatRate,
+      vatAmount,
+      amount,
+      billingChannelId: runningBillingChannelId,
+      billingChannelName: runningBillingChannelName,
+      lineItemsBreakdown,
+    };
+  }
+
+  /**
    * Lazily creates a DRAFT invoice the first time one's needed for a QC_PASSED, OOW Job
-   * Card - deliberately not eagerly created at QC-approve time (Phase 6 stays untouched).
-   * Never called for IW jobs (nothing to invoice - warranty covers it).
+   * Card - or, per Phase 11, for a COMPLETED (ERP-sourced) Job Card, whose own COMPLETED
+   * status is the billing trigger instead of QC. Deliberately not eagerly created at
+   * QC-approve/activity-finish time (Phase 6 stays untouched for REPAIR).
+   * Never called for IW REPAIR jobs (nothing to invoice - warranty covers it); COMPLETED
+   * Job Cards have no warrantyStatus concept at all (nulled per Phase 10) and always go
+   * through this path.
    *
    * Race safety: two near-simultaneous callers (a polling dashboard, a delivery-batch
    * attempt) could both see "no invoice yet" and both try to insert one. The unique index
@@ -193,21 +332,35 @@ export class InvoicingService {
     }
 
     const jobCard = await this.jobCardsService.findById(jobCardId);
-    if (jobCard.status !== JobCardStatus.QC_PASSED && jobCard.status !== JobCardStatus.DELIVERED) {
-      throw new BadRequestException(`Cannot generate an invoice for a Job Card that hasn't passed QC yet (current status: ${jobCard.status}).`);
-    }
-    if (jobCard.warrantyStatus !== WarrantyStatus.OUT_OF_WARRANTY) {
-      throw new BadRequestException('This Job Card is in-warranty - there is nothing to invoice.');
+
+    // Phase 11: a COMPLETED (ERP-sourced) Job Card never enters the QC/warranty pipeline
+    // at all - reaching COMPLETED IS the billing trigger for it, per your own framing
+    // this round ("once status is completed for that job, billing happens... dont rely
+    // on repair workflow as qc completed or delivery"). Every other status still goes
+    // through the REPAIR-flow QC/warranty gate exactly as before.
+    const isActivityJobCard = jobCard.status === JobCardStatus.COMPLETED;
+    if (!isActivityJobCard) {
+      if (jobCard.status !== JobCardStatus.QC_PASSED && jobCard.status !== JobCardStatus.DELIVERED) {
+        throw new BadRequestException(`Cannot generate an invoice for a Job Card that hasn't passed QC yet (current status: ${jobCard.status}).`);
+      }
+      if (jobCard.warrantyStatus !== WarrantyStatus.OUT_OF_WARRANTY) {
+        throw new BadRequestException('This Job Card is in-warranty - there is nothing to invoice.');
+      }
     }
 
     // Estimates.create() blocks a new active estimate from ever existing alongside an
     // already-APPROVED one (409 gate) - so at most one APPROVED estimate can exist per Job
     // Card, ever. Still ordering + defensively erroring loud rather than silently picking
-    // one, in case that invariant is ever violated by a future change.
-    const approvedEstimates = await this.estimateRepository.find({
-      where: { jobCardId, status: EstimateStatus.APPROVED },
-      order: { createdAt: 'DESC' },
-    });
+    // one, in case that invariant is ever violated by a future change. Skipped entirely
+    // for an activity Job Card - Estimates are a REPAIR-flow-only concept (point 10 of
+    // the original request routes these through a wholly separate creation path), so
+    // there's no approved-estimate table to even check.
+    const approvedEstimates = isActivityJobCard
+      ? []
+      : await this.estimateRepository.find({
+          where: { jobCardId, status: EstimateStatus.APPROVED },
+          order: { createdAt: 'DESC' },
+        });
     if (approvedEstimates.length > 1) {
       throw new BadRequestException(`Data integrity error: Job Card ${jobCardId} has ${approvedEstimates.length} APPROVED estimates - expected at most one. Needs manual review before an invoice can be generated.`);
     }
@@ -220,6 +373,7 @@ export class InvoicingService {
     let sourceEstimateId: string | null = null;
     let billingChannelId: string | null = null;
     let billingChannelName: string | null = null;
+    let lineItemsBreakdown: Invoice['lineItemsBreakdown'] = null;
 
     if (approvedEstimates.length === 1) {
       // Approved Estimate always overrides the Price List baseline - the locked
@@ -231,6 +385,18 @@ export class InvoicingService {
       vatRate = Number(jobCard.appointment?.serviceCentre?.vatRate ?? 5);
       priceSource = InvoicePriceSource.ESTIMATE;
       sourceEstimateId = estimate.id;
+    } else if (isActivityJobCard) {
+      // Phase 11: COMPLETED Job Card, priced per its own line items - see
+      // resolveActivityLineItemsPricing's own doc comment for the full design.
+      const baseline = await this.resolveActivityLineItemsPricing(jobCard);
+      amount = baseline.amount;
+      subtotal = baseline.subtotal;
+      vatRate = baseline.vatRate;
+      vatAmount = baseline.vatAmount;
+      priceSource = InvoicePriceSource.ACTIVITY_LINE_ITEMS;
+      billingChannelId = baseline.billingChannelId;
+      billingChannelName = baseline.billingChannelName;
+      lineItemsBreakdown = baseline.lineItemsBreakdown;
     } else {
       // No approved Estimate exists (most likely the FR-06 manual approve-customer
       // stopgap was used instead of the real Estimate flow) - fall back to the Price
@@ -259,6 +425,7 @@ export class InvoicingService {
         sourceEstimateId,
         billingChannelId,
         billingChannelName,
+        lineItemsBreakdown,
         status: InvoiceStatus.DRAFT,
         dueDate: new Date(now.getTime() + B2B_CREDIT_TERM_DAYS * 24 * 60 * 60 * 1000),
       });

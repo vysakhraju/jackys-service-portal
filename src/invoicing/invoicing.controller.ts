@@ -40,9 +40,9 @@ export class InvoicingController {
 
   @Get('job-card/:jobCardId')
   @RequiresCapability('INVOICING_JOB_CARD_VIEW')
-  @ApiOperation({ summary: 'Get (lazily creating a DRAFT if none exists yet) the invoice for an out-of-warranty, QC_PASSED Job Card' })
+  @ApiOperation({ summary: 'Get (lazily creating a DRAFT if none exists yet) the invoice for an out-of-warranty, QC_PASSED Job Card - or, per Phase 11, a COMPLETED (ERP-sourced Installation/Delivery Installation) Job Card, priced per its own line items instead' })
   @ApiResponse({ status: 200, description: 'The invoice (existing or newly drafted)' })
-  @ApiResponse({ status: 400, description: 'Job Card is not QC_PASSED, is in-warranty, or has no approved Estimate' })
+  @ApiResponse({ status: 400, description: 'Job Card is not QC_PASSED/COMPLETED, is in-warranty, or is missing Price List/Category master data needed to price it' })
   async getForJobCard(@Param('jobCardId', ParseUUIDPipe) jobCardId: string) {
     return this.invoicingService.getOrCreateForJobCard(jobCardId);
   }
