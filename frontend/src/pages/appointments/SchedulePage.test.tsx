@@ -19,6 +19,7 @@ vi.mock('../../lib/appointmentsApi', () => ({
   listAppointments: vi.fn(),
   markAppointmentCollectedToWorkshop: vi.fn(),
   markAppointmentOnSite: vi.fn(),
+  overrideFinishAppointmentActivity: vi.fn(),
   resolveMapLink: vi.fn(),
   searchAppointments: vi.fn(),
   updateAppointment: vi.fn(),
@@ -66,6 +67,7 @@ import {
   getVisit,
   listAppointments,
   markAppointmentCollectedToWorkshop,
+  overrideFinishAppointmentActivity,
   resolveMapLink,
   searchAppointments,
   updateAppointment,
@@ -143,6 +145,7 @@ beforeEach(() => {
   vi.mocked(getAppointmentActivity).mockReset();
   vi.mocked(updateAppointment).mockReset();
   vi.mocked(markAppointmentCollectedToWorkshop).mockReset();
+  vi.mocked(overrideFinishAppointmentActivity).mockReset();
   vi.mocked(searchAppointments).mockReset().mockResolvedValue([]);
   vi.mocked(getSchedulingGrid).mockReset().mockResolvedValue(schedulingGridFixture());
   vi.mocked(listServiceCentres).mockReset().mockResolvedValue([{ id: 'sc-1', name: 'Dubai Service Centre' }] as any);
@@ -818,6 +821,40 @@ describe('SchedulePage - Group B capability gating', () => {
     expect(await screen.findByRole('button', { name: 'Complete' })).toBeInTheDocument();
   });
 
+  // Job Type split (2026-09-22) Phase 9 - row-action gating fix found while building the
+  // CCE override: Mark collected to WS and Complete used to be offered regardless of job
+  // type, letting a CCE push an Installation/Delivery Installation appointment straight
+  // into COLLECTED_TO_WS/COMPLETED - states the activity-flow guards (startActivity/
+  // overrideFinishActivity) explicitly reject for these 2 job types, which only ever
+  // finish via the mobile Activity Finished action or the new override (below).
+  it('hides Mark collected to WS for a TECHNICIAN_ASSIGNED INSTALLATION row even with SCHEDULE_FIELD_VISIT granted', async () => {
+    mockCapabilities(['SCHEDULE_FIELD_VISIT']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-collect', appointmentNumber: 'APT-0007', status: 'TECHNICIAN_ASSIGNED', jobType: 'INSTALLATION' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0007');
+
+    expect(screen.queryByRole('button', { name: 'Mark collected to WS' })).not.toBeInTheDocument();
+  });
+
+  it('hides Complete for an ON_SITE DELIVERY_INSTALLATION row even with SCHEDULE_FIELD_VISIT granted', async () => {
+    mockCapabilities(['SCHEDULE_FIELD_VISIT']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-onsite', appointmentNumber: 'APT-0005', status: 'ON_SITE', jobType: 'DELIVERY_INSTALLATION' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    renderPage();
+    await screen.findByText('APT-0005');
+
+    expect(screen.queryByRole('button', { name: 'Complete' })).not.toBeInTheDocument();
+  });
+
   it('hides the dashboard-stats widget and the invoice number Add control without SCHEDULE_VIEW_UPDATE', async () => {
     mockCapabilities([]);
     vi.mocked(listAppointments).mockResolvedValue({
@@ -1000,6 +1037,91 @@ describe('SchedulePage - Mark Received (Phase 4 workshop intake)', () => {
     const heading = await screen.findByRole('heading', { name: /APT-0010/ });
     const modal = heading.closest('[role="dialog"]')!;
     await within(modal).findByText('Could not load activity status.');
+  });
+
+  // Job Type split (2026-09-22) Phase 9 - the CCE manual "Mark Activity Complete" override,
+  // for when a technician hands over a paper completion document instead of using the
+  // mobile Start Work/Pause/Resume/Activity Finished flow. Gated on SCHEDULE_CCE_MANAGE
+  // (the same capability Confirm uses), not SCHEDULE_FIELD_VISIT - this is a staff action
+  // taken on the technician's behalf, not a field-technician self-service one.
+  it('hides Mark Activity Complete for an INSTALLATION appointment without SCHEDULE_CCE_MANAGE', async () => {
+    mockCapabilities([]);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-inst', appointmentNumber: 'APT-0011', jobType: 'INSTALLATION' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getAppointmentActivity).mockResolvedValue({
+      status: 'IN_PROGRESS',
+      startedAt: '2026-09-23T08:00:00.000Z',
+      finishedAt: null,
+      pauses: [],
+    });
+    renderPage();
+    await screen.findByText('APT-0011');
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+
+    const heading = await screen.findByRole('heading', { name: /APT-0011/ });
+    const modal = heading.closest('[role="dialog"]')!;
+    await within(modal).findByText('Work status');
+    expect(within(modal).queryByRole('button', { name: 'Mark Activity Complete' })).not.toBeInTheDocument();
+  });
+
+  it('shows Mark Activity Complete for an INSTALLATION appointment with SCHEDULE_CCE_MANAGE, and calls the override endpoint on click', async () => {
+    mockCapabilities(['SCHEDULE_CCE_MANAGE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-inst', appointmentNumber: 'APT-0012', jobType: 'INSTALLATION' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getAppointmentActivity).mockResolvedValue({
+      status: 'IN_PROGRESS',
+      startedAt: '2026-09-23T08:00:00.000Z',
+      finishedAt: null,
+      pauses: [],
+    });
+    vi.mocked(overrideFinishAppointmentActivity).mockResolvedValue({
+      status: 'FINISHED',
+      startedAt: '2026-09-23T08:00:00.000Z',
+      finishedAt: '2026-09-23T10:00:00.000Z',
+      pauses: [],
+    });
+    renderPage();
+    await screen.findByText('APT-0012');
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+
+    const heading = await screen.findByRole('heading', { name: /APT-0012/ });
+    const modal = heading.closest('[role="dialog"]')!;
+    await within(modal).findByText('Work status');
+    fireEvent.click(within(modal).getByRole('button', { name: 'Mark Activity Complete' }));
+
+    await waitFor(() => expect(vi.mocked(overrideFinishAppointmentActivity)).toHaveBeenCalledWith('appt-inst'));
+  });
+
+  it('does not show Mark Activity Complete once the activity is already FINISHED, even with SCHEDULE_CCE_MANAGE', async () => {
+    mockCapabilities(['SCHEDULE_CCE_MANAGE']);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-inst', appointmentNumber: 'APT-0013', jobType: 'INSTALLATION' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getAppointmentActivity).mockResolvedValue({
+      status: 'FINISHED',
+      startedAt: '2026-09-23T08:00:00.000Z',
+      finishedAt: '2026-09-23T10:00:00.000Z',
+      pauses: [],
+    });
+    renderPage();
+    await screen.findByText('APT-0013');
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+
+    const heading = await screen.findByRole('heading', { name: /APT-0013/ });
+    const modal = heading.closest('[role="dialog"]')!;
+    await within(modal).findByText('Work status');
+    expect(within(modal).queryByRole('button', { name: 'Mark Activity Complete' })).not.toBeInTheDocument();
   });
 });
 

@@ -50,6 +50,9 @@ export enum AuditAction {
   ACTIVITY_PAUSED = 'ACTIVITY_PAUSED',
   ACTIVITY_RESUMED = 'ACTIVITY_RESUMED',
   ACTIVITY_FINISHED = 'ACTIVITY_FINISHED',
+  // Job Type split (2026-09-22) Phase 9 - CCE manual override when a technician skips
+  // the mobile flow entirely and hands over a paper completion document instead
+  ACTIVITY_OVERRIDE_FINISHED = 'ACTIVITY_OVERRIDE_FINISHED',
 }
 
 @Entity('audit_logs')

@@ -25,6 +25,7 @@ import {
   listAppointments,
   markAppointmentCollectedToWorkshop,
   markAppointmentOnSite,
+  overrideFinishAppointmentActivity,
   resolveMapLink,
   searchAppointments,
   updateAppointment,
@@ -183,16 +184,32 @@ function shiftIsoDate(iso: string, days: number): string {
 // - `canEdit` mirrors the backend's own read/write appointment.entity.ts intent: editable
 //   up to TECHNICIAN_ASSIGNED (nothing real has happened in the field yet), read-only once
 //   a visit or a workshop collection is actually underway.
-function availableActions(status: AppointmentStatusValue, type: string, hasJobCard: boolean, has: (key: string) => boolean) {
+// Job Type split (2026-09-22) Phase 9 - `jobType` added so the REPAIR-only row actions
+// below (Collected to WS, Complete) never render for an Installation/Delivery
+// Installation appointment. Calling either of those for one of these 2 job types would
+// move the appointment into a status the mobile Work card / activity-override flow
+// doesn't expect (COLLECTED_TO_WS or COMPLETED with no AppointmentActivity ever
+// finished) - a real trap found while building this phase's own CCE override, not just
+// theoretical: AppointmentsService.overrideFinishActivity() explicitly rejects once an
+// appointment reaches either of those statuses.
+function availableActions(
+  status: AppointmentStatusValue,
+  type: string,
+  jobType: string | null | undefined,
+  hasJobCard: boolean,
+  has: (key: string) => boolean,
+) {
   const isAmc = type === 'AMC';
+  const isActivityJobType = jobType === 'INSTALLATION' || jobType === 'DELIVERY_INSTALLATION';
   const preVisit = status === 'SCHEDULED' || status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED';
   const activeNotYetOnSite = status === 'CONFIRMED' || status === 'TECHNICIAN_ASSIGNED';
   return {
     canEdit: has('SCHEDULE_VIEW_UPDATE') && preVisit,
     canConfirm: has('SCHEDULE_CCE_MANAGE') && status === 'SCHEDULED',
     canMarkOnSite: has('SCHEDULE_FIELD_VISIT') && activeNotYetOnSite,
-    canMarkCollectedToWorkshop: has('SCHEDULE_FIELD_VISIT') && (activeNotYetOnSite || status === 'ON_SITE'),
-    canComplete: has('SCHEDULE_FIELD_VISIT') && status === 'ON_SITE' && !isAmc,
+    canMarkCollectedToWorkshop:
+      has('SCHEDULE_FIELD_VISIT') && (activeNotYetOnSite || status === 'ON_SITE') && !isActivityJobType,
+    canComplete: has('SCHEDULE_FIELD_VISIT') && status === 'ON_SITE' && !isAmc && !isActivityJobType,
     canCompleteAmcVisit: status === 'ON_SITE' && isAmc,
     // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4, req. 3e) - the
     // COLLECTED_TO_WS equivalent of "Complete": leads into the workshop intake screen
@@ -871,7 +888,7 @@ export function SchedulePage() {
         error={error}
         emptyMessage="No appointments match these filters yet."
         rowActions={(row) => {
-          const a = availableActions(row.status, row.type, !!row.jobCard, has);
+          const a = availableActions(row.status, row.type, row.jobType, !!row.jobCard, has);
           return (
             <div className="flex flex-wrap justify-end gap-2">
               <button onClick={() => setViewTarget(row)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
@@ -1380,6 +1397,7 @@ export function SchedulePage() {
         onClose={() => setViewTarget(null)}
         onMarkReceived={(a) => { setViewTarget(null); openMarkReceived(a); }}
         canMarkReceived={has('WORKSHOP_INTAKE_SN_VALIDATE')}
+        canOverrideActivityFinish={has('SCHEDULE_CCE_MANAGE')}
       />
 
       {/* --- Workshop intake (Phase 4) --- */}
@@ -1404,12 +1422,15 @@ function ViewAppointmentModal({
   onClose,
   onMarkReceived,
   canMarkReceived,
+  canOverrideActivityFinish,
 }: {
   appointment: Appointment | null;
   onClose: () => void;
   onMarkReceived: (appointment: Appointment) => void;
   canMarkReceived: boolean;
+  canOverrideActivityFinish: boolean;
 }) {
+  const queryClient = useQueryClient();
   // Appointment/Mobile/Job Card overhaul (2026-09-16 Phase 4) - a COLLECTED_TO_WS
   // appointment can never have a TechnicianVisit (it was collected, not visited on-site),
   // so the old unconditional getVisit() query below used to 404 and render a misleading
@@ -1449,6 +1470,16 @@ function ViewAppointmentModal({
     // WorkshopPage.tsx's own refetchInterval) - a manual refresh button below covers the
     // gap between polls.
     refetchInterval: 20000,
+  });
+
+  // Job Type split (2026-09-22) Phase 9 - point 9's CCE manual override, for when a
+  // technician hands over a paper completion document instead of using the mobile flow.
+  // Invalidates the same ['appointment-activity', id] query key the poll above already
+  // uses, so the box re-renders FINISHED immediately rather than waiting up to 20s for
+  // the next poll.
+  const overrideFinishMutation = useMutation({
+    mutationFn: () => overrideFinishAppointmentActivity(appointment!.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['appointment-activity', appointment!.id] }),
   });
 
   if (!appointment) return null;
@@ -1536,6 +1567,22 @@ function ViewAppointmentModal({
                 })()}
                 {activity.finishedAt && (
                   <p className="text-slate-600">Finished {new Date(activity.finishedAt).toLocaleString()}</p>
+                )}
+                {activity.status !== 'FINISHED' && canOverrideActivityFinish && (
+                  <div className="rounded-md border border-slate-200 bg-white p-2">
+                    <p className="text-xs text-slate-500">
+                      Technician handed over a paper completion document instead of using the mobile app?
+                    </p>
+                    {overrideFinishMutation.isError && <ErrorNotice error={overrideFinishMutation.error} />}
+                    <button
+                      type="button"
+                      disabled={overrideFinishMutation.isPending}
+                      onClick={() => overrideFinishMutation.mutate()}
+                      className="mt-1 rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {overrideFinishMutation.isPending ? 'Marking complete…' : 'Mark Activity Complete'}
+                    </button>
+                  </div>
                 )}
                 {activity.pauses.length > 0 && (
                   <details className="text-xs text-slate-500">

@@ -1405,6 +1405,69 @@ export class AppointmentsService {
     return this.getActivity(id);
   }
 
+  // Job Type split (2026-09-22) Phase 9 - CCE manual override for point 9 of the
+  // original request: a technician who hands over a paper completion document instead
+  // of using the mobile flow. Unlike finishActivity(), this never rejects on missing/
+  // paused state - it's specifically FOR the case where the technician skipped the
+  // mobile flow entirely (no AppointmentActivity row at all, still NOT_STARTED) or
+  // started it but never got back to Activity Finished (IN_PROGRESS/PAUSED). Any open
+  // pause is auto-resumed first (stamped by the overriding CCE user) so the record never
+  // ends up claiming to be both finished and paused - mirrors resumeActivity()'s own
+  // field-setting rather than inventing a second way to close a pause. Idempotent on an
+  // already-finished activity, same as finishActivity().
+  async overrideFinishActivity(id: string, userId: string, req?: any): Promise<AppointmentActivityResult> {
+    const appointment = await this.findById(id);
+
+    if (!ACTIVITY_JOB_TYPES.includes(appointment.jobType)) {
+      throw new BadRequestException('This override only applies to Installation/Delivery Installation appointments.');
+    }
+    if (
+      [AppointmentStatus.COLLECTED_TO_WS, AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED].includes(
+        appointment.status,
+      )
+    ) {
+      throw new BadRequestException(`Cannot override activity completion once an appointment is ${appointment.status}.`);
+    }
+
+    let activity = await this.appointmentActivityRepository.findOne({ where: { appointmentId: id } });
+    if (activity?.finishedAt) {
+      return this.getActivity(id);
+    }
+
+    // No mobile Start Work tap ever happened - the override still needs a real
+    // AppointmentActivity row to hang a finish timestamp off of, so create one stamped by
+    // the overriding CCE user rather than inventing a fictitious technician-started time.
+    if (!activity) {
+      activity = this.appointmentActivityRepository.create({ appointmentId: id, startedByUserId: userId });
+      activity = await this.appointmentActivityRepository.save(activity);
+    }
+
+    const openPause = await this.appointmentActivityPauseRepository.findOne({
+      where: { appointmentActivityId: activity.id, resumedAt: IsNull() },
+    });
+    if (openPause) {
+      openPause.resumedAt = new Date();
+      openPause.resumedByUserId = userId;
+      await this.appointmentActivityPauseRepository.save(openPause);
+    }
+
+    activity.finishedAt = new Date();
+    activity.finishedByUserId = userId;
+    await this.appointmentActivityRepository.save(activity);
+
+    await this.logAudit(
+      userId,
+      AuditAction.ACTIVITY_OVERRIDE_FINISHED,
+      'AppointmentActivity',
+      id,
+      null,
+      { finishedAt: activity.finishedAt, autoResumedOpenPause: !!openPause },
+      req,
+    );
+
+    return this.getActivity(id);
+  }
+
   async completeAppointment(id: string, userId: string, req?: any): Promise<Appointment> {
     const appointment = await this.findById(id);
 

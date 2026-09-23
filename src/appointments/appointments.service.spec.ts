@@ -1607,6 +1607,110 @@ describe('AppointmentsService', () => {
           expect(appointmentActivityRepository.save).not.toHaveBeenCalled();
         });
       });
+
+      // Job Type split (2026-09-22) Phase 9 - CCE manual override for point 9: a
+      // technician who hands over a paper completion document instead of using the
+      // mobile flow.
+      describe('overrideFinishActivity', () => {
+        it('rejects a non-Installation/Delivery-Installation job type', async () => {
+          appointmentRepository.findOne.mockResolvedValue(appointment({ jobType: JobType.REPAIR }));
+
+          await expect(service.overrideFinishActivity('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+          expect(appointmentActivityRepository.save).not.toHaveBeenCalled();
+        });
+
+        it.each([AppointmentStatus.COLLECTED_TO_WS, AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED])(
+          'rejects once the appointment is %s',
+          async (status) => {
+            appointmentRepository.findOne.mockResolvedValue(appointment({ jobType: JobType.INSTALLATION, status }));
+
+            await expect(service.overrideFinishActivity('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+          },
+        );
+
+        it('creates a fresh activity row (stamped by the overriding user) when the technician never opened the mobile flow at all', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ jobType: JobType.INSTALLATION, status: AppointmentStatus.ON_SITE }),
+          );
+          appointmentActivityRepository.findOne
+            .mockResolvedValueOnce(null) // the "does one already exist" check inside overrideFinishActivity
+            .mockResolvedValueOnce({
+              id: 'activity-1',
+              appointmentId: 'apt-1',
+              startedAt: new Date('2026-09-23T08:00:00Z'),
+              finishedAt: new Date('2026-09-23T12:00:00Z'),
+            }); // getActivity()'s own lookup once the override has saved the finished row
+          appointmentActivityPauseRepository.findOne.mockResolvedValue(null);
+
+          const result = await service.overrideFinishActivity('apt-1', 'cce-user-1');
+
+          expect(appointmentActivityRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ appointmentId: 'apt-1', startedByUserId: 'cce-user-1' }),
+          );
+          expect(appointmentActivityRepository.save).toHaveBeenLastCalledWith(
+            expect.objectContaining({ finishedAt: expect.any(Date), finishedByUserId: 'cce-user-1' }),
+          );
+          expect(auditLogRepository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ action: AuditAction.ACTIVITY_OVERRIDE_FINISHED, entityType: 'AppointmentActivity', entityId: 'apt-1' }),
+          );
+          expect(result.status).toBe('FINISHED');
+        });
+
+        it('finishes an in-progress activity (existing row, no open pause) without touching startedByUserId', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ jobType: JobType.DELIVERY_INSTALLATION, status: AppointmentStatus.ON_SITE }),
+          );
+          const activity: any = { id: 'activity-1', appointmentId: 'apt-1', startedByUserId: 'tech-1', finishedAt: null };
+          appointmentActivityRepository.findOne.mockResolvedValue(activity);
+          appointmentActivityPauseRepository.findOne.mockResolvedValue(null);
+
+          await service.overrideFinishActivity('apt-1', 'cce-user-1');
+
+          expect(appointmentActivityRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'activity-1', startedByUserId: 'tech-1', finishedAt: expect.any(Date), finishedByUserId: 'cce-user-1' }),
+          );
+        });
+
+        it('auto-resumes an open pause (stamped by the overriding user) before finishing', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ jobType: JobType.INSTALLATION, status: AppointmentStatus.ON_SITE }),
+          );
+          const activity: any = { id: 'activity-1', appointmentId: 'apt-1', finishedAt: null };
+          appointmentActivityRepository.findOne.mockResolvedValue(activity);
+          const openPause: any = { id: 'pause-1', appointmentActivityId: 'activity-1', resumedAt: null };
+          appointmentActivityPauseRepository.findOne.mockResolvedValue(openPause);
+
+          await service.overrideFinishActivity('apt-1', 'cce-user-1');
+
+          expect(appointmentActivityPauseRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'pause-1', resumedAt: expect.any(Date), resumedByUserId: 'cce-user-1' }),
+          );
+          expect(appointmentActivityRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ finishedAt: expect.any(Date), finishedByUserId: 'cce-user-1' }),
+          );
+          expect(auditLogRepository.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+              action: AuditAction.ACTIVITY_OVERRIDE_FINISHED,
+              newValues: expect.objectContaining({ autoResumedOpenPause: true }),
+            }),
+          );
+        });
+
+        it('is idempotent once already finished', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ jobType: JobType.INSTALLATION, status: AppointmentStatus.ON_SITE }),
+          );
+          appointmentActivityRepository.findOne.mockResolvedValue({
+            id: 'activity-1',
+            appointmentId: 'apt-1',
+            finishedAt: new Date('2026-09-23T12:00:00Z'),
+          });
+
+          await service.overrideFinishActivity('apt-1', 'cce-user-1');
+
+          expect(appointmentActivityRepository.save).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 

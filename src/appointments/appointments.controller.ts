@@ -460,6 +460,32 @@ export class AppointmentsController {
     return this.appointmentsService.finishActivity(id, user.id, req);
   }
 
+  // Job Type split (2026-09-22) Phase 9 - point 9 of the original request: a CCE manual
+  // override for when a technician hands over a paper completion document instead of
+  // using the mobile flow. Deliberately gated by SCHEDULE_CCE_MANAGE - the same
+  // CCE-facing manual-override capability Confirm already uses above - not
+  // SCHEDULE_FIELD_VISIT, since this is a staff action on behalf of a technician who
+  // skipped mobile, not a field-technician self-service one.
+  @Put(':id/activity/override-finish')
+  @RequiresCapability('SCHEDULE_CCE_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.ACTIVITY_OVERRIDE_FINISHED,
+    entityType: 'AppointmentActivity',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'CCE override: force-mark the Installation/Delivery Installation activity finished' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'Not an Installation/Delivery Installation job type, or appointment collected-to-workshop/completed/cancelled' })
+  async overrideFinishActivity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.appointmentsService.overrideFinishActivity(id, user.id, req);
+  }
+
   @Put(':id/complete')
   @RequiresCapability('SCHEDULE_FIELD_VISIT')
   @UseInterceptors(AuditInterceptor)

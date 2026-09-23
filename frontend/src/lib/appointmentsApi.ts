@@ -134,3 +134,10 @@ export const getVisit = (appointmentId: string) =>
 // backend doc comment for why the web view shares that same gate.
 export const getAppointmentActivity = (appointmentId: string) =>
   api.get<AppointmentActivityResult>(`${BASE}/${appointmentId}/activity`).then((r) => r.data);
+
+// Job Type split (2026-09-22) Phase 9 - CCE manual "Mark Activity Complete" override for
+// when a technician hands over a paper completion document instead of using the mobile
+// Start Work/Pause/Resume/Activity Finished flow. Gated server-side by
+// SCHEDULE_CCE_MANAGE, not SCHEDULE_FIELD_VISIT.
+export const overrideFinishAppointmentActivity = (appointmentId: string) =>
+  api.put<AppointmentActivityResult>(`${BASE}/${appointmentId}/activity/override-finish`).then((r) => r.data);
