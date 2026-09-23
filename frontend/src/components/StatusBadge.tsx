@@ -75,6 +75,12 @@ export const COLOR_BY_STATUS: Record<string, string> = {
   // WarrantyClaimStatus) - DRAFT/CANCELLED reuse the colors already defined above.
   SUBMITTED: 'bg-sky-50 text-sky-700',
   CREDIT_RECEIVED: 'bg-emerald-50 text-emerald-700',
+  // Installation/Delivery Installation activity (Job Type split, 2026-09-22 Phase 8) -
+  // AppointmentActivityStatus. IN_PROGRESS already exists above (Job Cards); FINISHED
+  // reuses the same emerald as every other "done" status here.
+  NOT_STARTED: 'bg-slate-100 text-slate-500',
+  PAUSED: 'bg-orange-50 text-orange-700',
+  FINISHED: 'bg-emerald-50 text-emerald-700',
 };
 
 export function StatusBadge({ status }: { status: string }) {

@@ -143,6 +143,35 @@ export interface CorrectJobTypeInput {
   jobType: (typeof CORRECTABLE_JOB_TYPES)[number];
 }
 
+// --- Installation/Delivery Installation activity flow (Job Type split, 2026-09-22 Phase 8) --
+// Mirrors the backend's AppointmentActivityResult (AppointmentsService#getActivity) and
+// AppointmentActivityStatus (appointment-activity-progress.util.ts). Deliberately NOT
+// offline-queueable - see appointment/[id].tsx's own comment on why Start Work/Pause/
+// Resume/Activity Finished all require connectivity, same reasoning as the existing
+// task-timer pause/resume below.
+export const ACTIVITY_STATUSES = ['NOT_STARTED', 'IN_PROGRESS', 'PAUSED', 'FINISHED'] as const;
+export type ActivityStatusValue = (typeof ACTIVITY_STATUSES)[number];
+
+export interface AppointmentActivityPause {
+  id: string;
+  reason: TaskPauseReasonValue;
+  notes: string | null;
+  pausedAt: string;
+  resumedAt: string | null;
+}
+
+export interface AppointmentActivityResult {
+  status: ActivityStatusValue;
+  startedAt: string | null;
+  finishedAt: string | null;
+  pauses: AppointmentActivityPause[];
+}
+
+export interface PauseAppointmentActivityInput {
+  reason: TaskPauseReasonValue;
+  notes?: string;
+}
+
 export interface CaptureSerialNumberInput {
   serialNumber: string;
   brand?: string;

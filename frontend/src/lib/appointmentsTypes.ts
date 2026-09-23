@@ -3,6 +3,7 @@
 // src/technician/entities/technician-visit.entity.ts, src/technician/dto/*).
 
 import type { ApplianceCategoryValue, JobTypeValue } from './masterDataTypes';
+import type { TaskPauseReasonValue } from './jobCardsTypes';
 // Price List rebuild (requested 2026-09-22, Phase 3) moved JOB_TYPES/JobTypeValue's
 // definition into masterDataTypes.ts so master-data (the Price List rebuild) and this
 // New Appointment form share ONE list instead of two that could drift - see that file's
@@ -349,4 +350,29 @@ export interface SchedulingGrid {
   breakEnd: string | null;
   rosterLabel: string;
   technicians: SchedulingGridTechnician[];
+}
+
+// === Installation/Delivery Installation activity (Job Type split, 2026-09-22 Phase 8) ===
+// Mirrors the backend's AppointmentActivityStatus (appointment-activity-progress.util.ts)
+// and AppointmentActivityResult (AppointmentsService#getActivity) exactly - see the
+// mobile app's own mirror of these same two shapes in mobile/src/lib/types.ts. This is a
+// read-only view on the web (start/pause/resume/finish are mobile-technician actions
+// only) - GET /appointments/:id/activity is what the appointment view below polls for its
+// live status/timeline, same as the mobile screen's own poll.
+export const ACTIVITY_STATUSES = ['NOT_STARTED', 'IN_PROGRESS', 'PAUSED', 'FINISHED'] as const;
+export type ActivityStatusValue = (typeof ACTIVITY_STATUSES)[number];
+
+export interface AppointmentActivityPause {
+  id: string;
+  reason: TaskPauseReasonValue;
+  notes: string | null;
+  pausedAt: string;
+  resumedAt: string | null;
+}
+
+export interface AppointmentActivityResult {
+  status: ActivityStatusValue;
+  startedAt: string | null;
+  finishedAt: string | null;
+  pauses: AppointmentActivityPause[];
 }

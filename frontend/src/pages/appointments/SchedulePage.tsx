@@ -20,6 +20,7 @@ import {
   confirmAppointment,
   createAppointment,
   deleteAppointment,
+  getAppointmentActivity,
   getVisit,
   listAppointments,
   markAppointmentCollectedToWorkshop,
@@ -44,7 +45,7 @@ import {
 } from '../../lib/appointmentsTypes';
 import { listApplianceModels, listAppointmentFieldConfigs, listCities, listServiceCentres } from '../../lib/masterDataApi';
 import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
-import { blockedJobCardReasonText } from '../../lib/jobCardsTypes';
+import { blockedJobCardReasonText, type TaskPauseReasonValue } from '../../lib/jobCardsTypes';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
 import { useBillingChannelOptions } from '../../lib/useBillingChannelOptions';
@@ -1387,6 +1388,17 @@ export function SchedulePage() {
   );
 }
 
+// Job Type split (2026-09-22) Phase 8 - same reason labels as JobCardsPage.tsx's own
+// TASK_PAUSE_REASON_LABELS (local there too, not shared centrally - see that file), used
+// here for the read-only activity timeline's pause reason text.
+const ACTIVITY_PAUSE_REASON_LABELS: Record<TaskPauseReasonValue, string> = {
+  MATERIAL_SHORTAGE: 'Material shortage',
+  AWAITING_CUSTOMER_APPROVAL: 'Awaiting customer approval',
+  CUSTOMER_UNAVAILABLE: 'Customer unavailable',
+  BREAK: 'Break',
+  OTHER: 'Other',
+};
+
 function ViewAppointmentModal({
   appointment,
   onClose,
@@ -1405,16 +1417,38 @@ function ViewAppointmentModal({
   // 2026-09-16). Skip that query entirely for COLLECTED_TO_WS and show the workshop
   // intake status instead.
   const isCollectedToWs = appointment?.status === 'COLLECTED_TO_WS';
+  // Job Type split (2026-09-22) Phase 8 - Installation/Delivery Installation appointments
+  // never get a TechnicianVisit (see the mobile screen's own isActivityJobType comment),
+  // so the Technician visit box below is replaced with the live activity status/timeline
+  // instead, and the visit query is skipped entirely for these two job types (same
+  // COLLECTED_TO_WS reasoning already documented above - a query the backend would just
+  // 404 for isn't worth issuing).
+  const isActivityJobType = appointment?.jobType === 'INSTALLATION' || appointment?.jobType === 'DELIVERY_INSTALLATION';
   const { data: visit, error: visitError, isLoading: visitLoading } = useQuery({
     queryKey: ['technician-visit', appointment?.id],
     queryFn: () => getVisit(appointment!.id),
-    enabled: !!appointment && !isCollectedToWs,
+    enabled: !!appointment && !isCollectedToWs && !isActivityJobType,
     retry: false,
   });
   const { data: intake, isLoading: intakeLoading } = useQuery({
     queryKey: ['workshop-intake', appointment?.id],
     queryFn: () => getWorkshopIntake(appointment!.id),
     enabled: !!appointment && isCollectedToWs,
+  });
+  const {
+    data: activity,
+    error: activityError,
+    isLoading: activityLoading,
+    isFetching: activityFetching,
+    refetch: refetchActivity,
+  } = useQuery({
+    queryKey: ['appointment-activity', appointment?.id],
+    queryFn: () => getAppointmentActivity(appointment!.id),
+    enabled: !!appointment && isActivityJobType,
+    // Same 15-30s live-polling pattern already used on Workshop/Dashboard (see
+    // WorkshopPage.tsx's own refetchInterval) - a manual refresh button below covers the
+    // gap between polls.
+    refetchInterval: 20000,
   });
 
   if (!appointment) return null;
@@ -1466,7 +1500,63 @@ function ViewAppointmentModal({
           </div>
         )}
 
-        {isCollectedToWs ? (
+        {isActivityJobType ? (
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Work status</p>
+              <button
+                type="button"
+                onClick={() => refetchActivity()}
+                disabled={activityFetching}
+                className="text-xs text-slate-500 hover:text-slate-700 hover:underline disabled:opacity-50"
+              >
+                {activityFetching ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
+            {activityLoading && <p className="mt-1 text-slate-500">Loading…</p>}
+            {activityError && <ErrorNotice error={activityError} />}
+            {activity && (
+              <div className="mt-2 space-y-2">
+                <StatusBadge status={activity.status} />
+                {activity.status === 'NOT_STARTED' && (
+                  <p className="text-slate-600">The technician hasn&apos;t started work yet.</p>
+                )}
+                {activity.startedAt && (
+                  <p className="text-slate-600">Started {new Date(activity.startedAt).toLocaleString()}</p>
+                )}
+                {activity.status === 'PAUSED' && (() => {
+                  const openPause = activity.pauses.find((p) => p.resumedAt === null);
+                  return openPause ? (
+                    <p className="rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-800">
+                      <span className="font-medium">Paused</span> — {ACTIVITY_PAUSE_REASON_LABELS[openPause.reason]}
+                      {openPause.notes && ` — "${openPause.notes}"`}
+                      <span className="ml-1 text-orange-600">since {new Date(openPause.pausedAt).toLocaleString()}</span>
+                    </p>
+                  ) : null;
+                })()}
+                {activity.finishedAt && (
+                  <p className="text-slate-600">Finished {new Date(activity.finishedAt).toLocaleString()}</p>
+                )}
+                {activity.pauses.length > 0 && (
+                  <details className="text-xs text-slate-500">
+                    <summary className="cursor-pointer font-medium text-slate-600">Timeline ({activity.pauses.length} pause{activity.pauses.length === 1 ? '' : 's'})</summary>
+                    <ul className="mt-2 space-y-1">
+                      {activity.startedAt && <li>Started — {new Date(activity.startedAt).toLocaleString()}</li>}
+                      {activity.pauses.map((p) => (
+                        <li key={p.id}>
+                          {ACTIVITY_PAUSE_REASON_LABELS[p.reason]}
+                          {p.notes ? ` — "${p.notes}"` : ''} — {new Date(p.pausedAt).toLocaleString()}
+                          {p.resumedAt ? ` → resumed ${new Date(p.resumedAt).toLocaleString()}` : ' (still paused)'}
+                        </li>
+                      ))}
+                      {activity.finishedAt && <li>Finished — {new Date(activity.finishedAt).toLocaleString()}</li>}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+        ) : isCollectedToWs ? (
           <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
             <p className="text-xs font-medium uppercase tracking-wide text-violet-500">Workshop intake</p>
             {intakeLoading && <p className="mt-1 text-slate-500">Loading…</p>}

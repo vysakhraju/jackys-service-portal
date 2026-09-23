@@ -16,6 +16,8 @@ describe('AppointmentsService', () => {
   let workshopIntakeRepository: any;
   let inventoryService: any;
   let masterDataService: any;
+  let appointmentActivityRepository: any;
+  let appointmentActivityPauseRepository: any;
 
   const buildQb = (overrides: Partial<Record<string, any>> = {}) => ({
     where: jest.fn().mockReturnThis(),
@@ -73,6 +75,20 @@ describe('AppointmentsService', () => {
       findAllAppointmentFieldConfigs: jest.fn().mockResolvedValue([]),
       findBillingChannelById: jest.fn(),
     };
+    // Job Type split (2026-09-22) Phase 8 - appended at the end, matching the constructor's
+    // own append-only ordering (see AppointmentsService's own comment on why).
+    appointmentActivityRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((d: any) => d),
+      save: jest.fn((d: any) => Promise.resolve({ ...d, id: d.id || 'activity-1', startedAt: d.startedAt || new Date('2026-09-23T08:00:00Z') })),
+      createQueryBuilder: jest.fn(),
+    };
+    appointmentActivityPauseRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      find: jest.fn().mockResolvedValue([]),
+      create: jest.fn((d: any) => d),
+      save: jest.fn((d: any) => Promise.resolve({ ...d, id: d.id || 'pause-1', pausedAt: d.pausedAt || new Date('2026-09-23T09:00:00Z') })),
+    };
 
     service = new AppointmentsService(
       appointmentRepository,
@@ -83,6 +99,8 @@ describe('AppointmentsService', () => {
       workshopIntakeRepository,
       inventoryService,
       masterDataService,
+      appointmentActivityRepository,
+      appointmentActivityPauseRepository,
     );
   });
 
@@ -1364,6 +1382,231 @@ describe('AppointmentsService', () => {
           );
         },
       );
+    });
+
+    // Job Type split (2026-09-22) Phase 8 - Start Work / Pause / Resume / Activity
+    // Finished flow.
+    describe('activity flow', () => {
+      const buildActivityQb = (getOne: any = null) => ({
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(getOne),
+      });
+
+      describe('getActivity', () => {
+        it('returns NOT_STARTED when no activity row exists yet', async () => {
+          appointmentRepository.findOne.mockResolvedValue(appointment());
+          appointmentActivityRepository.findOne.mockResolvedValue(null);
+
+          const result = await service.getActivity('apt-1');
+
+          expect(result).toEqual({ status: 'NOT_STARTED', startedAt: null, finishedAt: null, pauses: [] });
+        });
+      });
+
+      describe('startActivity', () => {
+        it('rejects a REPAIR appointment', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ status: AppointmentStatus.CONFIRMED, jobType: JobType.REPAIR }),
+          );
+
+          await expect(service.startActivity('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+          expect(appointmentActivityRepository.save).not.toHaveBeenCalled();
+        });
+
+        it.each([AppointmentStatus.COLLECTED_TO_WS, AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED])(
+          'rejects starting once the appointment is %s',
+          async (status) => {
+            appointmentRepository.findOne.mockResolvedValue(appointment({ status, jobType: JobType.INSTALLATION }));
+
+            await expect(service.startActivity('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+          },
+        );
+
+        it('starts a new activity, audit-logs it, and blocks nothing when the technician has no other open activity', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ status: AppointmentStatus.CONFIRMED, jobType: JobType.INSTALLATION, technicianId: 'tech-1' }),
+          );
+          appointmentActivityRepository.findOne
+            .mockResolvedValueOnce(null) // the "does one already exist" check inside startActivity
+            .mockResolvedValueOnce({
+              id: 'activity-1',
+              appointmentId: 'apt-1',
+              startedAt: new Date('2026-09-23T08:00:00Z'),
+              finishedAt: null,
+            }); // getActivity()'s own lookup once startActivity has saved the new row
+          appointmentActivityRepository.createQueryBuilder.mockReturnValue(buildActivityQb(null));
+
+          const result = await service.startActivity('apt-1', 'user-1');
+
+          expect(appointmentActivityRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ appointmentId: 'apt-1', startedByUserId: 'user-1' }),
+          );
+          expect(auditLogRepository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ action: AuditAction.ACTIVITY_STARTED, entityType: 'AppointmentActivity', entityId: 'apt-1' }),
+          );
+          expect(result.status).toBe('IN_PROGRESS');
+        });
+
+        it('is idempotent when the activity is already started (not finished)', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ status: AppointmentStatus.CONFIRMED, jobType: JobType.INSTALLATION }),
+          );
+          appointmentActivityRepository.findOne.mockResolvedValue({
+            id: 'activity-1',
+            appointmentId: 'apt-1',
+            startedAt: new Date('2026-09-23T08:00:00Z'),
+            finishedAt: null,
+          });
+
+          await service.startActivity('apt-1', 'user-1');
+
+          expect(appointmentActivityRepository.save).not.toHaveBeenCalled();
+        });
+
+        it('rejects restarting an activity that was already marked finished', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ status: AppointmentStatus.CONFIRMED, jobType: JobType.INSTALLATION }),
+          );
+          appointmentActivityRepository.findOne.mockResolvedValue({
+            id: 'activity-1',
+            appointmentId: 'apt-1',
+            finishedAt: new Date('2026-09-23T12:00:00Z'),
+          });
+
+          await expect(service.startActivity('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+        });
+
+        it('blocks starting a new activity while this technician already has one open on a different appointment', async () => {
+          appointmentRepository.findOne.mockImplementation(({ where }: any) => {
+            if (where.id === 'apt-1') {
+              return Promise.resolve(
+                appointment({ id: 'apt-1', status: AppointmentStatus.CONFIRMED, jobType: JobType.INSTALLATION, technicianId: 'tech-1' }),
+              );
+            }
+            return Promise.resolve(
+              appointment({ id: 'apt-2', appointmentNumber: 'APT-20260923-0002', status: AppointmentStatus.ON_SITE, technicianId: 'tech-1' }),
+            );
+          });
+          appointmentActivityRepository.findOne.mockResolvedValue(null);
+          appointmentActivityRepository.createQueryBuilder.mockReturnValue(buildActivityQb({ appointmentId: 'apt-2' }));
+
+          await expect(service.startActivity('apt-1', 'user-1')).rejects.toThrow(ConflictException);
+          expect(appointmentActivityRepository.save).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('pauseActivity', () => {
+        it('rejects pausing before work has been started', async () => {
+          appointmentActivityRepository.findOne.mockResolvedValue(null);
+
+          await expect(service.pauseActivity('apt-1', { reason: 'BREAK' } as any, 'user-1')).rejects.toThrow(
+            BadRequestException,
+          );
+        });
+
+        it('opens a pause row and audit-logs it', async () => {
+          appointmentRepository.findOne.mockResolvedValue(appointment());
+          appointmentActivityRepository.findOne.mockResolvedValue({ id: 'activity-1', appointmentId: 'apt-1', finishedAt: null });
+          appointmentActivityPauseRepository.findOne.mockResolvedValue(null);
+
+          await service.pauseActivity('apt-1', { reason: 'CUSTOMER_UNAVAILABLE', notes: 'carry to tomorrow' } as any, 'user-1');
+
+          expect(appointmentActivityPauseRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({
+              appointmentActivityId: 'activity-1',
+              reason: 'CUSTOMER_UNAVAILABLE',
+              notes: 'carry to tomorrow',
+              pausedByUserId: 'user-1',
+            }),
+          );
+          expect(auditLogRepository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ action: AuditAction.ACTIVITY_PAUSED, entityType: 'AppointmentActivity', entityId: 'apt-1' }),
+          );
+        });
+
+        it('is idempotent when a pause is already open', async () => {
+          appointmentRepository.findOne.mockResolvedValue(appointment());
+          appointmentActivityRepository.findOne.mockResolvedValue({ id: 'activity-1', appointmentId: 'apt-1', finishedAt: null });
+          appointmentActivityPauseRepository.findOne.mockResolvedValue({ id: 'pause-1', resumedAt: null });
+
+          await service.pauseActivity('apt-1', { reason: 'BREAK' } as any, 'user-1');
+
+          expect(appointmentActivityPauseRepository.save).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('resumeActivity', () => {
+        it('resumes an open pause and audit-logs it', async () => {
+          appointmentRepository.findOne.mockResolvedValue(appointment());
+          appointmentActivityRepository.findOne.mockResolvedValue({ id: 'activity-1', appointmentId: 'apt-1', finishedAt: null });
+          appointmentActivityPauseRepository.findOne.mockResolvedValue({ id: 'pause-1', resumedAt: null });
+
+          await service.resumeActivity('apt-1', 'user-1');
+
+          expect(appointmentActivityPauseRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'pause-1', resumedByUserId: 'user-1', resumedAt: expect.any(Date) }),
+          );
+          expect(auditLogRepository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ action: AuditAction.ACTIVITY_RESUMED, entityType: 'AppointmentActivity', entityId: 'apt-1' }),
+          );
+        });
+
+        it('is idempotent when there is no open pause to resume', async () => {
+          appointmentRepository.findOne.mockResolvedValue(appointment());
+          appointmentActivityRepository.findOne.mockResolvedValue({ id: 'activity-1', appointmentId: 'apt-1', finishedAt: null });
+          appointmentActivityPauseRepository.findOne.mockResolvedValue(null);
+
+          await service.resumeActivity('apt-1', 'user-1');
+
+          expect(appointmentActivityPauseRepository.save).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('finishActivity', () => {
+        it('rejects finishing before work has been started', async () => {
+          appointmentActivityRepository.findOne.mockResolvedValue(null);
+
+          await expect(service.finishActivity('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+        });
+
+        it('rejects finishing while still paused', async () => {
+          appointmentActivityRepository.findOne.mockResolvedValue({ id: 'activity-1', appointmentId: 'apt-1', finishedAt: null });
+          appointmentActivityPauseRepository.findOne.mockResolvedValue({ id: 'pause-1', resumedAt: null });
+
+          await expect(service.finishActivity('apt-1', 'user-1')).rejects.toThrow(BadRequestException);
+        });
+
+        it('marks the activity finished and audit-logs it', async () => {
+          appointmentRepository.findOne.mockResolvedValue(appointment());
+          const activity: any = { id: 'activity-1', appointmentId: 'apt-1', finishedAt: null };
+          appointmentActivityRepository.findOne.mockResolvedValue(activity);
+          appointmentActivityPauseRepository.findOne.mockResolvedValue(null);
+
+          await service.finishActivity('apt-1', 'user-1');
+
+          expect(appointmentActivityRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ finishedAt: expect.any(Date), finishedByUserId: 'user-1' }),
+          );
+          expect(auditLogRepository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ action: AuditAction.ACTIVITY_FINISHED, entityType: 'AppointmentActivity', entityId: 'apt-1' }),
+          );
+        });
+
+        it('is idempotent once already finished', async () => {
+          appointmentRepository.findOne.mockResolvedValue(appointment());
+          appointmentActivityRepository.findOne.mockResolvedValue({
+            id: 'activity-1',
+            appointmentId: 'apt-1',
+            finishedAt: new Date('2026-09-23T12:00:00Z'),
+          });
+
+          await service.finishActivity('apt-1', 'user-1');
+
+          expect(appointmentActivityRepository.save).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 

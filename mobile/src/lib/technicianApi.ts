@@ -2,6 +2,7 @@
 // src/lib/appointmentsApi.ts one-function-per-route pattern.
 import { api } from './api';
 import type {
+  AppointmentActivityResult,
   CancelAppointmentInput,
   CaptureFaultSymptomInput,
   CaptureSerialNumberInput,
@@ -14,6 +15,7 @@ import type {
   NeedSpareInput,
   NeedSpareReservation,
   OwnJobCardResult,
+  PauseAppointmentActivityInput,
   PauseTaskInput,
   ScheduledAppointment,
   StartVisitInput,
@@ -114,3 +116,23 @@ export const cancelAppointment = (appointmentId: string, data: CancelAppointment
 // APPOINTMENTS_BASE-direct pattern as the two actions above (no /technician wrapper).
 export const correctJobType = (appointmentId: string, data: CorrectJobTypeInput) =>
   api.put(`${APPOINTMENTS_BASE}/${appointmentId}/job-type`, data).then((r) => r.data);
+
+// --- Job Type split (2026-09-22) Phase 8: Installation/Delivery Installation's Start
+// Work / Pause / Resume / Activity Finished flow. Same APPOINTMENTS_BASE-direct pattern
+// as the actions above - all 4 mutations are deliberately NOT offered through the offline
+// queue (see appointment/[id].tsx's own comment on why timing-sensitive actions here
+// require connectivity, same reasoning task-timer pause/resume below already uses).
+export const getAppointmentActivity = (appointmentId: string) =>
+  api.get<AppointmentActivityResult>(`${APPOINTMENTS_BASE}/${appointmentId}/activity`).then((r) => r.data);
+
+export const startAppointmentActivity = (appointmentId: string) =>
+  api.put<AppointmentActivityResult>(`${APPOINTMENTS_BASE}/${appointmentId}/activity/start`).then((r) => r.data);
+
+export const pauseAppointmentActivity = (appointmentId: string, data: PauseAppointmentActivityInput) =>
+  api.put<AppointmentActivityResult>(`${APPOINTMENTS_BASE}/${appointmentId}/activity/pause`, data).then((r) => r.data);
+
+export const resumeAppointmentActivity = (appointmentId: string) =>
+  api.put<AppointmentActivityResult>(`${APPOINTMENTS_BASE}/${appointmentId}/activity/resume`).then((r) => r.data);
+
+export const finishAppointmentActivity = (appointmentId: string) =>
+  api.put<AppointmentActivityResult>(`${APPOINTMENTS_BASE}/${appointmentId}/activity/finish`).then((r) => r.data);

@@ -12,6 +12,7 @@ vi.mock('../../lib/appointmentsApi', () => ({
   confirmAppointment: vi.fn(),
   createAppointment: vi.fn(),
   deleteAppointment: vi.fn(),
+  getAppointmentActivity: vi.fn(),
   getAppointmentDashboardStats: vi.fn(),
   getSchedulingGrid: vi.fn(),
   getVisit: vi.fn(),
@@ -59,6 +60,7 @@ import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import {
   assignTechnician,
   createAppointment,
+  getAppointmentActivity,
   getAppointmentDashboardStats,
   getSchedulingGrid,
   getVisit,
@@ -138,6 +140,7 @@ beforeEach(() => {
   vi.mocked(createAppointment).mockReset();
   vi.mocked(resolveMapLink).mockReset();
   vi.mocked(getVisit).mockReset().mockRejectedValue({ response: { status: 404 } });
+  vi.mocked(getAppointmentActivity).mockReset();
   vi.mocked(updateAppointment).mockReset();
   vi.mocked(markAppointmentCollectedToWorkshop).mockReset();
   vi.mocked(searchAppointments).mockReset().mockResolvedValue([]);
@@ -942,6 +945,61 @@ describe('SchedulePage - Mark Received (Phase 4 workshop intake)', () => {
     expect(getVisit).not.toHaveBeenCalled();
     fireEvent.click(within(modal).getByRole('button', { name: 'Mark Received →' }));
     await screen.findByRole('heading', { name: /Verify before workshop intake — APT-0008/ });
+  });
+
+  // Job Type split (2026-09-22) Phase 8 - the View modal's live activity status/timeline
+  // for Installation/Delivery Installation appointments, replacing the Technician visit
+  // box (these 2 job types never get a TechnicianVisit).
+  it('the View modal shows the live activity status/timeline (not a Technician visit box) for an INSTALLATION appointment', async () => {
+    mockCapabilities([], true);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-inst', appointmentNumber: 'APT-0009', jobType: 'INSTALLATION' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getAppointmentActivity).mockResolvedValue({
+      status: 'PAUSED',
+      startedAt: '2026-09-23T08:00:00.000Z',
+      finishedAt: null,
+      pauses: [
+        { id: 'pause-1', reason: 'BREAK', notes: 'Back in 10', pausedAt: '2026-09-23T09:00:00.000Z', resumedAt: null },
+      ],
+    });
+    renderPage();
+    await screen.findByText('APT-0009');
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+
+    const heading = await screen.findByRole('heading', { name: /APT-0009/ });
+    const modal = heading.closest('[role="dialog"]')!;
+    await within(modal).findByText('Work status');
+    expect(within(modal).getByText('PAUSED')).toBeInTheDocument();
+    expect(within(modal).getAllByText(/Break/).length).toBeGreaterThan(0);
+    expect(within(modal).getAllByText(/Back in 10/).length).toBeGreaterThan(0);
+    expect(within(modal).queryByText('Technician visit')).not.toBeInTheDocument();
+    expect(within(modal).queryByText('No visit started for this appointment yet.')).not.toBeInTheDocument();
+    expect(getVisit).not.toHaveBeenCalled();
+  });
+
+  it('the View modal shows an error message when the activity status fails to load', async () => {
+    mockCapabilities([], true);
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [makeAppointment({ id: 'appt-inst', appointmentNumber: 'APT-0010', jobType: 'DELIVERY_INSTALLATION' })],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getAppointmentActivity).mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { message: 'Could not load activity status.' } },
+    });
+    renderPage();
+    await screen.findByText('APT-0010');
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+
+    const heading = await screen.findByRole('heading', { name: /APT-0010/ });
+    const modal = heading.closest('[role="dialog"]')!;
+    await within(modal).findByText('Could not load activity status.');
   });
 });
 

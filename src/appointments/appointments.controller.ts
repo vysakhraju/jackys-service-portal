@@ -19,6 +19,7 @@ import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
 import { AssignTechnicianDto } from './dto/assign-technician.dto';
 import { CorrectJobTypeDto } from './dto/correct-job-type.dto';
+import { PauseAppointmentActivityDto } from './dto/pause-appointment-activity.dto';
 import { ResolveMapLinkDto } from './dto/resolve-map-link.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -363,6 +364,100 @@ export class AppointmentsController {
     @Request() req: any,
   ) {
     return this.appointmentsService.correctJobType(id, body.jobType, user.id, req);
+  }
+
+  // Job Type split (2026-09-22) Phase 8 - Installation/Delivery Installation's mobile
+  // Start Work / Pause / Resume / Activity Finished flow, plus what the web appointment
+  // view polls for its own live activity status/timeline. Same SCHEDULE_FIELD_VISIT gate
+  // as every other mobile-initiated action on this controller.
+  @Get(':id/activity')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
+  @ApiOperation({ summary: 'Get the Installation/Delivery Installation activity status/timeline for this appointment' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  async getActivity(@Param('id', ParseUUIDPipe) id: string) {
+    return this.appointmentsService.getActivity(id);
+  }
+
+  @Put(':id/activity/start')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.ACTIVITY_STARTED,
+    entityType: 'AppointmentActivity',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Start Work on an Installation/Delivery Installation appointment' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'Not an Installation/Delivery Installation job type, already finished, or appointment collected-to-workshop/completed/cancelled' })
+  @ApiResponse({ status: 409, description: 'Another appointment already has an open activity for this technician' })
+  async startActivity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.appointmentsService.startActivity(id, user.id, req);
+  }
+
+  @Put(':id/activity/pause')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.ACTIVITY_PAUSED,
+    entityType: 'AppointmentActivity',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Pause the current work session (with a reason, e.g. carrying forward to the next day)' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'Work has not been started yet' })
+  async pauseActivity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: PauseAppointmentActivityDto,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.appointmentsService.pauseActivity(id, body, user.id, req);
+  }
+
+  @Put(':id/activity/resume')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.ACTIVITY_RESUMED,
+    entityType: 'AppointmentActivity',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Resume a paused work session' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  async resumeActivity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.appointmentsService.resumeActivity(id, user.id, req);
+  }
+
+  @Put(':id/activity/finish')
+  @RequiresCapability('SCHEDULE_FIELD_VISIT')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.ACTIVITY_FINISHED,
+    entityType: 'AppointmentActivity',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Mark the activity finished' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400, description: 'Work has not been started yet, or is still paused' })
+  async finishActivity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Request() req: any,
+  ) {
+    return this.appointmentsService.finishActivity(id, user.id, req);
   }
 
   @Put(':id/complete')

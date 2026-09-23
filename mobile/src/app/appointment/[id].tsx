@@ -18,13 +18,18 @@ import {
   captureSerialNumber,
   completeVisit,
   correctJobType,
+  finishAppointmentActivity,
+  getAppointmentActivity,
   getOwnJobCard,
   getTaskPauses,
   getVisit,
   markCollectedToWorkshop,
+  pauseAppointmentActivity,
   pauseTask,
   requestNeedSpare,
+  resumeAppointmentActivity,
   resumeTask,
+  startAppointmentActivity,
   startVisit,
 } from '../../lib/technicianApi';
 import { CORRECTABLE_JOB_TYPES, TASK_PAUSE_REASONS } from '../../lib/types';
@@ -454,6 +459,68 @@ export default function AppointmentDetailScreen() {
     correctJobTypeMutation.mutate();
   }
 
+  // --- Installation/Delivery Installation activity flow (Job Type split, 2026-09-22
+  // Phase 8) - Start Work / Pause / Resume / Activity Finished. Deliberately requires
+  // connectivity for all 4 actions (not offered through the offline queue, unlike most
+  // of the mutations above) - point 8's "block a new activity until the current one
+  // finishes" guard can only be checked against live server state, and a queued-then-
+  // replayed-later start/pause/resume/finish would record the wrong timestamp regardless
+  // (same reasoning the existing task-timer pause/resume below already established).
+  const isActivityJobType = appointment?.jobType === 'INSTALLATION' || appointment?.jobType === 'DELIVERY_INSTALLATION';
+
+  const { data: activity, error: activityError } = useQuery({
+    queryKey: ['appointment-activity', params.id],
+    queryFn: () => getAppointmentActivity(params.id),
+    enabled: Boolean(params.id) && isActivityJobType,
+    refetchInterval: (query) => (query.state.data?.status === 'FINISHED' ? false : 15000),
+  });
+
+  function invalidateActivity() {
+    queryClient.invalidateQueries({ queryKey: ['appointment-activity', params.id] });
+  }
+
+  const startActivityMutation = useMutation({
+    mutationFn: () => startAppointmentActivity(params.id),
+    onSuccess: invalidateActivity,
+  });
+
+  const [activityPauseSectionOpen, setActivityPauseSectionOpen] = useState(false);
+  const [selectedActivityPauseReason, setSelectedActivityPauseReason] = useState<TaskPauseReasonValue | null>(null);
+  const [activityPauseNotesInput, setActivityPauseNotesInput] = useState('');
+
+  const pauseActivityMutation = useMutation({
+    mutationFn: () =>
+      pauseAppointmentActivity(params.id, {
+        reason: selectedActivityPauseReason!,
+        notes: activityPauseNotesInput.trim() || undefined,
+      }),
+    onSuccess: () => {
+      invalidateActivity();
+      setActivityPauseSectionOpen(false);
+      setSelectedActivityPauseReason(null);
+      setActivityPauseNotesInput('');
+    },
+  });
+
+  function closeActivityPauseSection() {
+    setActivityPauseSectionOpen(false);
+    setSelectedActivityPauseReason(null);
+    setActivityPauseNotesInput('');
+  }
+
+  const resumeActivityMutation = useMutation({
+    mutationFn: () => resumeAppointmentActivity(params.id),
+    onSuccess: invalidateActivity,
+  });
+
+  const finishActivityMutation = useMutation({
+    mutationFn: () => finishAppointmentActivity(params.id),
+    onSuccess: () => {
+      invalidateActivity();
+      queryClient.invalidateQueries({ queryKey: ['technician-schedule'] });
+    },
+  });
+
   // --- Task timer pause/resume (SLA-safe pausing) ---
   // Only reachable while the on-site job is actually being worked (jobCardReady below) -
   // this app never shows a workshop job's own pause state (its auto-opened
@@ -519,6 +586,7 @@ export default function AppointmentDetailScreen() {
   // but by then the technician would be looking at a freshly-fetched appointment from the
   // schedule list anyway, showing the real new status.
   const canMarkCollectedToWorkshop =
+    !isActivityJobType &&
     !NOT_COLLECTIBLE_TO_WS_STATUSES.has(appointment.status) && !queuedCollectedToWs && !collectedToWsMutation.isSuccess;
   const canCancel = !NOT_CANCELLABLE_STATUSES.has(appointment.status) && !queuedCancel && !cancelMutation.isSuccess;
   // Same frozen-appointment-status reasoning as canMarkCollectedToWorkshop above - gate on
@@ -763,6 +831,175 @@ export default function AppointmentDetailScreen() {
           </View>
         )}
 
+        {isActivityJobType && (
+          <View style={styles.card} testID="activity-card">
+            <Text style={styles.sectionTitle}>Work</Text>
+
+            {activityError && (
+              <Text style={styles.errorBoxText} testID="activity-load-error">
+                {extractErrorMessage(activityError, 'Could not load activity status.')}
+              </Text>
+            )}
+
+            {!activity || activity.status === 'NOT_STARTED' ? (
+              <View>
+                {startActivityMutation.isError && (
+                  <Text style={styles.errorBoxText} testID="activity-start-error">
+                    {extractErrorMessage(startActivityMutation.error, 'Could not start work. Try again.')}
+                  </Text>
+                )}
+                <Pressable
+                  style={[styles.button, startActivityMutation.isPending && styles.buttonDisabled]}
+                  onPress={() => startActivityMutation.mutate()}
+                  disabled={startActivityMutation.isPending}
+                  testID="start-activity-button"
+                >
+                  {startActivityMutation.isPending ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.buttonText}>Start Work</Text>
+                  )}
+                </Pressable>
+              </View>
+            ) : (
+              <View>
+                <Text style={styles.meta} testID="activity-started-at">
+                  Started {formatDateTime(activity.startedAt!)}
+                </Text>
+
+                {activity.status === 'FINISHED' ? (
+                  <Text style={styles.visitStartedText} testID="activity-finished">
+                    Work finished {formatDateTime(activity.finishedAt!)} ✓
+                  </Text>
+                ) : (
+                  <>
+                    <View style={styles.taskPauseBox} testID="activity-pause-section">
+                      {activity.status === 'PAUSED' ? (
+                        <View>
+                          {(() => {
+                            const openActivityPause = activity.pauses.find((p) => p.resumedAt === null) ?? null;
+                            return (
+                              <Text style={styles.pausedText} testID="activity-paused">
+                                Paused{openActivityPause ? ` - ${TASK_PAUSE_REASON_LABELS[openActivityPause.reason]}` : ''}
+                                {openActivityPause?.notes ? ` — "${openActivityPause.notes}"` : ''}
+                              </Text>
+                            );
+                          })()}
+                          {resumeActivityMutation.isError && (
+                            <Text style={styles.errorBoxText} testID="activity-resume-error">
+                              {extractErrorMessage(resumeActivityMutation.error, 'Could not resume. Try again.')}
+                            </Text>
+                          )}
+                          <Pressable
+                            style={[styles.secondaryButton, resumeActivityMutation.isPending && styles.buttonDisabled]}
+                            onPress={() => resumeActivityMutation.mutate()}
+                            disabled={resumeActivityMutation.isPending}
+                            testID="resume-activity-button"
+                          >
+                            {resumeActivityMutation.isPending ? (
+                              <ActivityIndicator />
+                            ) : (
+                              <Text style={styles.secondaryButtonText}>Resume</Text>
+                            )}
+                          </Pressable>
+                        </View>
+                      ) : !activityPauseSectionOpen ? (
+                        <Pressable
+                          style={styles.secondaryButton}
+                          onPress={() => setActivityPauseSectionOpen(true)}
+                          testID="open-activity-pause-section"
+                        >
+                          <Text style={styles.secondaryButtonText}>Pause</Text>
+                        </Pressable>
+                      ) : (
+                        <View>
+                          {pauseActivityMutation.isError && (
+                            <Text style={styles.errorBoxText} testID="activity-pause-error">
+                              {extractErrorMessage(pauseActivityMutation.error, 'Could not pause. Try again.')}
+                            </Text>
+                          )}
+                          <View style={styles.reasonRow}>
+                            {TASK_PAUSE_REASONS.map((reason) => (
+                              <Pressable
+                                key={reason}
+                                style={[
+                                  styles.reasonChip,
+                                  selectedActivityPauseReason === reason && styles.reasonChipSelected,
+                                ]}
+                                onPress={() => setSelectedActivityPauseReason(reason)}
+                                testID={`activity-pause-reason-${reason}`}
+                              >
+                                <Text
+                                  style={[
+                                    styles.reasonChipText,
+                                    selectedActivityPauseReason === reason && styles.reasonChipTextSelected,
+                                  ]}
+                                >
+                                  {TASK_PAUSE_REASON_LABELS[reason]}
+                                </Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                          {selectedActivityPauseReason && (
+                            <>
+                              <TextInput
+                                style={styles.input}
+                                placeholder="Notes (optional)"
+                                value={activityPauseNotesInput}
+                                onChangeText={setActivityPauseNotesInput}
+                                testID="activity-pause-notes-input"
+                              />
+                              <Pressable
+                                style={[styles.secondaryButton, pauseActivityMutation.isPending && styles.buttonDisabled]}
+                                onPress={() => pauseActivityMutation.mutate()}
+                                disabled={pauseActivityMutation.isPending}
+                                testID="confirm-activity-pause-button"
+                              >
+                                {pauseActivityMutation.isPending ? (
+                                  <ActivityIndicator />
+                                ) : (
+                                  <Text style={styles.secondaryButtonText}>Confirm pause</Text>
+                                )}
+                              </Pressable>
+                              <Pressable onPress={closeActivityPauseSection} testID="dismiss-activity-pause-section">
+                                <Text style={styles.linkText}>Never mind</Text>
+                              </Pressable>
+                            </>
+                          )}
+                        </View>
+                      )}
+                    </View>
+
+                    {activity.status !== 'PAUSED' && (
+                      <View style={styles.completeSectionSpacing}>
+                        {finishActivityMutation.isError && (
+                          <Text style={styles.errorBoxText} testID="activity-finish-error">
+                            {extractErrorMessage(finishActivityMutation.error, 'Could not finish this activity. Try again.')}
+                          </Text>
+                        )}
+                        <Pressable
+                          style={[styles.button, finishActivityMutation.isPending && styles.buttonDisabled]}
+                          onPress={() => finishActivityMutation.mutate()}
+                          disabled={finishActivityMutation.isPending}
+                          testID="finish-activity-button"
+                        >
+                          {finishActivityMutation.isPending ? (
+                            <ActivityIndicator color="#fff" />
+                          ) : (
+                            <Text style={styles.buttonText}>Activity Finished</Text>
+                          )}
+                        </Pressable>
+                      </View>
+                    )}
+                  </>
+                )}
+              </View>
+            )}
+          </View>
+        )}
+
+        {!isActivityJobType && (
+        <>
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Visit</Text>
 
@@ -1213,6 +1450,8 @@ export default function AppointmentDetailScreen() {
               </View>
             )}
           </View>
+        )}
+        </>
         )}
       </ScrollView>
 

@@ -44,6 +44,12 @@ export enum AuditAction {
   FIELD_SCHEDULE_REORDER = 'FIELD_SCHEDULE_REORDER',
   // Job Type split (2026-09-22) Phase 7 - field technician's on-site Job Type correction
   JOB_TYPE_CORRECTED = 'JOB_TYPE_CORRECTED',
+  // Job Type split (2026-09-22) Phase 8 - Installation/Delivery Installation's mobile
+  // Start Work / Pause / Resume / Activity Finished flow
+  ACTIVITY_STARTED = 'ACTIVITY_STARTED',
+  ACTIVITY_PAUSED = 'ACTIVITY_PAUSED',
+  ACTIVITY_RESUMED = 'ACTIVITY_RESUMED',
+  ACTIVITY_FINISHED = 'ACTIVITY_FINISHED',
 }
 
 @Entity('audit_logs')

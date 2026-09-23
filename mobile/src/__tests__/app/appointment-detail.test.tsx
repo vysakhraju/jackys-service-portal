@@ -9,16 +9,22 @@ import {
   captureSerialNumber,
   completeVisit,
   correctJobType,
+  finishAppointmentActivity,
+  getAppointmentActivity,
   getOwnJobCard,
   getTaskPauses,
   getVisit,
   markCollectedToWorkshop,
+  pauseAppointmentActivity,
   pauseTask,
   requestNeedSpare,
+  resumeAppointmentActivity,
   resumeTask,
+  startAppointmentActivity,
   startVisit,
 } from '../../lib/technicianApi';
 import type {
+  AppointmentActivityResult,
   CancellationReason,
   FaultSymptom,
   JobCardSummary,
@@ -50,6 +56,11 @@ jest.mock('../../lib/technicianApi', () => ({
   markCollectedToWorkshop: jest.fn(),
   cancelAppointment: jest.fn(),
   correctJobType: jest.fn(),
+  getAppointmentActivity: jest.fn(),
+  startAppointmentActivity: jest.fn(),
+  pauseAppointmentActivity: jest.fn(),
+  resumeAppointmentActivity: jest.fn(),
+  finishAppointmentActivity: jest.fn(),
 }));
 jest.mock('../../lib/masterDataApi', () => ({
   listFaultSymptoms: jest.fn(),
@@ -87,6 +98,11 @@ const mockedListCancellationReasons = listCancellationReasons as jest.Mock;
 const mockedMarkCollectedToWorkshop = markCollectedToWorkshop as jest.Mock;
 const mockedCancelAppointment = cancelAppointment as jest.Mock;
 const mockedCorrectJobType = correctJobType as jest.Mock;
+const mockedGetAppointmentActivity = getAppointmentActivity as jest.Mock;
+const mockedStartAppointmentActivity = startAppointmentActivity as jest.Mock;
+const mockedPauseAppointmentActivity = pauseAppointmentActivity as jest.Mock;
+const mockedResumeAppointmentActivity = resumeAppointmentActivity as jest.Mock;
+const mockedFinishAppointmentActivity = finishAppointmentActivity as jest.Mock;
 const mockedUseOfflineQueue = useOfflineQueue as jest.Mock;
 const mockEnqueue = jest.fn();
 
@@ -226,6 +242,16 @@ function taskPauseFixture(overrides: Partial<JobCardTaskPause> = {}): JobCardTas
   };
 }
 
+function activityFixture(overrides: Partial<AppointmentActivityResult> = {}): AppointmentActivityResult {
+  return {
+    status: 'IN_PROGRESS',
+    startedAt: '2026-09-23T08:00:00.000Z',
+    finishedAt: null,
+    pauses: [],
+    ...overrides,
+  };
+}
+
 function queuedAction(overrides: Record<string, unknown> = {}) {
   return {
     id: 'queue-1',
@@ -261,6 +287,12 @@ beforeEach(() => {
   // Sane default for the task-pause poll (no pause history) so every pre-existing test -
   // none of which know about task pauses - doesn't hit an un-mocked getTaskPauses() call.
   mockedGetTaskPauses.mockResolvedValue([]);
+  // Job Type split (2026-09-22) Phase 8 - sane default for the activity poll. This query
+  // is only `enabled` for INSTALLATION/DELIVERY_INSTALLATION appointments (see
+  // isActivityJobType in the screen itself), so every pre-existing REPAIR-job-type test
+  // never actually calls this, but a default still avoids an unhandled-rejection warning
+  // for the few tests in this file that don't set jobType explicitly.
+  mockedGetAppointmentActivity.mockResolvedValue({ status: 'NOT_STARTED', startedAt: null, finishedAt: null, pauses: [] });
 });
 
 afterEach(() => {
@@ -1719,5 +1751,236 @@ describe('AppointmentDetailScreen - Task timer pause/resume', () => {
 
     await waitFor(() => expect(screen.getByTestId('job-card-finished')).toBeOnTheScreen());
     expect(screen.queryByTestId('task-pause-section')).not.toBeOnTheScreen();
+  });
+});
+
+// Job Type split (2026-09-22) Phase 8 - Installation/Delivery Installation's Start Work /
+// Pause / Resume / Activity Finished flow. These 2 job types never get a TechnicianVisit
+// (see the screen's own isActivityJobType comment), so the whole Visit/Serial number/
+// Fault & symptom/Need spare & complete group is gated off entirely and this new "Work"
+// card takes its place.
+describe('AppointmentDetailScreen - Activity flow (Installation/Delivery Installation)', () => {
+  it('hides the activity card and shows the on-site REPAIR flow for a REPAIR appointment', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    await renderScreen(appt({ jobType: 'REPAIR' }));
+
+    await waitFor(() => expect(screen.getByTestId('start-visit-button')).toBeOnTheScreen());
+    expect(screen.queryByTestId('activity-card')).not.toBeOnTheScreen();
+    expect(mockedGetAppointmentActivity).not.toHaveBeenCalled();
+  });
+
+  it('shows the activity card and hides the on-site REPAIR flow for an INSTALLATION appointment', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity.mockResolvedValue({ status: 'NOT_STARTED', startedAt: null, finishedAt: null, pauses: [] });
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('activity-card')).toBeOnTheScreen());
+    expect(screen.getByTestId('start-activity-button')).toBeOnTheScreen();
+    expect(screen.queryByTestId('start-visit-button')).not.toBeOnTheScreen();
+  });
+
+  it('also treats DELIVERY_INSTALLATION as an activity job type', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity.mockResolvedValue({ status: 'NOT_STARTED', startedAt: null, finishedAt: null, pauses: [] });
+    await renderScreen(appt({ jobType: 'DELIVERY_INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('activity-card')).toBeOnTheScreen());
+    expect(screen.getByTestId('start-activity-button')).toBeOnTheScreen();
+  });
+
+  it('starts work on tap and shows the in-progress state with a Pause option and Finish button', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity
+      .mockResolvedValueOnce({ status: 'NOT_STARTED', startedAt: null, finishedAt: null, pauses: [] })
+      .mockResolvedValueOnce(activityFixture());
+    mockedStartAppointmentActivity.mockResolvedValue(activityFixture());
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('start-activity-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('start-activity-button'));
+
+    await waitFor(() => expect(mockedStartAppointmentActivity).toHaveBeenCalledWith('appt-1'));
+    await waitFor(() => expect(screen.getByTestId('activity-started-at')).toBeOnTheScreen());
+    expect(screen.getByTestId('open-activity-pause-section')).toBeOnTheScreen();
+    expect(screen.getByTestId('finish-activity-button')).toBeOnTheScreen();
+  });
+
+  it('shows an error message when starting work fails', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity.mockResolvedValue({ status: 'NOT_STARTED', startedAt: null, finishedAt: null, pauses: [] });
+    mockedStartAppointmentActivity.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { message: 'Cannot start work once an appointment is CANCELLED.' } },
+    });
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('start-activity-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('start-activity-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('activity-start-error')).toHaveTextContent(
+        'Cannot start work once an appointment is CANCELLED.',
+      ),
+    );
+  });
+
+  it('picks a reason, enters notes, and pauses the activity - hiding Finish while paused', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity
+      .mockResolvedValueOnce(activityFixture())
+      .mockResolvedValueOnce(
+        activityFixture({
+          status: 'PAUSED',
+          pauses: [
+            { id: 'pause-1', reason: 'BREAK', notes: 'Back in 10', pausedAt: '2026-09-23T09:00:00.000Z', resumedAt: null },
+          ],
+        }),
+      );
+    mockedPauseAppointmentActivity.mockResolvedValue(activityFixture({ status: 'PAUSED' }));
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('open-activity-pause-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-activity-pause-section'));
+    await waitFor(() => expect(screen.getByTestId('activity-pause-reason-BREAK')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('activity-pause-reason-BREAK'));
+    await fireEvent.changeText(screen.getByTestId('activity-pause-notes-input'), 'Back in 10');
+    await fireEvent.press(screen.getByTestId('confirm-activity-pause-button'));
+
+    await waitFor(() =>
+      expect(mockedPauseAppointmentActivity).toHaveBeenCalledWith('appt-1', { reason: 'BREAK', notes: 'Back in 10' }),
+    );
+    await waitFor(() => expect(screen.getByTestId('activity-paused')).toHaveTextContent('Paused - Break — "Back in 10"'));
+    expect(screen.queryByTestId('finish-activity-button')).not.toBeOnTheScreen();
+  });
+
+  it('closes the pause section without pausing when "Never mind" is pressed', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity.mockResolvedValue(activityFixture());
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('open-activity-pause-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-activity-pause-section'));
+    await waitFor(() => expect(screen.getByTestId('activity-pause-reason-BREAK')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('activity-pause-reason-BREAK'));
+    await fireEvent.press(screen.getByTestId('dismiss-activity-pause-section'));
+
+    await waitFor(() => expect(screen.getByTestId('open-activity-pause-section')).toBeOnTheScreen());
+    expect(mockedPauseAppointmentActivity).not.toHaveBeenCalled();
+  });
+
+  it('shows an error message when pausing fails', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity.mockResolvedValue(activityFixture());
+    mockedPauseAppointmentActivity.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { message: 'Start work before pausing it.' } },
+    });
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('open-activity-pause-section')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('open-activity-pause-section'));
+    await fireEvent.press(screen.getByTestId('activity-pause-reason-BREAK'));
+    await fireEvent.press(screen.getByTestId('confirm-activity-pause-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('activity-pause-error')).toHaveTextContent('Start work before pausing it.'),
+    );
+  });
+
+  it('resumes the activity, showing the Finish button again', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    const openPause = {
+      id: 'pause-1',
+      reason: 'BREAK' as const,
+      notes: null,
+      pausedAt: '2026-09-23T09:00:00.000Z',
+      resumedAt: null,
+    };
+    mockedGetAppointmentActivity
+      .mockResolvedValueOnce(activityFixture({ status: 'PAUSED', pauses: [openPause] }))
+      .mockResolvedValueOnce(
+        activityFixture({
+          status: 'IN_PROGRESS',
+          pauses: [{ ...openPause, resumedAt: '2026-09-23T09:30:00.000Z' }],
+        }),
+      );
+    mockedResumeAppointmentActivity.mockResolvedValue(activityFixture());
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('resume-activity-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('resume-activity-button'));
+
+    await waitFor(() => expect(mockedResumeAppointmentActivity).toHaveBeenCalledWith('appt-1'));
+    await waitFor(() => expect(screen.getByTestId('finish-activity-button')).toBeOnTheScreen());
+    expect(screen.queryByTestId('activity-paused')).not.toBeOnTheScreen();
+  });
+
+  it('shows an error message when resuming fails', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity.mockResolvedValue(
+      activityFixture({
+        status: 'PAUSED',
+        pauses: [{ id: 'pause-1', reason: 'BREAK', notes: null, pausedAt: '2026-09-23T09:00:00.000Z', resumedAt: null }],
+      }),
+    );
+    mockedResumeAppointmentActivity.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { message: 'No active work session to resume.' } },
+    });
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('resume-activity-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('resume-activity-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('activity-resume-error')).toHaveTextContent('No active work session to resume.'),
+    );
+  });
+
+  it('marks the activity finished and shows the finished state', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity
+      .mockResolvedValueOnce(activityFixture())
+      .mockResolvedValueOnce(activityFixture({ status: 'FINISHED', finishedAt: '2026-09-23T10:00:00.000Z' }));
+    mockedFinishAppointmentActivity.mockResolvedValue(activityFixture({ status: 'FINISHED' }));
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('finish-activity-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('finish-activity-button'));
+
+    await waitFor(() => expect(mockedFinishAppointmentActivity).toHaveBeenCalledWith('appt-1'));
+    await waitFor(() => expect(screen.getByTestId('activity-finished')).toBeOnTheScreen());
+    expect(screen.queryByTestId('finish-activity-button')).not.toBeOnTheScreen();
+    expect(screen.queryByTestId('open-activity-pause-section')).not.toBeOnTheScreen();
+  });
+
+  it('shows an error message when finishing fails (e.g. still paused)', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity.mockResolvedValue(activityFixture());
+    mockedFinishAppointmentActivity.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { message: 'Resume the paused work before marking it finished.' } },
+    });
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('finish-activity-button')).toBeOnTheScreen());
+    await fireEvent.press(screen.getByTestId('finish-activity-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('activity-finish-error')).toHaveTextContent(
+        'Resume the paused work before marking it finished.',
+      ),
+    );
+  });
+
+  it('shows the finished state directly when already finished on load, with no Start Work button', async () => {
+    mockedGetVisit.mockRejectedValue(notFoundError());
+    mockedGetAppointmentActivity.mockResolvedValue(
+      activityFixture({ status: 'FINISHED', finishedAt: '2026-09-23T10:00:00.000Z' }),
+    );
+    await renderScreen(appt({ jobType: 'INSTALLATION' }));
+
+    await waitFor(() => expect(screen.getByTestId('activity-finished')).toBeOnTheScreen());
+    expect(screen.queryByTestId('start-activity-button')).not.toBeOnTheScreen();
   });
 });

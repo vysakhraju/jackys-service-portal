@@ -6,6 +6,7 @@
 import { api } from './api';
 import type {
   Appointment,
+  AppointmentActivityResult,
   AppointmentDashboardStats,
   AppointmentListFilters,
   AppointmentListResult,
@@ -125,3 +126,11 @@ export const captureFaultSymptom = (appointmentId: string, data: CaptureFaultSym
 
 export const getVisit = (appointmentId: string) =>
   api.get<TechnicianVisit>(`${TECH_BASE}/visits/${appointmentId}`).then((r) => r.data);
+
+// Job Type split (2026-09-22) Phase 8 - read-only, backs the appointment view's live
+// activity status/timeline for Installation/Delivery Installation appointments. Lives on
+// AppointmentsController (not TECH_BASE), matching every other mobile-initiated action on
+// that controller (@RequiresCapability('SCHEDULE_FIELD_VISIT')) - see this endpoint's own
+// backend doc comment for why the web view shares that same gate.
+export const getAppointmentActivity = (appointmentId: string) =>
+  api.get<AppointmentActivityResult>(`${BASE}/${appointmentId}/activity`).then((r) => r.data);

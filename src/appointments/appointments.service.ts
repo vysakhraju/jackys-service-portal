@@ -6,8 +6,14 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
+import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In, IsNull } from 'typeorm';
 import { Appointment, AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType, JobType } from './entities/appointment.entity';
+// Job Type split (2026-09-22) Phase 8 - Installation/Delivery Installation's Start Work /
+// Pause / Resume / Activity Finished flow. Owned by this module (see AppointmentsModule).
+import { AppointmentActivity } from './entities/appointment-activity.entity';
+import { AppointmentActivityPause, TaskPauseReason } from './entities/appointment-activity-pause.entity';
+import { computeActivityStatus, AppointmentActivityStatus } from './appointment-activity-progress.util';
+import { PauseAppointmentActivityDto } from './dto/pause-appointment-activity.dto';
 import { resolveGoogleMapsLink, GoogleMapsLinkError, LatLng } from './google-maps-link.util';
 import { ServiceCentre } from '../master-data/entities/service-centre.entity';
 import { User, UserStatus } from '../auth/entities/user.entity';
@@ -104,6 +110,20 @@ const ACTIVE_APPOINTMENT_STATUSES_FOR_GRID: readonly AppointmentStatus[] = [
   AppointmentStatus.ON_SITE,
 ];
 
+// Job Type split (2026-09-22) Phase 8 - the only 2 Job Types the Start Work/Pause/Resume/
+// Activity Finished flow applies to (point 3/4/7 of the original request: these come from
+// a separate ERP process and skip the REPAIR flow's TechnicianVisit/S/N/fault-symptom
+// steps entirely). MAINTENANCE deliberately excluded too - Phase 6 already soft-hid it
+// from every NEW-pick dropdown, same reasoning as CORRECTABLE_JOB_TYPES.
+const ACTIVITY_JOB_TYPES: readonly JobType[] = [JobType.INSTALLATION, JobType.DELIVERY_INSTALLATION];
+
+export interface AppointmentActivityResult {
+  status: AppointmentActivityStatus;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  pauses: AppointmentActivityPause[];
+}
+
 @Injectable()
 export class AppointmentsService {
   constructor(
@@ -121,6 +141,13 @@ export class AppointmentsService {
     private workshopIntakeRepository: Repository<WorkshopIntake>,
     private inventoryService: InventoryService,
     private masterDataService: MasterDataService,
+    // Job Type split (2026-09-22) Phase 8 - appended at the end of the constructor
+    // (rather than interleaved with the repos above) to keep every existing positional
+    // `new AppointmentsService(...)` test call working unchanged.
+    @InjectRepository(AppointmentActivity)
+    private appointmentActivityRepository: Repository<AppointmentActivity>,
+    @InjectRepository(AppointmentActivityPause)
+    private appointmentActivityPauseRepository: Repository<AppointmentActivityPause>,
   ) {}
 
   // Appointment Scheduling page fixes (2026-09-17, req.txt Issues B/C) - resolves each
@@ -1180,6 +1207,202 @@ export class AppointmentsService {
     );
 
     return this.findById(id);
+  }
+
+  // Job Type split (2026-09-22) Phase 8 - Installation/Delivery Installation's mobile
+  // Start Work / Pause / Resume / Activity Finished flow. See AppointmentActivity's own
+  // doc comment for why this is a separate lightweight record rather than reusing
+  // TechnicianVisit/JobCardTaskPause. GET is also what the web appointment view polls for
+  // its own live activity status/timeline (point 7's web-side ask).
+  async getActivity(id: string): Promise<AppointmentActivityResult> {
+    await this.findById(id); // 404s if the appointment itself doesn't exist
+    const activity = await this.appointmentActivityRepository.findOne({ where: { appointmentId: id } });
+    const pauses = activity
+      ? await this.appointmentActivityPauseRepository.find({
+          where: { appointmentActivityId: activity.id },
+          order: { pausedAt: 'ASC' },
+        })
+      : [];
+    const openPause = pauses.find((p) => p.resumedAt === null) ?? null;
+    return {
+      status: computeActivityStatus(activity, openPause),
+      startedAt: activity?.startedAt ?? null,
+      finishedAt: activity?.finishedAt ?? null,
+      pauses,
+    };
+  }
+
+  // Idempotent on an already-started activity (returns its current state rather than
+  // erroring), same "safe to replay" philosophy as markOnSite/markCollectedToWorkshop -
+  // though unlike those, this app deliberately does NOT let mobile queue this action
+  // offline (see the mobile appointment detail screen's own comment on why start/pause/
+  // resume/finish all require connectivity: the point 8 cross-appointment "only one open
+  // activity at a time" guard below can only be checked against live server state, and a
+  // queued-then-replayed-later start would record the wrong timestamp regardless).
+  async startActivity(id: string, userId: string, req?: any): Promise<AppointmentActivityResult> {
+    const appointment = await this.findById(id);
+
+    if (!ACTIVITY_JOB_TYPES.includes(appointment.jobType)) {
+      throw new BadRequestException('Start Work only applies to Installation/Delivery Installation appointments.');
+    }
+    if (
+      [AppointmentStatus.COLLECTED_TO_WS, AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED].includes(
+        appointment.status,
+      )
+    ) {
+      throw new BadRequestException(`Cannot start work once an appointment is ${appointment.status}.`);
+    }
+
+    const existing = await this.appointmentActivityRepository.findOne({ where: { appointmentId: id } });
+    if (existing) {
+      if (existing.finishedAt) {
+        throw new BadRequestException('This appointment’s activity has already been marked finished.');
+      }
+      return this.getActivity(id);
+    }
+
+    // Point 8 of the original request: block starting a NEW activity until whatever this
+    // technician already has open elsewhere is marked finished. Scoped to this
+    // technician (not service-centre-wide) and to open rows only (finishedAt IS NULL) -
+    // a technician can hold any number of FINISHED activities, just never two open ones.
+    if (appointment.technicianId) {
+      const openElsewhere = await this.appointmentActivityRepository
+        .createQueryBuilder('a')
+        .innerJoin('a.appointment', 'apt')
+        .where('apt.technicianId = :technicianId', { technicianId: appointment.technicianId })
+        .andWhere('a.appointmentId != :id', { id })
+        .andWhere('a.finishedAt IS NULL')
+        .getOne();
+      if (openElsewhere) {
+        const openAppointment = await this.findById(openElsewhere.appointmentId);
+        throw new ConflictException(
+          `Finish the activity on ${openAppointment.appointmentNumber} before starting a new one.`,
+        );
+      }
+    }
+
+    const activity = this.appointmentActivityRepository.create({ appointmentId: id, startedByUserId: userId });
+    const saved = await this.appointmentActivityRepository.save(activity);
+
+    await this.logAudit(
+      userId,
+      AuditAction.ACTIVITY_STARTED,
+      'AppointmentActivity',
+      id,
+      null,
+      { startedAt: saved.startedAt },
+      req,
+    );
+
+    return this.getActivity(id);
+  }
+
+  // Idempotent no-op if a pause is already open (mirrors JobCardsService's own pauseTask()
+  // convention) rather than erroring on a duplicate tap/retry.
+  async pauseActivity(
+    id: string,
+    dto: PauseAppointmentActivityDto,
+    userId: string,
+    req?: any,
+  ): Promise<AppointmentActivityResult> {
+    const activity = await this.appointmentActivityRepository.findOne({ where: { appointmentId: id } });
+    if (!activity || activity.finishedAt) {
+      throw new BadRequestException('Start work before pausing it.');
+    }
+
+    const openPause = await this.appointmentActivityPauseRepository.findOne({
+      where: { appointmentActivityId: activity.id, resumedAt: IsNull() },
+    });
+    if (openPause) {
+      return this.getActivity(id);
+    }
+
+    const pause = this.appointmentActivityPauseRepository.create({
+      appointmentActivityId: activity.id,
+      reason: dto.reason as unknown as TaskPauseReason,
+      notes: dto.notes ?? null,
+      pausedByUserId: userId,
+    });
+    await this.appointmentActivityPauseRepository.save(pause);
+
+    await this.logAudit(
+      userId,
+      AuditAction.ACTIVITY_PAUSED,
+      'AppointmentActivity',
+      id,
+      null,
+      { reason: dto.reason, notes: dto.notes ?? null },
+      req,
+    );
+
+    return this.getActivity(id);
+  }
+
+  // Idempotent no-op if there's no open pause to resume (already-resumed retry/race).
+  async resumeActivity(id: string, userId: string, req?: any): Promise<AppointmentActivityResult> {
+    const activity = await this.appointmentActivityRepository.findOne({ where: { appointmentId: id } });
+    if (!activity || activity.finishedAt) {
+      throw new BadRequestException('No active work session to resume.');
+    }
+
+    const openPause = await this.appointmentActivityPauseRepository.findOne({
+      where: { appointmentActivityId: activity.id, resumedAt: IsNull() },
+    });
+    if (!openPause) {
+      return this.getActivity(id);
+    }
+
+    openPause.resumedAt = new Date();
+    openPause.resumedByUserId = userId;
+    await this.appointmentActivityPauseRepository.save(openPause);
+
+    await this.logAudit(
+      userId,
+      AuditAction.ACTIVITY_RESUMED,
+      'AppointmentActivity',
+      id,
+      null,
+      { resumedAt: openPause.resumedAt },
+      req,
+    );
+
+    return this.getActivity(id);
+  }
+
+  // Idempotent on an already-finished activity. Mirrors JobCardsService's own
+  // complete-while-paused guard: work must be resumed before it can be marked finished,
+  // so the recorded finish time is never mid-pause.
+  async finishActivity(id: string, userId: string, req?: any): Promise<AppointmentActivityResult> {
+    const activity = await this.appointmentActivityRepository.findOne({ where: { appointmentId: id } });
+    if (!activity) {
+      throw new BadRequestException('Start work before marking it finished.');
+    }
+    if (activity.finishedAt) {
+      return this.getActivity(id);
+    }
+
+    const openPause = await this.appointmentActivityPauseRepository.findOne({
+      where: { appointmentActivityId: activity.id, resumedAt: IsNull() },
+    });
+    if (openPause) {
+      throw new BadRequestException('Resume the paused work before marking it finished.');
+    }
+
+    activity.finishedAt = new Date();
+    activity.finishedByUserId = userId;
+    await this.appointmentActivityRepository.save(activity);
+
+    await this.logAudit(
+      userId,
+      AuditAction.ACTIVITY_FINISHED,
+      'AppointmentActivity',
+      id,
+      null,
+      { finishedAt: activity.finishedAt },
+      req,
+    );
+
+    return this.getActivity(id);
   }
 
   async completeAppointment(id: string, userId: string, req?: any): Promise<Appointment> {

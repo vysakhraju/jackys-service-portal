@@ -17,6 +17,10 @@ import { JobCard } from '../job-cards/entities/job-card.entity';
 import { JobCardTaskPause } from '../job-cards/entities/job-card-task-pause.entity';
 import { JobCardCrewHelper } from '../job-cards/entities/job-card-crew-helper.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
+// Job Type split (2026-09-22) Phase 8 - registered in AppointmentsModule's own
+// TypeOrmModule.forFeature alongside Appointment (see that module's own comment).
+import { AppointmentActivity } from '../appointments/entities/appointment-activity.entity';
+import { AppointmentActivityPause } from '../appointments/entities/appointment-activity-pause.entity';
 import { ServiceCentre } from '../master-data/entities/service-centre.entity';
 import { User } from '../auth/entities/user.entity';
 import { AuditLog } from '../auth/entities/audit-log.entity';
@@ -130,6 +134,8 @@ describe('JobCardJourneyModule wiring', () => {
       BillingChannel,
       AppointmentFieldConfig,
       WorkshopIntake,
+      AppointmentActivity,
+      AppointmentActivityPause,
     ];
 
     let builder = Test.createTestingModule({

@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppointmentsService } from './appointments.service';
 import { AppointmentsController } from './appointments.controller';
 import { Appointment } from './entities/appointment.entity';
+import { AppointmentActivity } from './entities/appointment-activity.entity';
+import { AppointmentActivityPause } from './entities/appointment-activity-pause.entity';
 import { ServiceCentre } from '../master-data/entities/service-centre.entity';
 import { User } from '../auth/entities/user.entity';
 import { AuditLog } from '../auth/entities/audit-log.entity';
@@ -20,7 +22,18 @@ import { InventoryModule } from '../inventory/inventory.module';
     // Same entity-only-repo pattern TechnicianModule uses for the same reason. WorkshopIntake
     // is registered the same way and for the same reason (WorkshopIntakeModule imports
     // AppointmentsModule) - see AppointmentsService.attachEffectiveStatuses().
-    TypeOrmModule.forFeature([Appointment, ServiceCentre, User, AuditLog, JobCard, WorkshopIntake]),
+    // AppointmentActivity/AppointmentActivityPause (Job Type split, 2026-09-22 Phase 8) -
+    // owned by this module, same as Appointment itself.
+    TypeOrmModule.forFeature([
+      Appointment,
+      ServiceCentre,
+      User,
+      AuditLog,
+      JobCard,
+      WorkshopIntake,
+      AppointmentActivity,
+      AppointmentActivityPause,
+    ]),
     MasterDataModule,
     AuthModule,
     // Mobile Phase 5: the reassignment guardrail in update() below calls
