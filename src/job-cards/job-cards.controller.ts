@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Param, Query, UseGuards, UseInterceptors, 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { JobCardsService } from './job-cards.service';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
+import { CreateActivityJobCardDto } from './dto/create-activity-job-card.dto';
 import { ValidateSnDto } from './dto/validate-sn.dto';
 import { AssignSectionDto } from './dto/assign-section.dto';
 import { WarrantyOverrideDto } from './dto/warranty-override.dto';
@@ -73,6 +74,36 @@ export class JobCardsController {
   @ApiResponse({ status: 409, description: 'A Job Card already exists for this appointment' })
   async create(@Body() dto: CreateJobCardDto, @CurrentUser() user: User) {
     return this.jobCardsService.create(dto, user.id);
+  }
+
+  // Job Type split (2026-09-22 request, Phase 10) - the Installation/Delivery
+  // Installation counterpart to create() above. Same JOB_CARD_MANAGE capability gate
+  // (this is still "create a Job Card", just via a different precondition set) and same
+  // audit shape, plus the ERP reference number/line item count for the trail.
+  @Post('from-activity')
+  @RequiresCapability('JOB_CARD_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.CREATE,
+    entityType: 'JobCard',
+    getNewValues: (result) => ({
+      id: result?.id,
+      jobCardNumber: result?.jobCardNumber,
+      appointmentId: result?.appointmentId,
+      erpReferenceNumber: result?.erpReferenceNumber,
+      lineItemCount: result?.activityLineItems?.length,
+    }),
+  })
+  @ApiOperation({
+    summary:
+      'Create a Job Card for an Installation/Delivery Installation appointment from its ERP reference number + line items (Job Type split Phase 10). Skips S/N validation, fault/symptom, and the FR-05 invoice gate entirely - requires the appointment\'s mobile activity to already be Finished (or CCE-overridden) instead.',
+  })
+  @ApiResponse({ status: 201, type: JobCard })
+  @ApiResponse({ status: 400, description: 'Not an Installation/Delivery Installation appointment, or its activity is not Finished yet' })
+  @ApiResponse({ status: 404, description: 'Appointment or an ApplianceModel referenced by a line item not found' })
+  @ApiResponse({ status: 409, description: 'A Job Card already exists for this appointment' })
+  async createFromActivity(@Body() dto: CreateActivityJobCardDto, @CurrentUser() user: User) {
+    return this.jobCardsService.createFromActivity(dto, user.id);
   }
 
   @Post(':id/validate-sn')
@@ -265,6 +296,18 @@ export class JobCardsController {
     return this.jobCardsService.getTaskPauses(id);
   }
 
+  // Job Type split (2026-09-22 request, Phase 10) - not strictly needed by the web UI
+  // today (findById()/findByAppointmentId() already eager-load activityLineItems), but
+  // kept as its own endpoint for parity with getTaskPauses() above and for any future
+  // consumer that only wants the line items, not the whole Job Card.
+  @Get(':id/line-items')
+  @ApiOperation({ summary: 'Line items for an Installation/Delivery Installation Job Card (Job Type split Phase 10) - empty for a REPAIR-flow Job Card' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  async getActivityLineItems(@Param('id', ParseUUIDPipe) id: string) {
+    return this.jobCardsService.getActivityLineItems(id);
+  }
+
   // Must stay ABOVE @Get(':id') below - that route's ParseUUIDPipe would otherwise 400
   // on the literal path segment "eligible-appointments" before this handler ever ran
   // (NestJS matches routes in declaration order; a bare `:id` matches any single segment).
@@ -276,6 +319,18 @@ export class JobCardsController {
   @ApiResponse({ status: 200 })
   async findEligibleAppointments(@Query('q') q?: string) {
     return this.jobCardsService.findEligibleForJobCardCreation(q);
+  }
+
+  // Must stay ABOVE @Get(':id') too, same reason as eligible-appointments above.
+  @Get('eligible-activity-appointments')
+  @RequiresCapability('JOB_CARD_MANAGE')
+  @ApiOperation({
+    summary:
+      'Installation/Delivery Installation appointments ready for createFromActivity() right now (no Job Card yet, mobile activity already Finished or CCE-overridden) - Job Type split Phase 10',
+  })
+  @ApiResponse({ status: 200 })
+  async findEligibleActivityAppointments(@Query('q') q?: string) {
+    return this.jobCardsService.findEligibleForActivityJobCardCreation(q);
   }
 
   // Must stay ABOVE @Get(':id') too, same reason as eligible-appointments above.

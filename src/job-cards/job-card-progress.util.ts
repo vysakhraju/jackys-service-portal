@@ -21,6 +21,9 @@ export type JobCardLane = 'A' | 'B' | 'C' | 'D';
 export function getJobCardLane(
   jobCard: Pick<JobCard, 'section' | 'warrantyStatus'>,
 ): JobCardLane | null {
+  // A COMPLETED (Job Type split, Phase 10) Job Card never gets a section at all - this
+  // short-circuit is redundant with the `!jobCard.section` check right below it in
+  // practice, but spelled out so a future reader doesn't have to infer it.
   if (!jobCard.section) return null;
   const inWarranty = jobCard.warrantyStatus === WarrantyStatus.IN_WARRANTY;
   if (jobCard.section === JobCardSection.ON_SITE_REPAIR) {
@@ -69,6 +72,8 @@ export function getJobCardNextStepText(jobCard: NextStepInput): string {
       return 'Complete - delivered to customer';
     case JobCardStatus.CANCELLED:
       return 'Job cancelled';
+    case JobCardStatus.COMPLETED:
+      return 'Complete - logged from ERP reference, no further action needed';
     default:
       return '';
   }

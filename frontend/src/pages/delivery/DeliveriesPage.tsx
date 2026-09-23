@@ -228,10 +228,10 @@ function DeliveryDetail({ id }: { id: string }) {
             {jobCardsQuery.data.map((jc) => (
               <li key={jc.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
                 <span className="text-slate-700">
-                  {jc.jobCardNumber} · {jc.brand ?? 'Unknown brand'} · S/N {jc.serialNumber}
+                  {jc.jobCardNumber} · {jc.brand ?? 'Unknown brand'} · S/N {jc.serialNumber ?? '—'}
                 </span>
                 <span className="flex items-center gap-2">
-                  <StatusBadge status={jc.warrantyStatus} />
+                  {jc.warrantyStatus && <StatusBadge status={jc.warrantyStatus} />}
                   <Link to={`/job-cards/journey?jobCardId=${jc.id}`} className="text-slate-500 underline">
                     Journey →
                   </Link>

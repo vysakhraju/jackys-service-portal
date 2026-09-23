@@ -151,6 +151,21 @@ export function buildJourneySteps(input: JourneyInput): JourneyStep[] {
     return steps;
   }
 
+  // Job Type split (2026-09-22 request, Phase 10): a createFromActivity() Job Card is
+  // created already COMPLETED and never enters the SN-validated/section/workshop/QC/
+  // delivery pipeline below at all (no S/N, no warranty check, no section) - none of
+  // that machinery applies, so this stops right here rather than rendering steps that
+  // would otherwise show as permanently 'pending' for a job that is, in fact, done.
+  if (status === JobCardStatus.COMPLETED) {
+    steps.push({
+      key: 'completed',
+      label: 'Job Card completed (ERP reference on file)',
+      state: 'done',
+      at: jobCard.createdAt,
+    });
+    return steps;
+  }
+
   steps.push({
     key: 'sn_validated',
     label: 'Serial number validated against invoice',

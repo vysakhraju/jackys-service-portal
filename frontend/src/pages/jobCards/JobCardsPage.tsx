@@ -1,19 +1,23 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
+import { useFieldArray, useForm } from 'react-hook-form';
 import type { AxiosError } from 'axios';
 import { ErrorNotice } from '../../components/DataTable';
 import { Field, inputClass } from '../../components/Field';
+import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { getAppointment } from '../../lib/appointmentsApi';
+import { listApplianceModels } from '../../lib/masterDataApi';
 import {
   approveCustomer,
   assignSection,
   cancelJobCard,
+  createActivityJobCard,
   createJobCard,
   getBlockedAppointmentsForJobCard,
+  getEligibleActivityAppointmentsForJobCard,
   getEligibleAppointmentsForJobCard,
   getJobCardByAppointment,
   getTaskPauses,
@@ -23,6 +27,8 @@ import {
   warrantyOverride,
 } from '../../lib/jobCardsApi';
 import type {
+  ActivityJobCardLineItemInput,
+  EligibleActivityAppointmentForJobCard,
   EligibleAppointmentForJobCard,
   JobCard,
   JobCardSectionValue,
@@ -147,6 +153,22 @@ function JobCardProgressStepper({ jobCard }: { jobCard: Pick<JobCard, 'status' |
       <div className="border-t border-slate-100 pt-4">
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Progress</p>
         <p className="text-sm text-red-600">This Job Card was cancelled - see the reason below.</p>
+      </div>
+    );
+  }
+
+  // Job Type split (Phase 10) - a COMPLETED Job Card never enters the OPEN -> ... pipeline
+  // this stepper otherwise walks (no section, no S/N step, nothing to be "current" or
+  // "upcoming" at), so it gets its own short message instead of running through
+  // buildProgressSteps() below with a status that sequence.findIndex() would never match.
+  if (jobCard.status === 'COMPLETED') {
+    return (
+      <div className="border-t border-slate-100 pt-4">
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Progress</p>
+        <p className="text-sm text-emerald-600">
+          Completed directly from ERP-sourced Installation/Delivery paperwork - see the ERP
+          reference number and line items below.
+        </p>
       </div>
     );
   }
@@ -320,10 +342,257 @@ function EligibleAppointmentPicker({
   );
 }
 
+// Job Type split (2026-09-22 request, Phase 10) - the Installation/Delivery Installation
+// counterpart to EligibleAppointmentPicker above. Same "always browsable, typed query just
+// narrows" shape, backed by GET /job-cards/eligible-activity-appointments instead (real
+// precondition: the appointment's mobile Activity must already be FINISHED, not FR-05's
+// invoice/S-N/fault-symptom gate) - so there's no "blocked appointments" companion list
+// here, since that gate doesn't exist for this flow.
+function EligibleActivityAppointmentPicker({
+  onSelect,
+  selectedLabel,
+  onClear,
+}: {
+  onSelect: (item: EligibleActivityAppointmentForJobCard) => void;
+  selectedLabel?: string | null;
+  onClear?: () => void;
+}) {
+  const [queryInput, setQueryInput] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(queryInput.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [queryInput]);
+
+  const eligibleQuery = useQuery({
+    queryKey: ['job-cards', 'eligible-activity-appointments', debouncedQuery],
+    queryFn: () => getEligibleActivityAppointmentsForJobCard(debouncedQuery || undefined),
+  });
+
+  if (selectedLabel != null) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className={`${inputClass} flex items-center`}>{selectedLabel}</span>
+        {onClear && (
+          <button type="button" className="text-xs text-slate-500 hover:text-slate-700 hover:underline" onClick={onClear}>
+            Change
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <input
+        type="text"
+        className={inputClass}
+        value={queryInput}
+        onChange={(e) => setQueryInput(e.target.value)}
+        placeholder="Search by appointment #, customer name, or phone… (leave blank to see all)"
+        data-testid="eligible-activity-appointment-search-input"
+      />
+      <div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white" data-testid="eligible-activity-appointment-list">
+        {eligibleQuery.isLoading ? (
+          <p className="px-3 py-2 text-sm text-slate-400">Loading eligible appointments…</p>
+        ) : eligibleQuery.error ? (
+          <div className="p-3">
+            <ErrorNotice error={eligibleQuery.error} />
+          </div>
+        ) : eligibleQuery.data && eligibleQuery.data.length > 0 ? (
+          <ul className="divide-y divide-slate-100">
+            {eligibleQuery.data.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(item)}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                >
+                  <span>
+                    <span className="font-medium text-slate-900">{item.appointmentNumber}</span>
+                    <span className="ml-2 text-slate-500">
+                      {item.customerName} · {item.customerPhone}
+                    </span>
+                    <span className="ml-2 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                      {item.jobType.replaceAll('_', ' ')}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs text-slate-400">
+                    {new Date(item.scheduledAt).toLocaleDateString()}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="px-3 py-2 text-sm text-slate-400">
+            {debouncedQuery
+              ? `No eligible appointments match "${debouncedQuery}".`
+              : "No Installation/Delivery Installation appointments are ready for Job Card creation right now - the technician's mobile Activity Finished action (or a CCE override) has to run first."}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Job Type split (2026-09-22 request, Phase 10) - the new, separate creation popup for
+// Installation/Delivery Installation appointments. Deliberately skips S/N validation,
+// fault/symptom, and the FR-05 invoice gate entirely, per the locked spec: just the ERP
+// reference number plus a repeatable Brand/Job Type/Quantity/Finished line-items grid.
+// Mirrors EstimatesPage's CreateEstimateCard for the useFieldArray repeatable-row pattern.
+function CreateActivityJobCardModal({
+  open,
+  onClose,
+  appointmentId,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  appointmentId: string;
+  onCreated: () => void;
+}) {
+  const applianceModelsQuery = useQuery({
+    queryKey: ['master-data', 'appliance-models', 'all'],
+    queryFn: () => listApplianceModels(),
+    enabled: open,
+  });
+
+  const { register, control, handleSubmit, reset } = useForm<{
+    erpReferenceNumber: string;
+    lineItems: ActivityJobCardLineItemInput[];
+  }>({
+    defaultValues: {
+      erpReferenceNumber: '',
+      lineItems: [{ applianceModelId: '', jobType: 'INSTALLATION', quantity: 1, finished: true }],
+    },
+  });
+  const { fields, append, remove } = useFieldArray({ control, name: 'lineItems' });
+
+  const mutation = useMutation({
+    mutationFn: (values: { erpReferenceNumber: string; lineItems: ActivityJobCardLineItemInput[] }) =>
+      createActivityJobCard({
+        appointmentId,
+        erpReferenceNumber: values.erpReferenceNumber,
+        lineItems: values.lineItems.map((li) => ({
+          applianceModelId: li.applianceModelId,
+          jobType: li.jobType,
+          quantity: Number(li.quantity),
+          finished: !!li.finished,
+        })),
+      }),
+    onSuccess: () => {
+      onCreated();
+      reset();
+      onClose();
+    },
+  });
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Create Job Card - Installation / Delivery Installation"
+      maxWidthClassName="max-w-2xl"
+    >
+      <p className="mb-3 text-xs text-slate-400">
+        This ERP-sourced flow skips serial number validation, fault/symptom capture, and
+        the invoice-number gate entirely - it just records the ERP reference number and the
+        appliances actually installed or delivered, then marks the Job Card (and this
+        appointment) complete straight away.
+      </p>
+      <ErrorNotice error={mutation.error} />
+      <form onSubmit={handleSubmit((values) => mutation.mutate(values))} className="space-y-3">
+        <Field label="ERP Reference Number">
+          <input
+            className={inputClass}
+            {...register('erpReferenceNumber', { required: true })}
+            placeholder="e.g. ERP-2026-04512"
+          />
+        </Field>
+
+        <div className="space-y-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Line items</p>
+          {fields.map((field, index) => (
+            <div key={field.id} className="flex items-end gap-2">
+              <div className="flex-1">
+                <Field label={index === 0 ? 'Brand / Model' : ''}>
+                  <select className={inputClass} {...register(`lineItems.${index}.applianceModelId`, { required: true })}>
+                    <option value="">Select…</option>
+                    {applianceModelsQuery.data?.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.brand} — {m.model}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              <div className="w-44">
+                <Field label={index === 0 ? 'Job Type' : ''}>
+                  <select className={inputClass} {...register(`lineItems.${index}.jobType`, { required: true })}>
+                    <option value="INSTALLATION">Installation</option>
+                    <option value="DELIVERY_INSTALLATION">Delivery Installation</option>
+                  </select>
+                </Field>
+              </div>
+              <div className="w-20">
+                <Field label={index === 0 ? 'Qty' : ''}>
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    className={inputClass}
+                    {...register(`lineItems.${index}.quantity`, { required: true, valueAsNumber: true, min: 1 })}
+                  />
+                </Field>
+              </div>
+              <label className="mb-2 flex items-center gap-1 text-xs text-slate-500">
+                <input type="checkbox" {...register(`lineItems.${index}.finished`)} />
+                Finished
+              </label>
+              <button
+                type="button"
+                onClick={() => remove(index)}
+                disabled={fields.length === 1}
+                className="mb-0.5 rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-30"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => append({ applianceModelId: '', jobType: 'INSTALLATION', quantity: 1, finished: true })}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            + Add line item
+          </button>
+        </div>
+
+        <button
+          type="submit"
+          disabled={mutation.isPending}
+          className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          Create Job Card
+        </button>
+      </form>
+    </Modal>
+  );
+}
+
 export function JobCardsPage() {
   const [searchParams] = useSearchParams();
   const prefill = searchParams.get('appointmentId') ?? '';
   const [activeAppointmentId, setActiveAppointmentId] = useState(prefill);
+  // Job Type split (Phase 10) - which eligible-appointment pool the picker below queries.
+  // Only relevant while nothing is selected yet (selectedLabel == null) - once an
+  // appointment is picked, its own jobType (not this toggle) decides which creation flow
+  // renders below, so pasting a URL ?appointmentId= for either kind of appointment still
+  // routes correctly regardless of which tab happens to be active.
+  const [flow, setFlow] = useState<'repair' | 'activity'>('repair');
+  const [showActivityModal, setShowActivityModal] = useState(false);
   // #218/#251: see QcPage's identical field for why this isn't derived via an effect.
   const [pickedLabel, setPickedLabel] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -366,6 +635,13 @@ export function JobCardsPage() {
     ? (pickedLabel ?? appointmentQuery.data?.appointmentNumber ?? activeAppointmentId)
     : null;
 
+  // Job Type split (Phase 10) - decides the creation flow purely off the selected
+  // appointment's own jobType (mirrors SchedulePage.tsx's identical inline check), not off
+  // which picker tab found it - so a prefilled ?appointmentId= link (e.g. from the
+  // Schedule page's own "+ Create Job" pill) always routes correctly too.
+  const isActivityJobType =
+    appointmentQuery.data?.jobType === 'INSTALLATION' || appointmentQuery.data?.jobType === 'DELIVERY_INSTALLATION';
+
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-8 py-8">
       <div>
@@ -379,19 +655,51 @@ export function JobCardsPage() {
         </p>
       </div>
 
-      <div className="max-w-md">
+      <div className="max-w-md space-y-2">
+        {selectedLabel == null && (
+          <div className="flex gap-1 text-xs" data-testid="job-card-flow-toggle">
+            <button
+              type="button"
+              onClick={() => setFlow('repair')}
+              className={`rounded-md px-2 py-1 font-medium ${flow === 'repair' ? 'bg-slate-900 text-white' : 'border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+            >
+              Repair
+            </button>
+            <button
+              type="button"
+              onClick={() => setFlow('activity')}
+              className={`rounded-md px-2 py-1 font-medium ${flow === 'activity' ? 'bg-slate-900 text-white' : 'border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+            >
+              Installation / Delivery
+            </button>
+          </div>
+        )}
         <Field label="Appointment">
-          <EligibleAppointmentPicker
-            selectedLabel={selectedLabel}
-            onSelect={(item) => {
-              setPickedLabel(`${item.appointmentNumber} — ${item.customerName}`);
-              setActiveAppointmentId(item.id);
-            }}
-            onClear={() => {
-              setPickedLabel(null);
-              setActiveAppointmentId('');
-            }}
-          />
+          {flow === 'repair' ? (
+            <EligibleAppointmentPicker
+              selectedLabel={selectedLabel}
+              onSelect={(item) => {
+                setPickedLabel(`${item.appointmentNumber} — ${item.customerName}`);
+                setActiveAppointmentId(item.id);
+              }}
+              onClear={() => {
+                setPickedLabel(null);
+                setActiveAppointmentId('');
+              }}
+            />
+          ) : (
+            <EligibleActivityAppointmentPicker
+              selectedLabel={selectedLabel}
+              onSelect={(item) => {
+                setPickedLabel(`${item.appointmentNumber} — ${item.customerName}`);
+                setActiveAppointmentId(item.id);
+              }}
+              onClear={() => {
+                setPickedLabel(null);
+                setActiveAppointmentId('');
+              }}
+            />
+          )}
         </Field>
       </div>
 
@@ -416,7 +724,31 @@ export function JobCardsPage() {
           {jobCardQuery.isLoading && <p className="text-sm text-slate-400">Looking up the Job Card…</p>}
           {jobCardQuery.error && !jobCardNotFound && <ErrorNotice error={jobCardQuery.error} />}
 
-          {jobCardNotFound && (
+          {jobCardNotFound && isActivityJobType && (
+            <div className="rounded-lg border border-slate-200 bg-white p-4">
+              <p className="text-sm text-slate-600">
+                No Job Card exists yet for this Installation/Delivery Installation
+                appointment. This flow skips S/N validation, fault/symptom, and the invoice
+                gate entirely - its own precondition is that the technician's mobile
+                Activity Finished action (or a CCE's Mark Activity Complete override) has
+                already run.
+              </p>
+              <button
+                onClick={() => setShowActivityModal(true)}
+                className="mt-3 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+              >
+                Create Job Card
+              </button>
+              <CreateActivityJobCardModal
+                open={showActivityModal}
+                onClose={() => setShowActivityModal(false)}
+                appointmentId={activeAppointmentId}
+                onCreated={invalidateJobCard}
+              />
+            </div>
+          )}
+
+          {jobCardNotFound && !isActivityJobType && (
             <div className="rounded-lg border border-slate-200 bg-white p-4">
               <p className="text-sm text-slate-600">
                 No Job Card exists yet for this appointment. Creating one requires the
@@ -487,9 +819,12 @@ function JobCardDetail({
   const canAssignSection = canManage && jobCard.status === 'SN_VALIDATED';
   const canApproveCustomer = canManage && jobCard.warrantyStatus === 'OOW' && jobCard.status !== 'CANCELLED';
   const blockedByCustomerApproval = jobCard.warrantyStatus === 'OOW' && !jobCard.customerApproved;
+  // Job Type split (Phase 10) - excluded for COMPLETED too: an ERP-sourced job card has no
+  // warrantyStatus to override (backend's warrantyOverride() rejects COMPLETED outright).
   const canOverride =
-    canWarrantyOverride && jobCard.status !== 'RWR' && jobCard.status !== 'CANCELLED';
-  const canCancel = canManage && !['CANCELLED', 'READY_FOR_QC', 'QC_PASSED', 'DELIVERED'].includes(jobCard.status);
+    canWarrantyOverride && jobCard.status !== 'RWR' && jobCard.status !== 'CANCELLED' && jobCard.status !== 'COMPLETED';
+  const canCancel =
+    canManage && !['CANCELLED', 'READY_FOR_QC', 'QC_PASSED', 'DELIVERED', 'COMPLETED'].includes(jobCard.status);
   const pastThisPhase = TERMINAL_FOR_THIS_PHASE.includes(jobCard.status);
   const showWorkshopLink =
     WORKSHOP_LINKED_STATUSES.includes(jobCard.status) ||
@@ -501,7 +836,9 @@ function JobCardDetail({
         <div>
           <p className="font-medium text-slate-900">{jobCard.jobCardNumber}</p>
           <p className="text-xs text-slate-400">
-            {jobCard.brand ?? 'Unknown brand'} · S/N {jobCard.serialNumber}
+            {jobCard.status === 'COMPLETED'
+              ? `ERP Ref ${jobCard.erpReferenceNumber ?? '—'}`
+              : `${jobCard.brand ?? 'Unknown brand'} · S/N ${jobCard.serialNumber ?? '—'}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -525,25 +862,55 @@ function JobCardDetail({
 
       <JobCardProgressStepper jobCard={jobCard} />
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-        <DetailRow label="Section">{jobCard.section?.replaceAll('_', ' ') ?? '—'}</DetailRow>
-        <DetailRow label="Fault / symptom">{jobCard.faultCode} / {jobCard.symptomCode}</DetailRow>
-        <DetailRow label="Warranty status">
-          <StatusBadge status={jobCard.warrantyStatus} />
-          {jobCard.warrantyOverridden && (
-            <span className="ml-2 text-xs text-slate-400">
-              overridden from <StatusBadge status={jobCard.originalWarrantyStatus} /> ({jobCard.overrideCount}x)
-            </span>
+      {jobCard.status === 'COMPLETED' ? (
+        // Job Type split (Phase 10) - none of the REPAIR flow's S/N/fault/symptom/warranty
+        // fields apply to an ERP-sourced Job Card (they're all null - see the JobCard
+        // entity's own doc comment), so this replaces that grid entirely rather than
+        // rendering it with a run of "—"s.
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <DetailRow label="ERP Reference Number">{jobCard.erpReferenceNumber ?? '—'}</DetailRow>
+          <DetailRow label="Line items">
+            {jobCard.activityLineItems && jobCard.activityLineItems.length > 0 ? (
+              <ul className="space-y-1">
+                {jobCard.activityLineItems.map((li) => (
+                  <li key={li.id}>
+                    {li.applianceModel ? `${li.applianceModel.brand} — ${li.applianceModel.model}` : li.applianceModelId}
+                    <span className="ml-1 text-xs text-slate-400">
+                      ({li.jobType.replaceAll('_', ' ')} · qty {li.quantity} ·{' '}
+                      {li.finished ? 'finished' : 'not finished'})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              '—'
+            )}
+          </DetailRow>
+          {jobCard.cancellationReason && (
+            <DetailRow label="Cancellation reason">{jobCard.cancellationReason}</DetailRow>
           )}
-        </DetailRow>
-        <DetailRow label="S/N validated against invoice">
-          {jobCard.snValidatedAgainstInvoice ? 'Yes' : 'Not yet'}
-        </DetailRow>
-        <DetailRow label="Customer approved (OOW)">{jobCard.customerApproved ? 'Yes' : 'Not yet'}</DetailRow>
-        {jobCard.cancellationReason && (
-          <DetailRow label="Cancellation reason">{jobCard.cancellationReason}</DetailRow>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <DetailRow label="Section">{jobCard.section?.replaceAll('_', ' ') ?? '—'}</DetailRow>
+          <DetailRow label="Fault / symptom">{jobCard.faultCode} / {jobCard.symptomCode}</DetailRow>
+          <DetailRow label="Warranty status">
+            {jobCard.warrantyStatus ? <StatusBadge status={jobCard.warrantyStatus} /> : '—'}
+            {jobCard.warrantyOverridden && jobCard.originalWarrantyStatus && (
+              <span className="ml-2 text-xs text-slate-400">
+                overridden from <StatusBadge status={jobCard.originalWarrantyStatus} /> ({jobCard.overrideCount}x)
+              </span>
+            )}
+          </DetailRow>
+          <DetailRow label="S/N validated against invoice">
+            {jobCard.snValidatedAgainstInvoice ? 'Yes' : 'Not yet'}
+          </DetailRow>
+          <DetailRow label="Customer approved (OOW)">{jobCard.customerApproved ? 'Yes' : 'Not yet'}</DetailRow>
+          {jobCard.cancellationReason && (
+            <DetailRow label="Cancellation reason">{jobCard.cancellationReason}</DetailRow>
+          )}
+        </div>
+      )}
 
       {jobCard.publicToken && (
         <ActionCard title="Customer tracking link">

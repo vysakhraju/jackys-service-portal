@@ -12,9 +12,12 @@ import type {
   AssignSectionInput,
   BlockedAppointmentForJobCard,
   CancelJobCardInput,
+  CreateActivityJobCardInput,
   CreateJobCardInput,
+  EligibleActivityAppointmentForJobCard,
   EligibleAppointmentForJobCard,
   JobCard,
+  JobCardActivityLineItem,
   JobCardTaskPause,
   PauseTaskInput,
   QcRejectInput,
@@ -50,6 +53,26 @@ export const getBlockedAppointmentsForJobCard = (q?: string) => {
     .get<BlockedAppointmentForJobCard[]>(`${BASE}/blocked-appointments`, { params: trimmed ? { q: trimmed } : {} })
     .then((r) => r.data);
 };
+
+// Job Type split (2026-09-22 request, Phase 10) - the Installation/Delivery Installation
+// counterpart to getEligibleAppointmentsForJobCard above, backed by
+// JobCardsService.findEligibleForActivityJobCardCreation (real precondition: the
+// appointment's mobile Activity must already be FINISHED, not FR-05's invoice gate).
+export const getEligibleActivityAppointmentsForJobCard = (q?: string) => {
+  const trimmed = q?.trim();
+  return api
+    .get<EligibleActivityAppointmentForJobCard[]>(`${BASE}/eligible-activity-appointments`, {
+      params: trimmed ? { q: trimmed } : {},
+    })
+    .then((r) => r.data);
+};
+
+// Job Type split (2026-09-22 request, Phase 10) - the new, separate creation path for
+// Installation/Delivery Installation appointments (JobCardsService.createFromActivity()).
+// Produces an already-COMPLETED Job Card, bypassing create()'s OPEN -> ... pipeline
+// entirely.
+export const createActivityJobCard = (data: CreateActivityJobCardInput) =>
+  api.post<JobCard>(`${BASE}/from-activity`, data).then((r) => r.data);
 
 export const getJobCard = (id: string) => api.get<JobCard>(`${BASE}/${id}`).then((r) => r.data);
 
@@ -93,3 +116,8 @@ export const resumeTask = (id: string) =>
 
 export const getTaskPauses = (id: string) =>
   api.get<JobCardTaskPause[]>(`${BASE}/${id}/pauses`).then((r) => r.data);
+
+// Job Type split (2026-09-22 request, Phase 10) - full line-item list for a Job Card
+// created via createFromActivity(). Empty for a REPAIR-flow Job Card.
+export const getActivityLineItems = (id: string) =>
+  api.get<JobCardActivityLineItem[]>(`${BASE}/${id}/line-items`).then((r) => r.data);

@@ -23,12 +23,17 @@ import { JobCardStatus } from './entities/job-card.entity';
 /** A Job Card in any of these statuses is done-or-terminal enough that further changes
  * are financially/operationally sensitive - READY_FOR_QC (frozen for QC, about to be
  * either approved or bounced back), QC_PASSED (stock already consumed, invoice-eligible),
- * DELIVERED (POD captured, cycle complete), CANCELLED (closed out, cannot be revived). */
+ * DELIVERED (POD captured, cycle complete), CANCELLED (closed out, cannot be revived),
+ * COMPLETED (Job Type split Phase 10 - an ERP-sourced Installation/Delivery Installation
+ * Job Card, terminal from the moment it's created; Estimates/Invoices can never target one
+ * of these in practice, since Estimate creation itself requires SN_VALIDATED, but this is
+ * included for the same "done enough to be sensitive" reasoning as the other 3). */
 export const LATE_STAGE_JOB_CARD_STATUSES: readonly JobCardStatus[] = [
   JobCardStatus.READY_FOR_QC,
   JobCardStatus.QC_PASSED,
   JobCardStatus.DELIVERED,
   JobCardStatus.CANCELLED,
+  JobCardStatus.COMPLETED,
 ];
 
 // SUPER_ADMIN/SERVICE_HEAD/TECHNICAL_TEAM_LEADER cover the general "supervisor override"

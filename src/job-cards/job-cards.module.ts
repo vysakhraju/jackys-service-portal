@@ -5,8 +5,10 @@ import { JobCardsController } from './job-cards.controller';
 import { JobCard } from './entities/job-card.entity';
 import { JobCardTaskPause } from './entities/job-card-task-pause.entity';
 import { JobCardCrewHelper } from './entities/job-card-crew-helper.entity';
+import { JobCardActivityLineItem } from './entities/job-card-activity-line-item.entity';
 import { User } from '../auth/entities/user.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
+import { ApplianceModel } from '../master-data/entities/appliance-model.entity';
 import { AppointmentsModule } from '../appointments/appointments.module';
 import { TechnicianModule } from '../technician/technician.module';
 import { AuthModule } from '../auth/auth.module';
@@ -24,7 +26,9 @@ import { WorkshopIntakeModule } from '../workshop-intake/workshop-intake.module'
     // it directly for the Job Cards page's "eligible for job creation" picker - a filtered
     // search across many rows, not a single lookup, so it doesn't fit AppointmentsModule's
     // existing single-appointment-shaped methods.
-    TypeOrmModule.forFeature([JobCard, JobCardTaskPause, JobCardCrewHelper, User, Appointment]),
+    // JobCardActivityLineItem/ApplianceModel (Job Type split, Phase 10): createFromActivity()'s
+    // line items and their applianceModelId existence check.
+    TypeOrmModule.forFeature([JobCard, JobCardTaskPause, JobCardCrewHelper, User, Appointment, JobCardActivityLineItem, ApplianceModel]),
     AppointmentsModule,
     TechnicianModule,
     // Needed because JobCardsController's @UseInterceptors(AuditInterceptor) resolves

@@ -15,6 +15,10 @@ export const JOB_CARD_STATUSES = [
   'QC_PASSED',
   'DELIVERED',
   'CANCELLED',
+  // Job Type split (2026-09-22 request, Phase 10) - terminal status for a Job Card
+  // created via the ERP-sourced Installation/Delivery Installation flow
+  // (createFromActivity()), which bypasses the OPEN -> ... pipeline entirely.
+  'COMPLETED',
 ] as const;
 export type JobCardStatusValue = (typeof JOB_CARD_STATUSES)[number];
 
@@ -40,12 +44,18 @@ export interface JobCard {
   appointmentId: string;
   status: JobCardStatusValue;
   section: JobCardSectionValue | null;
-  serialNumber: string;
+  // Job Type split (Phase 10): null for a COMPLETED (ERP-sourced Installation/Delivery
+  // Installation) Job Card - none of the REPAIR flow's S/N/fault/symptom/warranty capture
+  // applies to it. Always populated for every other status.
+  serialNumber: string | null;
   brand: string | null;
-  faultCode: string;
-  symptomCode: string;
-  originalWarrantyStatus: WarrantyStatusValue;
-  warrantyStatus: WarrantyStatusValue;
+  faultCode: string | null;
+  symptomCode: string | null;
+  originalWarrantyStatus: WarrantyStatusValue | null;
+  warrantyStatus: WarrantyStatusValue | null;
+  // Job Type split (Phase 10) - the ERP reference number captured by the new creation
+  // popup. Null for every REPAIR-flow Job Card.
+  erpReferenceNumber: string | null;
   snValidatedAgainstInvoice: boolean;
   snValidationNotes: string | null;
   warrantyOverridden: boolean;
@@ -76,11 +86,62 @@ export interface JobCard {
   // shape (or a mock in a test) that predates this field keeps typechecking.
   lane?: JobCardLaneValue | null;
   nextStepText?: string;
+  // Job Type split (Phase 10) - always [] for a REPAIR-flow Job Card. Optional so any
+  // older cached response shape (or a mock in a test) that predates this field keeps
+  // typechecking, same reasoning as lane/nextStepText above.
+  activityLineItems?: JobCardActivityLineItem[];
 }
 
 // Matches CreateJobCardDto exactly.
 export interface CreateJobCardInput {
   appointmentId: string;
+}
+
+// Job Type split (2026-09-22 request, Phase 10) - the new Job Card creation flow for
+// Installation/Delivery Installation appointments. Mirrors the backend's
+// JobCardActivityLineItem entity / CreateActivityJobCardDto exactly.
+export type ActivityJobCardLineItemJobType = 'INSTALLATION' | 'DELIVERY_INSTALLATION';
+
+export interface JobCardActivityLineItem {
+  id: string;
+  jobCardId: string;
+  applianceModelId: string;
+  // Loaded via getActivityLineItems()/findById()'s relations - just enough to label a
+  // line without pulling in the full ApplianceModel shape.
+  applianceModel?: { id: string; brand: string; model: string };
+  jobType: ActivityJobCardLineItemJobType;
+  quantity: number;
+  finished: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ActivityJobCardLineItemInput {
+  applianceModelId: string;
+  jobType: ActivityJobCardLineItemJobType;
+  quantity: number;
+  finished: boolean;
+}
+
+// Matches CreateActivityJobCardDto exactly.
+export interface CreateActivityJobCardInput {
+  appointmentId: string;
+  erpReferenceNumber: string;
+  lineItems: ActivityJobCardLineItemInput[];
+}
+
+// GET /job-cards/eligible-activity-appointments - the Installation/Delivery Installation
+// counterpart to EligibleAppointmentForJobCard above. Real precondition: the appointment's
+// mobile Activity must already be FINISHED (see AppointmentsService.getActivity()), not
+// FR-05's invoice/S-N/fault-symptom gate.
+export interface EligibleActivityAppointmentForJobCard {
+  id: string;
+  appointmentNumber: string;
+  customerName: string;
+  customerPhone: string;
+  status: string;
+  scheduledAt: string;
+  jobType: ActivityJobCardLineItemJobType;
 }
 
 // GET /job-cards/eligible-appointments (requested 2026-09-17) - backs the Job Cards

@@ -13,6 +13,8 @@ import { Appointment } from '../../appointments/entities/appointment.entity';
 import { User } from '../../auth/entities/user.entity';
 import { WarrantyStatus } from '../../technician/entities/technician-visit.entity';
 import { Delivery } from '../../delivery/entities/delivery.entity';
+import { OneToMany } from 'typeorm';
+import { JobCardActivityLineItem } from './job-card-activity-line-item.entity';
 
 export enum JobCardStatus {
   OPEN = 'OPEN',
@@ -46,6 +48,15 @@ export enum JobCardStatus {
   // gets here (batch/normal delivery, one DLV# covering one or more Job Cards).
   DELIVERED = 'DELIVERED',
   CANCELLED = 'CANCELLED',
+  // Job Type split (2026-09-22 request, Phase 10): terminal status for a Job Card created
+  // via JobCardsService.createFromActivity() - the ERP-sourced Installation/Delivery
+  // Installation flow, which has no S/N validation, section, workshop, QC, or Delivery
+  // concept at all (those columns stay null for a COMPLETED job card - see the entity's
+  // own nullable annotations below). Created already-complete rather than moving through
+  // any of the other statuses, since the real fieldwork already finished via the mobile
+  // Activity Finished action (or a CCE override) before this Job Card is ever created -
+  // this popup only records the ERP paperwork after the fact.
+  COMPLETED = 'COMPLETED',
 }
 
 export enum JobCardSection {
@@ -78,25 +89,36 @@ export class JobCard {
   // Snapshotted from TechnicianVisit at creation time - deliberately NOT re-read live from
   // the visit afterwards, so a Job Card's record of what was found on-site can't silently
   // drift if the visit is ever revisited.
-  @Column({ type: 'varchar', length: 100 })
-  serialNumber: string;
+  //
+  // Job Type split (2026-09-22 request, Phase 10): nullable as of this phase - a
+  // createFromActivity() Job Card (status COMPLETED) has no serial number/warranty check
+  // at all (that flow skips S/N validation and fault/symptom entirely, per point 10 of
+  // the request), so this column genuinely does not apply there and is left null rather
+  // than filled with a sentinel value. Every REPAIR-flow Job Card (via create()) still
+  // always sets this - callers reading it for a REPAIR job can keep treating it as
+  // present in practice, but the type is honest about the COMPLETED-flow gap.
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  serialNumber: string | null;
 
   @Column({ type: 'varchar', length: 50, nullable: true })
   brand: string | null;
 
-  @Column({ type: 'varchar', length: 20 })
-  faultCode: string;
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  faultCode: string | null;
 
-  @Column({ type: 'varchar', length: 20 })
-  symptomCode: string;
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  symptomCode: string | null;
 
   // Immutable snapshot of the warranty badge the technician captured on-site. Never
   // mutated after creation - `warrantyStatus` below is the effective/current one.
-  @Column({ type: 'enum', enum: WarrantyStatus })
-  originalWarrantyStatus: WarrantyStatus;
+  // Nullable for the same createFromActivity()/COMPLETED reason as serialNumber above -
+  // an ERP-sourced Installation/Delivery Installation job was never warranty-checked
+  // on-site at all.
+  @Column({ type: 'enum', enum: WarrantyStatus, nullable: true })
+  originalWarrantyStatus: WarrantyStatus | null;
 
-  @Column({ type: 'enum', enum: WarrantyStatus })
-  warrantyStatus: WarrantyStatus;
+  @Column({ type: 'enum', enum: WarrantyStatus, nullable: true })
+  warrantyStatus: WarrantyStatus | null;
 
   // Snapshotted from TechnicianVisit.warrantySupplier at creation time (same pattern as
   // serialNumber/brand above) - Backend Phase 12 (Warranty Claims): this is how a claim's
@@ -219,6 +241,25 @@ export class JobCard {
 
   @Column({ type: 'timestamp', nullable: true })
   publicTokenExpiresAt: Date | null;
+
+  // Job Type split (2026-09-22 request, Phase 10): the ERP reference number captured on
+  // the Installation/Delivery Installation creation popup (point 10 of the request) - the
+  // only "invoice-number equivalent" this flow has, since it skips FR-05's real
+  // invoiceNumber gate entirely. Deliberately its own column, not reusing
+  // Appointment.invoiceNumber or DebitNote's numbering - same "avoid a real naming clash"
+  // reasoning already documented above this section in MODIFICATION_REQUESTS.md for why
+  // this field is called "ERP Reference Number", not "DN number". Null for every
+  // REPAIR-flow Job Card (via create()); always set for a COMPLETED one (via
+  // createFromActivity()).
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  erpReferenceNumber: string | null;
+
+  // Job Type split (2026-09-22 request, Phase 10): the repeatable Brand/Job Type/
+  // Quantity/Finished line items captured on the same popup - see
+  // JobCardActivityLineItem's own doc comment for why this is a normalized child table
+  // rather than a JSON column. Always empty for a REPAIR-flow Job Card.
+  @OneToMany(() => JobCardActivityLineItem, (lineItem) => lineItem.jobCard)
+  activityLineItems: JobCardActivityLineItem[];
 
   @ManyToOne(() => User)
   @JoinColumn({ name: 'createdById' })

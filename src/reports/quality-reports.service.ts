@@ -106,14 +106,25 @@ export class QualityReportsService {
    * span (non-negative gaps summing to <=30 means each individual gap is <=30 too).
    */
   async getRepeatComplaints(): Promise<RepeatComplaintItem[]> {
+    // Job Type split (Phase 10): COMPLETED job cards are ERP-sourced Installation/Delivery
+    // Installation jobs with no serial number at all (see JobCard entity's doc comment on
+    // why serialNumber is nullable) - repeat-complaint bucketing by S/N is meaningless for
+    // them, so they're excluded here the same way CANCELLED already is.
     const jobs = await this.jobCardRepo.find({
-      where: { status: In(Object.values(JobCardStatus).filter((s) => s !== JobCardStatus.CANCELLED)) },
+      where: {
+        status: In(
+          Object.values(JobCardStatus).filter(
+            (s) => s !== JobCardStatus.CANCELLED && s !== JobCardStatus.COMPLETED,
+          ),
+        ),
+      },
       select: { id: true, jobCardNumber: true, serialNumber: true, createdAt: true },
       order: { createdAt: 'ASC' },
     });
 
     const bySerial = new Map<string, { jobCardId: string; jobCardNumber: string; createdAt: Date }[]>();
     for (const j of jobs) {
+      if (!j.serialNumber) continue;
       const list = bySerial.get(j.serialNumber) ?? [];
       list.push({ jobCardId: j.id, jobCardNumber: j.jobCardNumber, createdAt: j.createdAt });
       bySerial.set(j.serialNumber, list);

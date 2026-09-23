@@ -2,7 +2,14 @@
 // overridable per-test via a Partial<> merge. Keeps individual test files from having to
 // restate every field of these fairly large backend-mirrored shapes.
 import type { Appointment } from '../lib/appointmentsTypes';
-import type { BlockedAppointmentForJobCard, EligibleAppointmentForJobCard, JobCard } from '../lib/jobCardsTypes';
+import type {
+  BlockedAppointmentForJobCard,
+  EligibleActivityAppointmentForJobCard,
+  EligibleAppointmentForJobCard,
+  JobCard,
+  JobCardActivityLineItem,
+} from '../lib/jobCardsTypes';
+import type { ApplianceModel } from '../lib/masterDataTypes';
 import type { Estimate } from '../lib/estimatesTypes';
 import type { InventoryReservation, InventoryReservationWithAge } from '../lib/inventoryTypes';
 import type { WorkshopState } from '../lib/workshopTypes';
@@ -108,6 +115,56 @@ export function makeEligibleAppointmentForJobCard(
   };
 }
 
+// Job Type split (2026-09-22 request, Phase 10) - GET /job-cards/eligible-activity-appointments
+// row, the Installation/Delivery Installation counterpart to
+// makeEligibleAppointmentForJobCard above.
+export function makeEligibleActivityAppointmentForJobCard(
+  overrides: Partial<EligibleActivityAppointmentForJobCard> = {},
+): EligibleActivityAppointmentForJobCard {
+  return {
+    id: 'appt-70',
+    appointmentNumber: 'APT-0070',
+    customerName: 'Omar Saeed',
+    customerPhone: '+971501114444',
+    status: 'ON_SITE',
+    scheduledAt: '2026-09-20T10:00:00.000Z',
+    jobType: 'INSTALLATION',
+    ...overrides,
+  };
+}
+
+// Job Type split (Phase 10) - just enough of ApplianceModel for the line-items grid's
+// Brand/Model dropdown.
+export function makeApplianceModel(overrides: Partial<ApplianceModel> = {}): ApplianceModel {
+  return {
+    id: 'model-1',
+    brand: 'Samsung',
+    model: 'RT50K',
+    description: null,
+    category: null,
+    isActive: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+// Job Type split (Phase 10) - a createFromActivity()-created Job Card's line item.
+export function makeJobCardActivityLineItem(overrides: Partial<JobCardActivityLineItem> = {}): JobCardActivityLineItem {
+  return {
+    id: 'line-1',
+    jobCardId: 'jc-1',
+    applianceModelId: 'model-1',
+    applianceModel: { id: 'model-1', brand: 'Samsung', model: 'RT50K' },
+    jobType: 'INSTALLATION',
+    quantity: 1,
+    finished: true,
+    createdAt: '2026-09-20T10:00:00.000Z',
+    updatedAt: '2026-09-20T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
 // GET /job-cards/blocked-appointments row (2026-09-21) - backs JobCardsPage's empty-state
 // "why" panel and SchedulePage's blocked-row badge.
 export function makeBlockedAppointmentForJobCard(
@@ -139,6 +196,9 @@ export function makeJobCard(overrides: Partial<JobCard> = {}): JobCard {
     symptomCode: 'S-1',
     originalWarrantyStatus: 'OOW',
     warrantyStatus: 'OOW',
+    // Job Type split (Phase 10) - always null for a REPAIR-flow Job Card; overridden in
+    // fixtures for the ERP-sourced (COMPLETED) case.
+    erpReferenceNumber: null,
     snValidatedAgainstInvoice: true,
     snValidationNotes: null,
     warrantyOverridden: false,

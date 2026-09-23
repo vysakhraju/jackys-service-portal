@@ -176,12 +176,15 @@ export class TechnicianScheduleService {
       estimatedDurationMinutes: a.estimatedDurationMinutes,
     }));
 
+    // COMPLETED (Phase 10, ERP-sourced) job cards never reach the unassigned-workshop-job
+    // pool this feeds from, but the fields are now nullable on the entity - fallback here
+    // purely to satisfy the type, not a real-data case.
     const unassignedJobCards: UnassignedJobCard[] = unassignedJobCardEntities.map((j) => ({
       id: j.id,
       jobCardNumber: j.jobCardNumber,
-      faultCode: j.faultCode,
-      symptomCode: j.symptomCode,
-      warrantyStatus: j.warrantyStatus,
+      faultCode: j.faultCode ?? '',
+      symptomCode: j.symptomCode ?? '',
+      warrantyStatus: j.warrantyStatus ?? '',
       createdAt: j.createdAt,
     }));
 
@@ -249,20 +252,21 @@ export class TechnicianScheduleService {
           id: j.id,
           jobCardNumber: j.jobCardNumber,
           status: j.status,
-          faultCode: j.faultCode,
-          symptomCode: j.symptomCode,
-          warrantyStatus: j.warrantyStatus,
+          faultCode: j.faultCode ?? '',
+          symptomCode: j.symptomCode ?? '',
+          warrantyStatus: j.warrantyStatus ?? '',
           workshopAssignedAt: j.workshopAssignedAt!,
         })),
       };
     });
 
+    // Same COMPLETED-never-reaches-this-pool note as findGanttBoard() above.
     const unassignedJobCards: UnassignedJobCard[] = unassignedJobCardEntities.map((j) => ({
       id: j.id,
       jobCardNumber: j.jobCardNumber,
-      faultCode: j.faultCode,
-      symptomCode: j.symptomCode,
-      warrantyStatus: j.warrantyStatus,
+      faultCode: j.faultCode ?? '',
+      symptomCode: j.symptomCode ?? '',
+      warrantyStatus: j.warrantyStatus ?? '',
       createdAt: j.createdAt,
     }));
 

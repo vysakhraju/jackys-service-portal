@@ -115,7 +115,12 @@ const ACTIVE_APPOINTMENT_STATUSES_FOR_GRID: readonly AppointmentStatus[] = [
 // a separate ERP process and skip the REPAIR flow's TechnicianVisit/S/N/fault-symptom
 // steps entirely). MAINTENANCE deliberately excluded too - Phase 6 already soft-hid it
 // from every NEW-pick dropdown, same reasoning as CORRECTABLE_JOB_TYPES.
-const ACTIVITY_JOB_TYPES: readonly JobType[] = [JobType.INSTALLATION, JobType.DELIVERY_INSTALLATION];
+//
+// Exported (Phase 10, 2026-09-23): JobCardsService.createFromActivity() and
+// findEligibleForActivityJobCardCreation() need this exact same set - same "one source of
+// truth" reasoning that made JobType itself move to master-data during the Price List
+// rebuild, rather than risking a second, independently-maintained copy silently drifting.
+export const ACTIVITY_JOB_TYPES: readonly JobType[] = [JobType.INSTALLATION, JobType.DELIVERY_INSTALLATION];
 
 export interface AppointmentActivityResult {
   status: AppointmentActivityStatus;

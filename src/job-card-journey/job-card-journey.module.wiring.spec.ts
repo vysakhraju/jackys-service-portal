@@ -16,6 +16,10 @@ import { DeliveryService } from '../delivery/delivery.service';
 import { JobCard } from '../job-cards/entities/job-card.entity';
 import { JobCardTaskPause } from '../job-cards/entities/job-card-task-pause.entity';
 import { JobCardCrewHelper } from '../job-cards/entities/job-card-crew-helper.entity';
+// Job Type split (2026-09-22) Phase 10 - registered in JobCardsModule's own
+// TypeOrmModule.forFeature alongside JobCard/JobCardTaskPause/JobCardCrewHelper above, for
+// createFromActivity()'s line items.
+import { JobCardActivityLineItem } from '../job-cards/entities/job-card-activity-line-item.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 // Job Type split (2026-09-22) Phase 8 - registered in AppointmentsModule's own
 // TypeOrmModule.forFeature alongside Appointment (see that module's own comment).
@@ -99,6 +103,8 @@ describe('JobCardJourneyModule wiring', () => {
       // board's "add crew helper" action), pulled in transitively the same way every
       // other JobCardsModule-registered entity here is.
       JobCardCrewHelper,
+      // Job Type split (2026-09-22) Phase 10 - see the import above.
+      JobCardActivityLineItem,
       Appointment,
       ServiceCentre,
       User,

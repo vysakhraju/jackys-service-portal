@@ -1,18 +1,21 @@
 import { randomBytes } from 'crypto';
 import { Injectable, Logger, BadRequestException, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not, In } from 'typeorm';
+import { Repository, IsNull, Not, In, DataSource } from 'typeorm';
 import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { JobCardTaskPause, TaskPauseReason } from './entities/job-card-task-pause.entity';
 import { JobCardCrewHelper } from './entities/job-card-crew-helper.entity';
+import { JobCardActivityLineItem } from './entities/job-card-activity-line-item.entity';
 import { User } from '../auth/entities/user.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { getJobCardProgressFields, JobCardProgressFields } from './job-card-progress.util';
-import { AppointmentsService } from '../appointments/appointments.service';
+import { AppointmentsService, ACTIVITY_JOB_TYPES } from '../appointments/appointments.service';
 import { Appointment, AppointmentStatus } from '../appointments/entities/appointment.entity';
 import { TechnicianService } from '../technician/technician.service';
 import { WorkshopIntakeService } from '../workshop-intake/workshop-intake.service';
+import { ApplianceModel } from '../master-data/entities/appliance-model.entity';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
+import { CreateActivityJobCardDto } from './dto/create-activity-job-card.dto';
 import { ValidateSnDto } from './dto/validate-sn.dto';
 import { AssignSectionDto } from './dto/assign-section.dto';
 import { WarrantyOverrideDto } from './dto/warranty-override.dto';
@@ -51,6 +54,18 @@ export class JobCardsService {
     // that service's existing single-appointment-shaped methods.
     @InjectRepository(Appointment)
     private appointmentRepository: Repository<Appointment>,
+    // Job Type split (2026-09-22 request, Phase 10): createFromActivity()'s line items
+    // (JobCardActivityLineItem) and their applianceModelId validation.
+    @InjectRepository(JobCardActivityLineItem)
+    private activityLineItemRepository: Repository<JobCardActivityLineItem>,
+    @InjectRepository(ApplianceModel)
+    private applianceModelRepository: Repository<ApplianceModel>,
+    // Same direct-injection pattern InventoryService already uses for its own
+    // transactional writes (e.g. consumeReservationsOnQcApproval) - a global provider once
+    // TypeOrmModule.forRoot() is set up at the AppModule level, no extra module wiring
+    // needed. createFromActivity() below is the only method here that needs it: a Job
+    // Card and its line items must be created atomically, or neither should exist.
+    private dataSource: DataSource,
     private appointmentsService: AppointmentsService,
     private technicianService: TechnicianService,
     private workshopIntakeService: WorkshopIntakeService,
@@ -90,7 +105,10 @@ export class JobCardsService {
   async findById(id: string): Promise<JobCard & JobCardProgressFields> {
     const jobCard = await this.jobCardRepository.findOne({
       where: { id },
-      relations: { appointment: true, createdBy: true, warrantyOverrideByUser: true },
+      // Job Type split (2026-09-22 request, Phase 10): activityLineItems is always empty
+      // for a REPAIR-flow Job Card, so loading it unconditionally here is a no-op extra
+      // join for every job this phase didn't touch, not a behavior change.
+      relations: { appointment: true, createdBy: true, warrantyOverrideByUser: true, activityLineItems: { applianceModel: true } },
     });
     if (!jobCard) {
       throw new NotFoundException(`Job Card ${id} not found`);
@@ -145,7 +163,12 @@ export class JobCardsService {
   }
 
   async findByAppointmentId(appointmentId: string): Promise<JobCard & JobCardProgressFields> {
-    const jobCard = await this.jobCardRepository.findOne({ where: { appointmentId } });
+    const jobCard = await this.jobCardRepository.findOne({
+      where: { appointmentId },
+      // Job Type split (2026-09-22 request, Phase 10) - see findById()'s identical
+      // comment above.
+      relations: { activityLineItems: { applianceModel: true } },
+    });
     if (!jobCard) {
       throw new NotFoundException(`No Job Card exists for appointment ${appointmentId}`);
     }
@@ -515,6 +538,161 @@ export class JobCardsService {
   }
 
   /**
+   * Job Type split (2026-09-22 request, Phase 10): the appointments ready for
+   * createFromActivity() below right now - the Installation/Delivery Installation
+   * counterpart to findEligibleForJobCardCreation() above, but with the REPAIR flow's
+   * invoice/TechnicianVisit/WorkshopIntake gates swapped out for this flow's own real
+   * precondition: the mobile Activity Finished action (or a CCE override) must have
+   * already run. Same shape/search behavior as the REPAIR picker (blank `q` browses the
+   * whole pool; typed `q` narrows by appointment number/customer name/phone, same
+   * ILIKE-escaping as every other picker in this module).
+   */
+  async findEligibleForActivityJobCardCreation(q?: string): Promise<
+    Array<Pick<Appointment, 'id' | 'appointmentNumber' | 'customerName' | 'customerPhone' | 'status' | 'scheduledAt' | 'jobType'>>
+  > {
+    const qb = this.appointmentRepository
+      .createQueryBuilder('apt')
+      .leftJoin('job_cards', 'jc', 'jc."appointmentId" = apt.id')
+      .innerJoin('appointment_activities', 'act', 'act."appointmentId" = apt.id')
+      .where('jc.id IS NULL')
+      .andWhere('apt."jobType" IN (:...jobTypes)', { jobTypes: ACTIVITY_JOB_TYPES })
+      .andWhere('act."finishedAt" IS NOT NULL');
+
+    const trimmed = q?.trim();
+    if (trimmed) {
+      const escaped = trimmed.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const like = `%${escaped}%`;
+      qb.andWhere(
+        `(apt."appointmentNumber" ILIKE :like ESCAPE '\\' OR apt."customerName" ILIKE :like ESCAPE '\\' OR apt."customerPhone" ILIKE :like ESCAPE '\\')`,
+        { like },
+      );
+    }
+
+    return qb
+      .select(['apt.id', 'apt.appointmentNumber', 'apt.customerName', 'apt.customerPhone', 'apt.status', 'apt.scheduledAt', 'apt.jobType'])
+      .orderBy('apt.scheduledAt', 'DESC')
+      .limit(30)
+      .getMany();
+  }
+
+  /**
+   * Job Type split (2026-09-22 request, Phase 10): the new Job Card creation path for
+   * Installation/Delivery Installation appointments (point 10 of the request) - a
+   * deliberately separate method from create() above, not a branch inside it, since the
+   * two share almost no preconditions (no S/N validation, no fault/symptom, no FR-05
+   * invoice gate here at all) and produce a differently-shaped, already-COMPLETED Job
+   * Card rather than one that enters the OPEN -> ... pipeline.
+   *
+   * Real precondition this flow DOES have, in place of FR-05: the appointment's mobile
+   * Activity must already be FINISHED (via the technician's own Activity Finished tap, or
+   * a CCE's Mark Activity Complete override - see AppointmentsService.finishActivity()/
+   * overrideFinishActivity()) - the actual fieldwork must be done before this popup exists
+   * to record the ERP paperwork for it, mirroring how create() above requires the field
+   * visit/workshop intake to be complete before its own Job Card can exist.
+   */
+  async createFromActivity(dto: CreateActivityJobCardDto, userId: string): Promise<JobCard> {
+    const appointment = await this.appointmentsService.findById(dto.appointmentId);
+
+    if (!ACTIVITY_JOB_TYPES.includes(appointment.jobType)) {
+      throw new BadRequestException(
+        'This creation flow only applies to Installation/Delivery Installation appointments - use the standard Job Card creation flow for a Repair.',
+      );
+    }
+
+    const existing = await this.jobCardRepository.findOne({ where: { appointmentId: dto.appointmentId } });
+    if (existing) {
+      throw new ConflictException(`A Job Card already exists for appointment ${appointment.appointmentNumber}`);
+    }
+
+    const activity = await this.appointmentsService.getActivity(dto.appointmentId);
+    if (activity.status !== 'FINISHED') {
+      throw new BadRequestException(
+        `Cannot create a Job Card: the activity for ${appointment.appointmentNumber} is not finished yet ` +
+          '(the technician\'s mobile "Activity Finished" action, or a CCE\'s "Mark Activity Complete" override, must happen first).',
+      );
+    }
+
+    // Every line's ApplianceModel must be real - same "validate the referenced row
+    // exists, don't just trust the FK constraint to fail late" discipline
+    // assignWorkshopTechnician()/addCrewHelper() already use for technicianId above.
+    for (const line of dto.lineItems) {
+      const model = await this.applianceModelRepository.findOne({ where: { id: line.applianceModelId } });
+      if (!model) {
+        throw new NotFoundException(`Appliance model ${line.applianceModelId} not found.`);
+      }
+      if (!ACTIVITY_JOB_TYPES.includes(line.jobType)) {
+        throw new BadRequestException(`Line item Job Type must be INSTALLATION or DELIVERY_INSTALLATION (got ${line.jobType}).`);
+      }
+    }
+
+    const jobCardNumber = await this.generateJobCardNumber();
+
+    // Job Card + its line items must be created atomically - a Job Card that somehow ends
+    // up with zero line items (a crash between the two saves) would be indistinguishable
+    // from a genuine data-entry mistake, so this is the one method in this service that
+    // needs a real transaction rather than two independent repository.save() calls.
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const jobCard = manager.create(JobCard, {
+        jobCardNumber,
+        appointmentId: dto.appointmentId,
+        status: JobCardStatus.COMPLETED,
+        section: null,
+        serialNumber: null,
+        brand: null,
+        faultCode: null,
+        symptomCode: null,
+        originalWarrantyStatus: null,
+        warrantyStatus: null,
+        warrantySupplier: null,
+        erpReferenceNumber: dto.erpReferenceNumber,
+        createdById: userId,
+        // Every Job Card gets a customer tracking link, same as create() above - no
+        // reason an ERP-sourced job should be any less trackable by the customer.
+        publicToken: randomBytes(32).toString('hex'),
+        publicTokenExpiresAt: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000),
+      });
+      const savedJobCard = await manager.save(jobCard);
+
+      const lineItems = dto.lineItems.map((line) =>
+        manager.create(JobCardActivityLineItem, {
+          jobCardId: savedJobCard.id,
+          applianceModelId: line.applianceModelId,
+          jobType: line.jobType,
+          quantity: line.quantity,
+          finished: line.finished,
+        }),
+      );
+      await manager.save(lineItems);
+
+      return savedJobCard;
+    });
+
+    // Same "auto-complete, swallow-and-log rather than throw" business rule create()
+    // above uses - a hiccup here must never take down a Job Card (and its line items)
+    // that were already successfully committed.
+    try {
+      await this.appointmentsService.completeFromJobCardCreation(dto.appointmentId, userId);
+    } catch (err) {
+      this.logger.warn(
+        `Job Card ${saved.jobCardNumber} was created but auto-completing appointment ${dto.appointmentId} failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
+    return this.findById(saved.id);
+  }
+
+  /** Full line-item list for a Job Card, oldest first - mirrors getTaskPauses()'s own
+   * "no ownership gate, same as every other GET" shape. Empty for a REPAIR-flow Job Card. */
+  async getActivityLineItems(jobCardId: string): Promise<JobCardActivityLineItem[]> {
+    await this.findEntityById(jobCardId); // 404s if the Job Card itself doesn't exist
+    return this.activityLineItemRepository.find({
+      where: { jobCardId },
+      relations: { applianceModel: true },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  /**
    * Gate 2: human confirmation that the captured S/N matches the physical invoice.
    * Only allowed while still OPEN - once a Job Card has moved past this gate
    * (SN_VALIDATED/SECTION_ASSIGNED) it can't be silently re-validated to paper over a
@@ -591,9 +769,19 @@ export class JobCardsService {
   async warrantyOverride(id: string, dto: WarrantyOverrideDto, userId: string): Promise<{ jobCard: JobCard; previousStatus: WarrantyStatus }> {
     const jobCard = await this.findEntityById(id);
 
-    if (jobCard.status === JobCardStatus.RWR || jobCard.status === JobCardStatus.CANCELLED) {
+    if (
+      jobCard.status === JobCardStatus.RWR ||
+      jobCard.status === JobCardStatus.CANCELLED ||
+      // Job Type split (2026-09-22 request, Phase 10): a COMPLETED (ERP-sourced
+      // Installation/Delivery Installation) Job Card was never warranty-checked at all -
+      // warrantyStatus is null for these, so there is nothing to override.
+      jobCard.status === JobCardStatus.COMPLETED
+    ) {
       throw new BadRequestException(
-        `Cannot override warranty while the Job Card is ${jobCard.status} (FR-08: further work is blocked until it's revived).`,
+        `Cannot override warranty while the Job Card is ${jobCard.status}` +
+          (jobCard.status === JobCardStatus.COMPLETED
+            ? ' - this job has no warranty status (ERP-sourced Installation/Delivery Installation).'
+            : " (FR-08: further work is blocked until it's revived)."),
       );
     }
 
@@ -601,7 +789,10 @@ export class JobCardsService {
       throw new BadRequestException(`Job Card is already ${dto.newStatus} - nothing to override.`);
     }
 
-    const previousStatus = jobCard.warrantyStatus;
+    // Non-null by this point - every status this method still accepts past the guard
+    // above (everything except RWR/CANCELLED/COMPLETED) always has a real warrantyStatus
+    // set by create() (the only path that produces those statuses).
+    const previousStatus = jobCard.warrantyStatus!;
 
     jobCard.warrantyStatus = dto.newStatus;
     jobCard.warrantyOverridden = true;

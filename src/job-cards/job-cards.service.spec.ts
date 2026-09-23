@@ -3,6 +3,7 @@ import { JobCardsService } from './job-cards.service';
 import { JobCardStatus, JobCardSection } from './entities/job-card.entity';
 import { TaskPauseReason } from './entities/job-card-task-pause.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
+import { JobType } from '../master-data/entities/service-price-list.entity';
 import { IsNull, Not, In } from 'typeorm';
 
 describe('JobCardsService', () => {
@@ -12,6 +13,10 @@ describe('JobCardsService', () => {
   let crewHelperRepository: any;
   let userRepository: any;
   let appointmentRepository: any;
+  let activityLineItemRepository: any;
+  let applianceModelRepository: any;
+  let dataSource: any;
+  let activityManager: any;
   let appointmentsService: any;
   let technicianService: any;
   let workshopIntakeService: any;
@@ -107,6 +112,9 @@ describe('JobCardsService', () => {
     };
     eligibleAppointmentsQueryBuilder = {
       leftJoin: jest.fn().mockReturnThis(),
+      // Job Type split (Phase 10) - findEligibleForActivityJobCardCreation()'s extra
+      // innerJoin onto appointment_activities.
+      innerJoin: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       select: jest.fn().mockReturnThis(),
@@ -117,9 +125,26 @@ describe('JobCardsService', () => {
     appointmentRepository = {
       createQueryBuilder: jest.fn(() => eligibleAppointmentsQueryBuilder),
     };
+    activityLineItemRepository = {
+      create: jest.fn((data: any) => data),
+      find: jest.fn().mockResolvedValue([]),
+    };
+    applianceModelRepository = {
+      findOne: jest.fn(),
+    };
+    dataSource = {
+      transaction: jest.fn(async (cb: any) => {
+        activityManager = {
+          create: jest.fn((_entity: any, data: any) => data),
+          save: jest.fn((data: any) => Promise.resolve(Array.isArray(data) ? data : { ...data, id: data?.id || 'jc-1' })),
+        };
+        return cb(activityManager);
+      }),
+    };
     appointmentsService = {
       findById: jest.fn(),
       completeFromJobCardCreation: jest.fn().mockResolvedValue(undefined),
+      getActivity: jest.fn(),
     };
     technicianService = {
       getVisit: jest.fn(),
@@ -134,6 +159,9 @@ describe('JobCardsService', () => {
       crewHelperRepository,
       userRepository,
       appointmentRepository,
+      activityLineItemRepository,
+      applianceModelRepository,
+      dataSource,
       appointmentsService,
       technicianService,
       workshopIntakeService,
@@ -1536,6 +1564,152 @@ describe('JobCardsService', () => {
           status: In([JobCardStatus.WORKSHOP_ASSIGNED, JobCardStatus.IN_PROGRESS, JobCardStatus.SPARE_PENDING]),
         },
         order: { workshopAssignedAt: 'ASC' },
+      });
+    });
+  });
+
+  // Job Type split (2026-09-22 request, Phase 10) - the new Job Card creation flow for
+  // Installation/Delivery Installation appointments.
+  describe('findEligibleForActivityJobCardCreation', () => {
+    it('queries appointments with no Job Card, an Activity job type, and a finished Activity', async () => {
+      await service.findEligibleForActivityJobCardCreation();
+
+      expect(eligibleAppointmentsQueryBuilder.leftJoin).toHaveBeenCalledWith('job_cards', 'jc', 'jc."appointmentId" = apt.id');
+      expect(eligibleAppointmentsQueryBuilder.andWhere).toHaveBeenCalledWith('apt."jobType" IN (:...jobTypes)', {
+        jobTypes: [JobType.INSTALLATION, JobType.DELIVERY_INSTALLATION],
+      });
+      expect(eligibleAppointmentsQueryBuilder.andWhere).toHaveBeenCalledWith('act."finishedAt" IS NOT NULL');
+      expect(eligibleAppointmentsQueryBuilder.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('ILIKE'), expect.anything());
+    });
+
+    it('adds an escaped ILIKE search across appointment number/customer name/phone when q is given', async () => {
+      await service.findEligibleForActivityJobCardCreation('50% off_er');
+
+      expect(eligibleAppointmentsQueryBuilder.andWhere).toHaveBeenCalledWith(
+        `(apt."appointmentNumber" ILIKE :like ESCAPE '\\' OR apt."customerName" ILIKE :like ESCAPE '\\' OR apt."customerPhone" ILIKE :like ESCAPE '\\')`,
+        { like: '%50\\% off\\_er%' },
+      );
+    });
+
+    it('ignores a blank/whitespace-only q the same as no q at all', async () => {
+      await service.findEligibleForActivityJobCardCreation('   ');
+
+      expect(eligibleAppointmentsQueryBuilder.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('ILIKE'), expect.anything());
+    });
+  });
+
+  describe('createFromActivity', () => {
+    const activityDto = (overrides: any = {}) => ({
+      appointmentId: 'apt-1',
+      erpReferenceNumber: 'ERP-9001',
+      lineItems: [{ applianceModelId: 'model-1', jobType: JobType.INSTALLATION, quantity: 2, finished: true }],
+      ...overrides,
+    });
+
+    beforeEach(() => {
+      appointmentsService.findById.mockResolvedValue(appointment({ jobType: JobType.INSTALLATION }));
+      appointmentsService.getActivity.mockResolvedValue({ status: 'FINISHED' });
+      jobCardRepository.findOne.mockResolvedValueOnce(null); // no existing Job Card for this appointment
+      applianceModelRepository.findOne.mockResolvedValue({ id: 'model-1', brand: 'Samsung', model: 'RT50' });
+    });
+
+    it('rejects a REPAIR appointment - this flow only applies to Installation/Delivery Installation', async () => {
+      appointmentsService.findById.mockResolvedValue(appointment({ jobType: JobType.REPAIR }));
+
+      await expect(service.createFromActivity(activityDto(), 'user-1')).rejects.toThrow(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects when a Job Card already exists for the appointment', async () => {
+      jobCardRepository.findOne.mockReset();
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard());
+
+      await expect(service.createFromActivity(activityDto(), 'user-1')).rejects.toThrow(ConflictException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the Activity is not finished yet', async () => {
+      appointmentsService.getActivity.mockResolvedValue({ status: 'IN_PROGRESS' });
+
+      await expect(service.createFromActivity(activityDto(), 'user-1')).rejects.toThrow(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown applianceModelId on a line item', async () => {
+      applianceModelRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.createFromActivity(activityDto(), 'user-1')).rejects.toThrow(NotFoundException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a line item Job Type outside Installation/Delivery Installation', async () => {
+      const dto = activityDto({ lineItems: [{ applianceModelId: 'model-1', jobType: JobType.REPAIR, quantity: 1, finished: false }] });
+
+      await expect(service.createFromActivity(dto, 'user-1')).rejects.toThrow(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('creates a COMPLETED Job Card with all REPAIR-only fields nulled, its line items, atomically, and completes the appointment', async () => {
+      jobCardRepository.findOne.mockReset();
+      jobCardRepository.findOne
+        .mockResolvedValueOnce(null) // existing-Job-Card check
+        .mockResolvedValueOnce(jobCard({ id: 'jc-1', status: JobCardStatus.COMPLETED })); // final findById()
+
+      const result = await service.createFromActivity(activityDto(), 'user-1');
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(activityManager.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          status: JobCardStatus.COMPLETED,
+          section: null,
+          serialNumber: null,
+          faultCode: null,
+          symptomCode: null,
+          originalWarrantyStatus: null,
+          warrantyStatus: null,
+          erpReferenceNumber: 'ERP-9001',
+          createdById: 'user-1',
+        }),
+      );
+      expect(activityManager.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ applianceModelId: 'model-1', jobType: JobType.INSTALLATION, quantity: 2, finished: true }),
+      );
+      expect(appointmentsService.completeFromJobCardCreation).toHaveBeenCalledWith('apt-1', 'user-1');
+      expect(result.id).toBe('jc-1');
+    });
+
+    it('still returns the created Job Card when completeFromJobCardCreation fails (lenient, non-blocking)', async () => {
+      jobCardRepository.findOne.mockReset();
+      jobCardRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(jobCard({ id: 'jc-1', status: JobCardStatus.COMPLETED }));
+      appointmentsService.completeFromJobCardCreation.mockRejectedValue(new Error('DB hiccup'));
+
+      const result = await service.createFromActivity(activityDto(), 'user-1');
+
+      expect(result.id).toBe('jc-1');
+    });
+  });
+
+  describe('getActivityLineItems', () => {
+    it('404s when the Job Card itself does not exist', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.getActivityLineItems('missing-jc')).rejects.toThrow(NotFoundException);
+      expect(activityLineItemRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('returns the line items for an existing Job Card, oldest first, with applianceModel loaded', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard({ id: 'jc-1' }));
+
+      await service.getActivityLineItems('jc-1');
+
+      expect(activityLineItemRepository.find).toHaveBeenCalledWith({
+        where: { jobCardId: 'jc-1' },
+        relations: { applianceModel: true },
+        order: { createdAt: 'ASC' },
       });
     });
   });

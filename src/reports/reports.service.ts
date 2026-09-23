@@ -250,9 +250,14 @@ export class ReportsService {
         jobCardNumber: job.jobCardNumber,
         status: job.status,
         section: job.section,
-        serialNumber: job.serialNumber,
+        // COMPLETED (Phase 10, ERP-sourced Installation/Delivery Installation jobs) has no
+        // serialNumber/warrantyStatus - columnForJobCard() already excludes COMPLETED from
+        // the board via its `if (!column) continue;` guard above, so these fallbacks are
+        // never actually hit for a real row; they're here purely to satisfy the now-nullable
+        // entity types.
+        serialNumber: job.serialNumber ?? '',
         brand: job.brand,
-        warrantyStatus: job.warrantyStatus,
+        warrantyStatus: job.warrantyStatus ?? '',
         deliveryNumber: job.deliveryId ? deliveryNumberById.get(job.deliveryId) ?? null : null,
         updatedAt: job.updatedAt,
       });

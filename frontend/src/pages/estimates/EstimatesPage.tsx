@@ -145,7 +145,7 @@ export function EstimatesPage() {
               </p>
               <p className="mt-0.5 text-xs text-slate-500">
                 Job Card status: <StatusBadge status={jobCard.status} /> · Warranty:{' '}
-                <StatusBadge status={jobCard.warrantyStatus} />
+                {jobCard.warrantyStatus ? <StatusBadge status={jobCard.warrantyStatus} /> : '—'}
               </p>
               {jobCard.warrantyStatus !== 'OOW' && (
                 <p className="mt-2 text-xs text-amber-700">

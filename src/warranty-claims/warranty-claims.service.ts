@@ -128,7 +128,10 @@ export class WarrantyClaimsService {
           inventoryReservationId: r.id,
           jobCardId: r.jobCardId,
           jobCardNumber: r.jobCard.jobCardNumber,
-          serialNumber: r.jobCard.serialNumber,
+          // COMPLETED (Phase 10, ERP-sourced) job cards have no serialNumber, but they also
+          // never carry an inventory reservation to consume, so this candidate list never
+          // actually contains one - fallback here purely to satisfy the now-nullable type.
+          serialNumber: r.jobCard.serialNumber ?? '',
           sparePartCode: r.sparePart.code,
           sparePartName: r.sparePart.name,
           quantity: r.quantityReserved,

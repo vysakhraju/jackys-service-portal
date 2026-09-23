@@ -158,7 +158,7 @@ export function ReadyForDeliveryPage() {
     {
       key: 'warranty',
       label: 'Warranty',
-      render: (r) => <StatusBadge status={r.jobCard.warrantyStatus} />,
+      render: (r) => (r.jobCard.warrantyStatus ? <StatusBadge status={r.jobCard.warrantyStatus} /> : <span className="text-xs text-slate-400">—</span>),
     },
     ...(warrantyStatus === 'OOW'
       ? [
