@@ -503,7 +503,7 @@ function CreateActivityJobCardModal({
       open={open}
       onClose={onClose}
       title="Create Job Card - Installation / Delivery Installation"
-      maxWidthClassName="max-w-3xl"
+      maxWidthClassName="max-w-4xl"
     >
       <p className="mb-3 text-xs text-slate-400">
         This ERP-sourced flow skips serial number validation, fault/symptom capture, and
@@ -533,10 +533,10 @@ function CreateActivityJobCardModal({
             const categoryLabel = selectedModel?.category ? selectedModel.category.replace(/_/g, ' ') : '—';
             return (
               <div key={field.id} className="flex items-end gap-1.5">
-                <div className="min-w-0 flex-1">
+                <div className="w-52 shrink-0">
                   <Field label={index === 0 ? 'Brand / Model' : ''}>
                     <select
-                      className={compactInputClass}
+                      className={`${compactInputClass} truncate`}
                       {...register(`lineItems.${index}.applianceModelId`, { required: true })}
                     >
                       <option value="">Select…</option>
@@ -548,7 +548,7 @@ function CreateActivityJobCardModal({
                     </select>
                   </Field>
                 </div>
-                <div className="w-24">
+                <div className="w-36 shrink-0">
                   <Field label={index === 0 ? 'Category' : ''}>
                     <div
                       className={`${compactInputClass} truncate bg-slate-50 text-slate-500`}
@@ -558,7 +558,7 @@ function CreateActivityJobCardModal({
                     </div>
                   </Field>
                 </div>
-                <div className="w-32">
+                <div className="w-32 shrink-0">
                   <Field label={index === 0 ? 'Job Type' : ''}>
                     <select
                       className={compactInputClass}
