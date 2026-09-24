@@ -460,7 +460,7 @@ function CreateActivityJobCardModal({
     enabled: open,
   });
 
-  const { register, control, handleSubmit, reset } = useForm<{
+  const { register, control, handleSubmit, reset, watch } = useForm<{
     erpReferenceNumber: string;
     lineItems: ActivityJobCardLineItemInput[];
   }>({
@@ -470,6 +470,14 @@ function CreateActivityJobCardModal({
     },
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'lineItems' });
+
+  // Category column (2026-09-24 request) - a smaller standalone class (not a tweaked
+  // inputClass - concatenating two same-specificity Tailwind utility strings doesn't
+  // reliably override px-3/py-1.5/text-sm with later ones) so this line-items row reads
+  // more compactly now that Brand/Model, the new read-only Category box, Job Type, Qty,
+  // Finished, and Remove all sit on one line.
+  const compactInputClass =
+    'block w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500';
 
   const mutation = useMutation({
     mutationFn: (values: { erpReferenceNumber: string; lineItems: ActivityJobCardLineItemInput[] }) =>
@@ -495,7 +503,7 @@ function CreateActivityJobCardModal({
       open={open}
       onClose={onClose}
       title="Create Job Card - Installation / Delivery Installation"
-      maxWidthClassName="max-w-2xl"
+      maxWidthClassName="max-w-3xl"
     >
       <p className="mb-3 text-xs text-slate-400">
         This ERP-sourced flow skips serial number validation, fault/symptom capture, and
@@ -515,53 +523,78 @@ function CreateActivityJobCardModal({
 
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Line items</p>
-          {fields.map((field, index) => (
-            <div key={field.id} className="flex items-end gap-2">
-              <div className="flex-1">
-                <Field label={index === 0 ? 'Brand / Model' : ''}>
-                  <select className={inputClass} {...register(`lineItems.${index}.applianceModelId`, { required: true })}>
-                    <option value="">Select…</option>
-                    {applianceModelsQuery.data?.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.brand} — {m.model}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+          {fields.map((field, index) => {
+            // Read-only Category validation box (2026-09-24 request) - lets whoever is
+            // keying this in visually confirm the appliance's category against the picked
+            // Brand/Model before submitting. Derived only, never sent to the API - the
+            // backend already resolves category off applianceModelId server-side.
+            const selectedModelId = watch(`lineItems.${index}.applianceModelId`);
+            const selectedModel = applianceModelsQuery.data?.find((m) => m.id === selectedModelId);
+            const categoryLabel = selectedModel?.category ? selectedModel.category.replace(/_/g, ' ') : '—';
+            return (
+              <div key={field.id} className="flex items-end gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <Field label={index === 0 ? 'Brand / Model' : ''}>
+                    <select
+                      className={compactInputClass}
+                      {...register(`lineItems.${index}.applianceModelId`, { required: true })}
+                    >
+                      <option value="">Select…</option>
+                      {applianceModelsQuery.data?.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.brand} — {m.model}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+                <div className="w-24">
+                  <Field label={index === 0 ? 'Category' : ''}>
+                    <div
+                      className={`${compactInputClass} truncate bg-slate-50 text-slate-500`}
+                      title={categoryLabel}
+                    >
+                      {categoryLabel}
+                    </div>
+                  </Field>
+                </div>
+                <div className="w-32">
+                  <Field label={index === 0 ? 'Job Type' : ''}>
+                    <select
+                      className={compactInputClass}
+                      {...register(`lineItems.${index}.jobType`, { required: true })}
+                    >
+                      <option value="INSTALLATION">Installation</option>
+                      <option value="DELIVERY_INSTALLATION">Delivery Installation</option>
+                    </select>
+                  </Field>
+                </div>
+                <div className="w-14">
+                  <Field label={index === 0 ? 'Qty' : ''}>
+                    <input
+                      type="number"
+                      step="1"
+                      min="1"
+                      className={compactInputClass}
+                      {...register(`lineItems.${index}.quantity`, { required: true, valueAsNumber: true, min: 1 })}
+                    />
+                  </Field>
+                </div>
+                <label className="mb-2 flex items-center gap-1 text-xs text-slate-500">
+                  <input type="checkbox" {...register(`lineItems.${index}.finished`)} />
+                  Finished
+                </label>
+                <button
+                  type="button"
+                  onClick={() => remove(index)}
+                  disabled={fields.length === 1}
+                  className="mb-0.5 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-30"
+                >
+                  Remove
+                </button>
               </div>
-              <div className="w-44">
-                <Field label={index === 0 ? 'Job Type' : ''}>
-                  <select className={inputClass} {...register(`lineItems.${index}.jobType`, { required: true })}>
-                    <option value="INSTALLATION">Installation</option>
-                    <option value="DELIVERY_INSTALLATION">Delivery Installation</option>
-                  </select>
-                </Field>
-              </div>
-              <div className="w-20">
-                <Field label={index === 0 ? 'Qty' : ''}>
-                  <input
-                    type="number"
-                    step="1"
-                    min="1"
-                    className={inputClass}
-                    {...register(`lineItems.${index}.quantity`, { required: true, valueAsNumber: true, min: 1 })}
-                  />
-                </Field>
-              </div>
-              <label className="mb-2 flex items-center gap-1 text-xs text-slate-500">
-                <input type="checkbox" {...register(`lineItems.${index}.finished`)} />
-                Finished
-              </label>
-              <button
-                type="button"
-                onClick={() => remove(index)}
-                disabled={fields.length === 1}
-                className="mb-0.5 rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-30"
-              >
-                Remove
-              </button>
-            </div>
-          ))}
+            );
+          })}
           <button
             type="button"
             onClick={() => append({ applianceModelId: '', jobType: 'INSTALLATION', quantity: 1, finished: true })}
