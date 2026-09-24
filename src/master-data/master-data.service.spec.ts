@@ -418,12 +418,36 @@ describe('MasterDataService', () => {
       expect(result).toEqual(expect.objectContaining({ category: 'AC', jobType: 'REPAIR' }));
     });
 
-    it('throws ConflictException when a row for that category/jobType already exists', async () => {
-      servicePriceListRepository.findOne.mockResolvedValue({ id: 'existing' });
+    it('throws ConflictException when an ACTIVE row for that category/jobType already exists', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue({ id: 'existing', isActive: true });
 
       await expect(
         service.createServicePriceList({ category: 'AC' as any, jobType: 'REPAIR' as any }),
       ).rejects.toThrow(ConflictException);
+    });
+
+    // Reactivate-on-create bug fix (2026-09-24): reported live - a previously deleted
+    // REFRIGERATOR/INSTALLATION row blocked re-creating it forever (the unique
+    // (category, jobType) index applies regardless of isActive), while the row itself
+    // was invisible in the UI (findAllPriceLists only lists active rows), so the
+    // ConflictException's own "edit that row instead" advice was impossible to follow.
+    it('reactivates a soft-deleted row with the newly submitted values instead of throwing', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue({
+        id: 'existing',
+        category: 'AC',
+        jobType: 'REPAIR',
+        isActive: false,
+      });
+
+      await service.createServicePriceList({ category: 'AC' as any, jobType: 'REPAIR' as any, priceB2B: 99 });
+
+      expect(servicePriceListRepository.update).toHaveBeenCalledWith('existing', {
+        category: 'AC',
+        jobType: 'REPAIR',
+        priceB2B: 99,
+        isActive: true,
+      });
+      expect(servicePriceListRepository.save).not.toHaveBeenCalled();
     });
 
     it('filters active rows, optionally by category and/or job type', async () => {

@@ -303,6 +303,20 @@ export class MasterDataService {
       where: { category: data.category, jobType: data.jobType },
     });
     if (existing) {
+      if (!existing.isActive) {
+        // Reactivate-on-create bug fix (2026-09-24): the unique (category, jobType)
+        // index on this entity is a real DB constraint, not just an app-level check, and
+        // it applies regardless of isActive - soft-deleting a row never frees its slot.
+        // Before this fix, a deleted row blocked its combo forever: create() threw
+        // "already exists - edit that row instead", but findAllPriceLists() only lists
+        // isActive rows, so the row this error points at is invisible and un-editable in
+        // the UI - a permanent dead end for anyone who ever clicked Delete once. Reviving
+        // the old row with the newly submitted values (instead of trying to insert a
+        // second row for the same combo, which the DB would reject anyway) is the only
+        // way back.
+        await this.servicePriceListRepository.update(existing.id, { ...data, isActive: true });
+        return this.findPriceListById(existing.id);
+      }
       throw new ConflictException(
         `A price list row for ${data.category} / ${data.jobType} already exists - edit that row instead of creating a duplicate.`,
       );
