@@ -1,6 +1,6 @@
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
-import { In } from 'typeorm';
-import { AppointmentsService } from './appointments.service';
+import { In, Not, IsNull } from 'typeorm';
+import { AppointmentsService, ACTIVITY_JOB_TYPES } from './appointments.service';
 import { AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType, JobType } from './entities/appointment.entity';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import * as googleMapsLinkUtil from './google-maps-link.util';
@@ -79,6 +79,11 @@ describe('AppointmentsService', () => {
     // own append-only ordering (see AppointmentsService's own comment on why).
     appointmentActivityRepository = {
       findOne: jest.fn().mockResolvedValue(null),
+      // Live finding (2026-09-24) point 1/2 - excludeFinishedActivityAppointments() and
+      // getCompletedWorkForTechnician() both call .find(); defaults to no finished rows
+      // so every pre-existing schedule test (written before this filter existed) keeps
+      // passing unchanged, same "append-only default" convention as the other mocks here.
+      find: jest.fn().mockResolvedValue([]),
       create: jest.fn((d: any) => d),
       save: jest.fn((d: any) => Promise.resolve({ ...d, id: d.id || 'activity-1', startedAt: d.startedAt || new Date('2026-09-23T08:00:00Z') })),
       createQueryBuilder: jest.fn(),
@@ -569,6 +574,103 @@ describe('AppointmentsService', () => {
     it('throws NotFoundException for an unknown appointment number', async () => {
       appointmentRepository.findOne.mockResolvedValue(null);
       await expect(service.findByAppointmentNumber('APT-X')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // Live finding (2026-09-24) point 3 - Type=Activity must only ever pair with Job Type
+  // Installation/Delivery Installation, so the picker's restriction has a real backend
+  // guard behind it too (not just a UI narrowing that a direct API call could bypass).
+  describe('validateActivityJobTypePairing (via create/update)', () => {
+    const activityDto = {
+      type: AppointmentType.ACTIVITY,
+      customerType: CustomerType.B2C,
+      customerName: 'John Doe',
+      customerPhone: '+971501234567',
+      scheduledAt: '2026-08-25T09:00:00Z',
+      serviceCentreId: 'sc-1',
+    } as any;
+
+    describe('create', () => {
+      it('rejects Type=Activity paired with Job Type=Repair', async () => {
+        await expect(service.create({ ...activityDto, jobType: 'REPAIR' }, 'user-1')).rejects.toThrow(
+          BadRequestException,
+        );
+        expect(serviceCentreRepository.findOne).not.toHaveBeenCalled();
+      });
+
+      it('rejects Type=Activity with no Job Type at all (defaults to Repair)', async () => {
+        await expect(service.create({ ...activityDto }, 'user-1')).rejects.toThrow(BadRequestException);
+      });
+
+      it.each(['INSTALLATION', 'DELIVERY_INSTALLATION'])('accepts Type=Activity paired with Job Type=%s', async (jobType) => {
+        serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 5 } }));
+        appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+        appointmentRepository.findOne.mockResolvedValue(appointment());
+
+        await expect(service.create({ ...activityDto, jobType }, 'user-1')).resolves.toBeDefined();
+      });
+
+      it('never restricts Job Type for a non-Activity Type', async () => {
+        serviceCentreRepository.findOne.mockResolvedValue(serviceCentre({ tuesday: { isOpen: true, maxJobsPerDay: 5 } }));
+        appointmentRepository.createQueryBuilder.mockReturnValue(buildQb({ getCount: 0 }));
+        appointmentRepository.findOne.mockResolvedValue(appointment());
+
+        await expect(
+          service.create({ ...activityDto, type: AppointmentType.WARRANTY, jobType: 'REPAIR' }, 'user-1'),
+        ).resolves.toBeDefined();
+      });
+    });
+
+    describe('update', () => {
+      it('rejects switching an existing appointment to Type=Activity with an incompatible Job Type', async () => {
+        appointmentRepository.findOne.mockResolvedValue(
+          appointment({ type: AppointmentType.WARRANTY, jobType: 'REPAIR' } as any),
+        );
+
+        await expect(
+          service.update('apt-1', { type: AppointmentType.ACTIVITY } as any, 'user-1'),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('rejects switching Job Type to Repair on an appointment already Type=Activity', async () => {
+        appointmentRepository.findOne.mockResolvedValue(
+          appointment({ type: AppointmentType.ACTIVITY, jobType: 'INSTALLATION' } as any),
+        );
+
+        await expect(
+          service.update('apt-1', { jobType: 'REPAIR' } as any, 'user-1'),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      // Safety fix: a legacy row that already holds an ACTIVITY/REPAIR mismatch (possible
+      // since the pairing rule shipped after both fields already existed independently)
+      // must stay editable for anything else - the web Edit popup always resubmits the
+      // whole form, so type/jobType are present on every edit regardless of what actually
+      // changed.
+      it('does not re-validate when resubmitting the same type/jobType unchanged (legacy-row safe no-op)', async () => {
+        appointmentRepository.findOne.mockResolvedValue(
+          appointment({ type: AppointmentType.ACTIVITY, jobType: 'REPAIR' } as any),
+        );
+
+        const result = await service.update(
+          'apt-1',
+          { type: AppointmentType.ACTIVITY, jobType: 'REPAIR', notes: 'unrelated edit' } as any,
+          'user-1',
+        );
+
+        expect(appointmentRepository.save).toHaveBeenCalledWith(expect.objectContaining({ notes: 'unrelated edit' }));
+        expect(result).toBeDefined();
+      });
+
+      it('accepts switching Job Type between Installation and Delivery Installation on an Activity appointment', async () => {
+        appointmentRepository.findOne.mockResolvedValue(
+          appointment({ type: AppointmentType.ACTIVITY, jobType: 'INSTALLATION' } as any),
+        );
+
+        await expect(
+          service.update('apt-1', { jobType: 'DELIVERY_INSTALLATION' } as any, 'user-1'),
+        ).resolves.toBeDefined();
+      });
     });
   });
 
@@ -1495,6 +1597,36 @@ describe('AppointmentsService', () => {
           await expect(service.startActivity('apt-1', 'user-1')).rejects.toThrow(ConflictException);
           expect(appointmentActivityRepository.save).not.toHaveBeenCalled();
         });
+
+        // Live finding (2026-09-24) point 2 - Start Work now folds in markOnSite(), mirroring
+        // startVisit()'s existing pattern, so an Activity appointment no longer finishes while
+        // still sitting at CONFIRMED/TECHNICIAN_ASSIGNED.
+        it.each([AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED])(
+          'marks the appointment on-site as part of starting work when it is still %s',
+          async (status) => {
+            appointmentRepository.findOne.mockResolvedValue(
+              appointment({ status, jobType: JobType.INSTALLATION, technicianId: 'tech-1' }),
+            );
+            appointmentActivityRepository.createQueryBuilder.mockReturnValue(buildActivityQb(null));
+
+            await service.startActivity('apt-1', 'user-1');
+
+            expect(appointmentRepository.save).toHaveBeenCalledWith(
+              expect.objectContaining({ status: AppointmentStatus.ON_SITE, actualStartAt: expect.any(Date) }),
+            );
+          },
+        );
+
+        it('does not re-mark on-site (no extra appointmentRepository.save) when already ON_SITE', async () => {
+          appointmentRepository.findOne.mockResolvedValue(
+            appointment({ status: AppointmentStatus.ON_SITE, jobType: JobType.INSTALLATION, technicianId: 'tech-1' }),
+          );
+          appointmentActivityRepository.createQueryBuilder.mockReturnValue(buildActivityQb(null));
+
+          await service.startActivity('apt-1', 'user-1');
+
+          expect(appointmentRepository.save).not.toHaveBeenCalled();
+        });
       });
 
       describe('pauseActivity', () => {
@@ -1767,6 +1899,45 @@ describe('AppointmentsService', () => {
       expect(result).toEqual([appointment()]);
     });
 
+    // Live finding (2026-09-24) point 1 - a technician's Activity Finished job must drop
+    // off the active mobile schedule instead of lingering alongside real work for the day.
+    it('excludes an appointment whose activity is already finished', async () => {
+      appointmentRepository.find.mockResolvedValue([
+        appointment({ id: 'apt-1', jobType: JobType.INSTALLATION }),
+        appointment({ id: 'apt-2', jobType: JobType.REPAIR }),
+      ]);
+      appointmentActivityRepository.find.mockResolvedValue([
+        { appointmentId: 'apt-1', finishedAt: new Date('2026-09-24T10:00:00Z') },
+      ]);
+
+      const result = await service.getTechnicianSchedule('tech-1', new Date('2026-08-25T00:00:00Z'));
+
+      expect(appointmentActivityRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ appointmentId: In(['apt-1', 'apt-2']) }),
+        }),
+      );
+      expect(result.map((a: any) => a.id)).toEqual(['apt-2']);
+    });
+
+    it('keeps an appointment whose activity is open (started but not finished)', async () => {
+      appointmentRepository.find.mockResolvedValue([appointment({ id: 'apt-1', jobType: JobType.INSTALLATION })]);
+      appointmentActivityRepository.find.mockResolvedValue([]); // finishedAt: Not(IsNull()) filter excludes the open row server-side
+
+      const result = await service.getTechnicianSchedule('tech-1', new Date('2026-08-25T00:00:00Z'));
+
+      expect(result.map((a: any) => a.id)).toEqual(['apt-1']);
+    });
+
+    it('skips the activity lookup entirely when there is nothing scheduled', async () => {
+      appointmentRepository.find.mockResolvedValue([]);
+
+      const result = await service.getTechnicianSchedule('tech-1', new Date('2026-08-25T00:00:00Z'));
+
+      expect(appointmentActivityRepository.find).not.toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+
     it('returns the service centre day schedule ordered by scheduledAt', async () => {
       appointmentRepository.find.mockResolvedValue([appointment()]);
 
@@ -1807,7 +1978,10 @@ describe('AppointmentsService', () => {
       expect(appointmentRepository.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({ technicianId: 'tech-1' }),
-          select: { scheduledAt: true },
+          // `id` was added (Live finding 2026-09-24, point 1) so
+          // excludeFinishedActivityAppointments() has something to match finished
+          // activities against.
+          select: { id: true, scheduledAt: true },
         }),
       );
     });
@@ -1830,6 +2004,119 @@ describe('AppointmentsService', () => {
       const result = await service.getTechnicianScheduleMonthCounts('tech-1', 2026, 9);
 
       expect(result.map((r) => r.date)).toEqual(['2026-09-01', '2026-09-10', '2026-09-20']);
+    });
+
+    it('drops a finished-activity appointment out of its day count too', async () => {
+      appointmentRepository.find.mockResolvedValue([
+        appointment({ id: 'apt-1', scheduledAt: new Date('2026-09-16T09:00:00Z') }),
+        appointment({ id: 'apt-2', scheduledAt: new Date('2026-09-16T14:00:00Z') }),
+      ]);
+      appointmentActivityRepository.find.mockResolvedValue([
+        { appointmentId: 'apt-1', finishedAt: new Date('2026-09-16T11:00:00Z') },
+      ]);
+
+      const result = await service.getTechnicianScheduleMonthCounts('tech-1', 2026, 9);
+
+      expect(result).toEqual([{ date: '2026-09-16', count: 1 }]);
+    });
+  });
+
+  // Live finding (2026-09-24) point 1 - mobile's "Completed Work" screen backing endpoint:
+  // finished Activity jobs (Installation/Delivery Installation) plus completed Repairs,
+  // most recent first.
+  describe('getCompletedWorkForTechnician', () => {
+    it('merges finished Activity appointments and completed Repairs, most recent first', async () => {
+      appointmentRepository.find
+        .mockResolvedValueOnce([appointment({ id: 'apt-1', jobType: JobType.INSTALLATION })]) // activity-job-type appointments
+        .mockResolvedValueOnce([
+          appointment({
+            id: 'apt-2',
+            jobType: JobType.REPAIR,
+            status: AppointmentStatus.COMPLETED,
+            actualEndAt: new Date('2026-09-22T09:00:00Z'),
+            updatedAt: new Date('2026-09-22T09:05:00Z'),
+          }),
+        ]); // completed non-activity appointments
+      appointmentActivityRepository.find.mockResolvedValue([
+        { appointmentId: 'apt-1', finishedAt: new Date('2026-09-20T10:00:00Z') },
+      ]);
+
+      const result = await service.getCompletedWorkForTechnician('tech-1');
+
+      expect(appointmentRepository.find).toHaveBeenNthCalledWith(1, {
+        where: { technicianId: 'tech-1', jobType: In(ACTIVITY_JOB_TYPES) },
+        relations: { serviceCentre: true },
+      });
+      expect(appointmentActivityRepository.find).toHaveBeenCalledWith({
+        where: { appointmentId: In(['apt-1']), finishedAt: Not(IsNull()) },
+      });
+      expect(appointmentRepository.find).toHaveBeenNthCalledWith(2, {
+        where: { technicianId: 'tech-1', status: AppointmentStatus.COMPLETED, jobType: Not(In(ACTIVITY_JOB_TYPES)) },
+        relations: { serviceCentre: true },
+      });
+      expect(result.map((r: any) => r.id)).toEqual(['apt-2', 'apt-1']); // apt-2 completed later
+      expect(result[0].activityFinishedAt).toBeNull();
+      expect(result[1].activityFinishedAt).toEqual(new Date('2026-09-20T10:00:00Z'));
+    });
+
+    it('excludes an Activity-job-type appointment whose activity is not yet finished', async () => {
+      appointmentRepository.find
+        .mockResolvedValueOnce([appointment({ id: 'apt-1', jobType: JobType.INSTALLATION })])
+        .mockResolvedValueOnce([]);
+      appointmentActivityRepository.find.mockResolvedValue([]); // finishedAt: Not(IsNull()) excludes the still-open row server-side
+
+      const result = await service.getCompletedWorkForTechnician('tech-1');
+
+      expect(result).toEqual([]);
+    });
+
+    it('falls back to actualEndAt, then updatedAt, for a completed Repair with no activity row', async () => {
+      appointmentRepository.find
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          appointment({
+            id: 'apt-2',
+            jobType: JobType.REPAIR,
+            status: AppointmentStatus.COMPLETED,
+            actualEndAt: null,
+            updatedAt: new Date('2026-09-22T09:05:00Z'),
+          }),
+        ]);
+
+      const result = await service.getCompletedWorkForTechnician('tech-1');
+
+      expect(result.map((r: any) => r.id)).toEqual(['apt-2']);
+    });
+
+    it('skips the activity-finished lookup entirely when the technician has no Activity-job-type appointments', async () => {
+      appointmentRepository.find.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+      const result = await service.getCompletedWorkForTechnician('tech-1');
+
+      expect(appointmentActivityRepository.find).not.toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+
+    it('caps the result at 100 entries', async () => {
+      const finished = Array.from({ length: 60 }, (_, i) =>
+        appointment({ id: `apt-a${i}`, jobType: JobType.INSTALLATION }),
+      );
+      const completed = Array.from({ length: 60 }, (_, i) =>
+        appointment({
+          id: `apt-b${i}`,
+          jobType: JobType.REPAIR,
+          status: AppointmentStatus.COMPLETED,
+          updatedAt: new Date(2026, 8, 1 + (i % 28)),
+        }),
+      );
+      appointmentRepository.find.mockResolvedValueOnce(finished).mockResolvedValueOnce(completed);
+      appointmentActivityRepository.find.mockResolvedValue(
+        finished.map((a) => ({ appointmentId: a.id, finishedAt: new Date(2026, 8, 1) })),
+      );
+
+      const result = await service.getCompletedWorkForTechnician('tech-1');
+
+      expect(result.length).toBe(100);
     });
   });
 

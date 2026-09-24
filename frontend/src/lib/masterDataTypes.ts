@@ -37,6 +37,13 @@ export type JobTypeValue = (typeof JOB_TYPES)[number];
 // JOB_TYPES for anything that must recognize every value the database can actually hold.
 export const ACTIVE_JOB_TYPES = JOB_TYPES.filter((t) => t !== 'MAINTENANCE') as readonly JobTypeValue[];
 
+// Live finding (2026-09-24, point 3) - mirrors the backend's own ACTIVITY_JOB_TYPES
+// constant (appointments.service.ts), the only 2 Job Types the New Appointment popup's
+// Type=ACTIVITY selection should offer. Kept here, not re-derived in SchedulePage.tsx, so
+// the two Job Type flavors that actually mean "Activity" (Start Work/Pause/Resume/Finish,
+// no field visit) live in exactly one place on this side too.
+export const ACTIVITY_JOB_TYPES: readonly JobTypeValue[] = ['INSTALLATION', 'DELIVERY_INSTALLATION'];
+
 export const NOTIFICATION_CHANNELS = ['WHATSAPP', 'EMAIL', 'SMS'] as const;
 export type NotificationChannelValue = (typeof NOTIFICATION_CHANNELS)[number];
 

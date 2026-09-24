@@ -868,9 +868,17 @@ export default function AppointmentDetailScreen() {
                 </Text>
 
                 {activity.status === 'FINISHED' ? (
-                  <Text style={styles.visitStartedText} testID="activity-finished">
-                    Work finished {formatDateTime(activity.finishedAt!)} ✓
-                  </Text>
+                  <View>
+                    <Text style={styles.visitStartedText} testID="activity-finished">
+                      Work finished {formatDateTime(activity.finishedAt!)} ✓
+                    </Text>
+                    {/* Completed Work screen (2026-09-24 live finding, point 1) - this
+                        appointment has already dropped off the active schedule list (see
+                        getTechnicianSchedule's own exclusion); this is where to find it now. */}
+                    <Pressable onPress={() => router.push('/completed-work')} testID="open-completed-work-from-activity">
+                      <Text style={styles.linkText}>View completed work ›</Text>
+                    </Pressable>
+                  </View>
                 ) : (
                   <>
                     <View style={styles.taskPauseBox} testID="activity-pause-section">

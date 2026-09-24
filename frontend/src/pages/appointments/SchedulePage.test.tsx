@@ -41,9 +41,12 @@ vi.mock('../../lib/masterDataApi', () => ({
 // req.txt Issue F "+ Create Job" pill (widened 2026-09-21) - now backed by the same
 // eligible-appointments endpoint JobCardsPage's picker already calls, instead of
 // effectiveStatus alone.
+// Live finding (2026-09-24) point 2 - the same pill now also covers a finished Activity
+// (Installation/Delivery Installation) appointment, via this second eligibility endpoint.
 vi.mock('../../lib/jobCardsApi', () => ({
   getBlockedAppointmentsForJobCard: vi.fn(),
   getEligibleAppointmentsForJobCard: vi.fn(),
+  getEligibleActivityAppointmentsForJobCard: vi.fn(),
 }));
 vi.mock('../../lib/technicianScheduleApi', () => ({
   getGanttBoard: vi.fn(),
@@ -73,7 +76,11 @@ import {
   updateAppointment,
 } from '../../lib/appointmentsApi';
 import { listApplianceModels, listAppointmentFieldConfigs, listBillingChannels, listCities, listServiceCentres } from '../../lib/masterDataApi';
-import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
+import {
+  getBlockedAppointmentsForJobCard,
+  getEligibleAppointmentsForJobCard,
+  getEligibleActivityAppointmentsForJobCard,
+} from '../../lib/jobCardsApi';
 import { getGanttBoard } from '../../lib/technicianScheduleApi';
 import { getWorkshopIntake } from '../../lib/workshopIntakeApi';
 import { SchedulePage } from './SchedulePage';
@@ -158,6 +165,8 @@ beforeEach(() => {
   // unchanged; the dedicated describe block below overrides this per-test.
   vi.mocked(listAppointmentFieldConfigs).mockReset().mockResolvedValue([]);
   vi.mocked(getEligibleAppointmentsForJobCard).mockReset().mockResolvedValue([]);
+  // Live finding (2026-09-24) point 2 - the pill's second, Activity-appointment source.
+  vi.mocked(getEligibleActivityAppointmentsForJobCard).mockReset().mockResolvedValue([]);
   vi.mocked(getBlockedAppointmentsForJobCard).mockReset().mockResolvedValue([]);
   vi.mocked(getGanttBoard).mockReset().mockResolvedValue({
     date: '2026-09-09',
@@ -1455,6 +1464,35 @@ describe('SchedulePage - req.txt Issue F: "+ Create Job" pill', () => {
     const badge = within(row).getByText('Job card blocked ⓘ');
     expect(badge).toHaveAttribute('title', expect.stringContaining('Missing invoice number'));
   });
+
+  // Live finding (2026-09-24) point 2 - an Activity Finished Installation/Delivery
+  // Installation job now surfaces the same pill, via the second (Activity) eligibility
+  // source rather than getEligibleAppointmentsForJobCard.
+  it('shows the pill for an Activity Finished Installation row too, via the activity-eligible source', async () => {
+    vi.mocked(listAppointments).mockResolvedValue({
+      data: [
+        makeAppointment({
+          id: 'appt-activity-1',
+          appointmentNumber: 'APT-0406',
+          status: 'CONFIRMED',
+          jobType: 'INSTALLATION',
+          jobCard: null,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+    });
+    vi.mocked(getEligibleAppointmentsForJobCard).mockResolvedValue([]);
+    vi.mocked(getEligibleActivityAppointmentsForJobCard).mockResolvedValue([
+      { id: 'appt-activity-1', appointmentNumber: 'APT-0406', customerName: 'Omar', customerPhone: '0500000003', status: 'CONFIRMED', scheduledAt: '2026-09-24T09:00:00Z' },
+    ] as any);
+    renderPage();
+
+    const row = (await screen.findByText('APT-0406')).closest('tr')!;
+    const pill = within(row).getByRole('link', { name: '+ Create Job' });
+    expect(pill).toHaveAttribute('href', '/job-cards?appointmentId=appt-activity-1');
+  });
 });
 
 
@@ -1605,6 +1643,39 @@ describe('SchedulePage - New Appointment Job Type field visibility', () => {
     const jobTypeSelect = form.getByLabelText('Job type', { exact: false }) as HTMLSelectElement;
     const optionValues = Array.from(jobTypeSelect.options).map((o) => o.value);
     expect(optionValues).not.toContain('MAINTENANCE');
+    // marker-for-insertion-below
     expect(optionValues).toEqual(['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION']);
+  });
+});
+
+// Live finding (2026-09-24) point 3 - Type=Activity restricts Job type to Installation/
+// Delivery Installation only, matching the backend's own validateActivityJobTypePairing().
+describe('SchedulePage - New Appointment Type=Activity Job Type restriction', () => {
+  it('restricts Job type to Installation/Delivery Installation once Type is switched to Activity, and auto-picks Installation', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue([]);
+    const form = await openCreateModal();
+
+    fireEvent.change(form.getByLabelText(/^Type/), { target: { value: 'ACTIVITY' } });
+
+    const jobTypeSelect = (await form.findByLabelText('Job type', { exact: false })) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(jobTypeSelect.options).map((o) => o.value)).toEqual(['INSTALLATION', 'DELIVERY_INSTALLATION']),
+    );
+    expect(jobTypeSelect.value).toBe('INSTALLATION');
+  });
+
+  it('restores the full Job type list once Type is switched back off Activity', async () => {
+    vi.mocked(listAppointmentFieldConfigs).mockResolvedValue([]);
+    const form = await openCreateModal();
+
+    fireEvent.change(form.getByLabelText(/^Type/), { target: { value: 'ACTIVITY' } });
+    const jobTypeSelect = (await form.findByLabelText('Job type', { exact: false })) as HTMLSelectElement;
+    await waitFor(() => expect(jobTypeSelect.options.length).toBe(2));
+
+    fireEvent.change(form.getByLabelText(/^Type/), { target: { value: 'WARRANTY' } });
+
+    await waitFor(() =>
+      expect(Array.from(jobTypeSelect.options).map((o) => o.value)).toEqual(['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION']),
+    );
   });
 });

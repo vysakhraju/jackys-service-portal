@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -37,6 +37,7 @@ import {
   APPOINTMENT_TYPES,
   CUSTOMER_TYPES,
   ACTIVE_JOB_TYPES,
+  ACTIVITY_JOB_TYPES,
   GLANCE_TILES,
   WORKSHOP_SUB_STATUSES,
   type Appointment,
@@ -45,7 +46,11 @@ import {
   type CreateAppointmentInput,
 } from '../../lib/appointmentsTypes';
 import { listApplianceModels, listAppointmentFieldConfigs, listCities, listServiceCentres } from '../../lib/masterDataApi';
-import { getBlockedAppointmentsForJobCard, getEligibleAppointmentsForJobCard } from '../../lib/jobCardsApi';
+import {
+  getBlockedAppointmentsForJobCard,
+  getEligibleActivityAppointmentsForJobCard,
+  getEligibleAppointmentsForJobCard,
+} from '../../lib/jobCardsApi';
 import { blockedJobCardReasonText, type TaskPauseReasonValue } from '../../lib/jobCardsTypes';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { useTechnicianOptions } from '../../lib/useTechnicianOptions';
@@ -333,7 +338,22 @@ export function SchedulePage() {
     queryFn: () => getEligibleAppointmentsForJobCard(),
     refetchInterval: 20000,
   });
-  const eligibleAppointmentIds = new Set((eligibleForJobCard ?? []).map((a) => a.id));
+  // Live finding (2026-09-24, point 2): this pill used to only ever reflect the Repair
+  // flow's eligible set above - a finished-activity Installation/Delivery Installation
+  // appointment is just as real a "+ Create Job" candidate (JobCardsService.
+  // findEligibleForActivityJobCardCreation(), the same set that already correctly drives
+  // the Job Cards page's own Installation/Delivery tab - "that is fine as per logic" -
+  // it just never got unioned into this page's own pill. Same 20s poll, same blank-query-
+  // browses-the-pool shape as the query above.
+  const { data: eligibleForActivityJobCard } = useQuery({
+    queryKey: ['job-cards', 'eligible-activity-appointments'],
+    queryFn: () => getEligibleActivityAppointmentsForJobCard(),
+    refetchInterval: 20000,
+  });
+  const eligibleAppointmentIds = new Set([
+    ...(eligibleForJobCard ?? []).map((a) => a.id),
+    ...(eligibleForActivityJobCard ?? []).map((a) => a.id),
+  ]);
 
   // 2026-09-21 live finding: a row can look "ready" (Pending Job Creation, or an on-site
   // visit fully captured) and still never get the pill above, with nothing on the row
@@ -399,12 +419,42 @@ export function SchedulePage() {
   // that already has it (see jobTypeSelectOptions below) even though it's hidden from
   // ACTIVE_JOB_TYPES for anything new.
   const watchedJobType = watch('jobType');
+  // Live finding (2026-09-24, point 3): Type and Job Type are normally orthogonal (see
+  // CreateAppointmentInput's own doc comment on `type`), but AppointmentType.ACTIVITY is
+  // the one Type value that only ever pairs with the 2 Job Types the mobile Start Work/
+  // Pause/Resume/Activity Finished flow applies to - the backend already models this via
+  // its own ACTIVITY_JOB_TYPES constant (appointments.service.ts), so this mirrors it
+  // rather than adding a new configurable Type<->Job Type master (there's nothing dynamic
+  // to configure here: JobType itself is still a fixed enum, not an admin-editable table).
+  const watchedType = watch('type');
+  const isActivityType = watchedType === 'ACTIVITY';
   // MAINTENANCE is soft-hidden (locked decision, Job Type split request): dropped from
   // every NEW pick, but an appointment that already has it must keep showing it as its
   // own selected option in edit mode - re-saving the form must never silently change an
   // existing MAINTENANCE appointment's Job Type just because the option disappeared.
-  const jobTypeSelectOptions =
-    watchedJobType === 'MAINTENANCE' ? [...ACTIVE_JOB_TYPES, 'MAINTENANCE' as const] : ACTIVE_JOB_TYPES;
+  const jobTypeSelectOptions = isActivityType
+    ? (ACTIVITY_JOB_TYPES as readonly string[]).includes(watchedJobType)
+      ? ACTIVITY_JOB_TYPES
+      : [...ACTIVITY_JOB_TYPES, watchedJobType]
+    : watchedJobType === 'MAINTENANCE'
+      ? [...ACTIVE_JOB_TYPES, 'MAINTENANCE' as const]
+      : ACTIVE_JOB_TYPES;
+  // Keeps an in-flight Job Type selection valid the instant Type flips to Activity - the
+  // fallback branch above only covers the one render before this effect commits.
+  // Deliberately skipped in edit mode: an appointment created before this pairing rule
+  // existed could already hold a Type=Activity/Job Type=Repair combination, and this
+  // popup doubles as Edit (editTarget != null) - auto-correcting jobType the instant that
+  // appointment's edit popup opens would silently rewrite a real field the user never
+  // touched. In edit mode the fallback branch above still keeps the current value
+  // selectable; only a genuine explicit change is validated (see AppointmentsService's
+  // own isChangingType/isChangingJobType-gated check).
+  useEffect(() => {
+    if (editTarget) return;
+    if (isActivityType && !(ACTIVITY_JOB_TYPES as readonly string[]).includes(watchedJobType)) {
+      setValue('jobType', ACTIVITY_JOB_TYPES[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActivityType, watchedJobType, editTarget]);
 
   // Phase 2 (2026-09-16, req. 1b) - which past appointment (if any) the customer-lookup
   // search below was filled in from, so a "view repair history" link can show once

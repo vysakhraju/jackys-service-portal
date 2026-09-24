@@ -68,6 +68,7 @@ describe('TechnicianService', () => {
       completeAppointment: jest.fn(),
       getTechnicianSchedule: jest.fn(),
       getTechnicianScheduleMonthCounts: jest.fn(),
+      getCompletedWorkForTechnician: jest.fn(),
     };
     masterDataService = {
       checkWarranty: jest.fn(),
@@ -368,6 +369,20 @@ describe('TechnicianService', () => {
 
       expect(appointmentsService.getTechnicianScheduleMonthCounts).toHaveBeenCalledWith('tech-1', 2026, 9);
       expect(result).toEqual([{ date: '2026-09-16', count: 3 }]);
+    });
+  });
+
+  // Live finding (2026-09-24) point 1 - mobile's "Completed Work" screen.
+  describe('getCompletedWork', () => {
+    it('delegates to AppointmentsService.getCompletedWorkForTechnician with the calling technician', async () => {
+      appointmentsService.getCompletedWorkForTechnician.mockResolvedValue([
+        { id: 'apt-1', activityFinishedAt: new Date('2026-09-23T12:00:00Z') },
+      ]);
+
+      const result = await service.getCompletedWork('tech-1');
+
+      expect(appointmentsService.getCompletedWorkForTechnician).toHaveBeenCalledWith('tech-1');
+      expect(result).toEqual([{ id: 'apt-1', activityFinishedAt: new Date('2026-09-23T12:00:00Z') }]);
     });
   });
 

@@ -85,6 +85,17 @@ export interface ScheduledAppointment {
   jobType: JobTypeValue | null;
 }
 
+// Mobile "Completed Work" screen (2026-09-24 live finding, point 1) - GET
+// /technician/completed-work's own shape: every ScheduledAppointment field plus one
+// extra timestamp, so the screen can show "Work finished at ..." for an Installation/
+// Delivery Installation job (activityFinishedAt set) or "Completed at ..." for a
+// finished Repair (activityFinishedAt null - use updatedAt as the best-available
+// completion time instead, same fallback the backend itself uses).
+export interface CompletedWorkItem extends ScheduledAppointment {
+  activityFinishedAt: string | null;
+  updatedAt: string;
+}
+
 // Mirrors the backend's TechnicianVisit entity / the web app's
 // appointmentsTypes.ts#TechnicianVisit in full, even though Phase 2 only reads
 // startGpsLat/startGpsLng/startedAt - the serial-number and fault/symptom fields land in

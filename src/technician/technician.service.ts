@@ -220,6 +220,15 @@ export class TechnicianService {
   }
 
   /**
+   * Mobile "Completed Work" screen (2026-09-24 live finding, point 1) - thin pass-through
+   * to AppointmentsService.getCompletedWorkForTechnician(), same "always scoped to the
+   * caller's own id" shape as getMySchedule()/getMyMonthSchedule() above.
+   */
+  async getCompletedWork(technicianId: string) {
+    return this.appointmentsService.getCompletedWorkForTechnician(technicianId);
+  }
+
+  /**
    * Lean lookup used by both Mobile Phase 5 methods below - a Job Card only exists once
    * staff have created it from this visit's captured data (JobCardsService.create()'s own
    * Gate 1 already requires serial number + warranty + fault/symptom to all be present

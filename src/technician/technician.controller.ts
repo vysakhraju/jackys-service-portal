@@ -188,4 +188,14 @@ export class TechnicianController {
     }
     return this.technicianService.getMyMonthSchedule(user.id, year, mon);
   }
+
+  // Mobile "Completed Work" screen (2026-09-24 live finding, point 1) - no
+  // @RequiresCapability here either, same reasoning as `schedule`/`schedule/month` above:
+  // always scoped to the caller's own id server-side, so there is nothing to gate.
+  @Get('completed-work')
+  @ApiOperation({ summary: "The calling technician's own finished work (Activity Finished Installation/Delivery jobs, plus completed Repairs), most recent first" })
+  @ApiResponse({ status: 200 })
+  async getCompletedWork(@CurrentUser() user: User) {
+    return this.technicianService.getCompletedWork(user.id);
+  }
 }

@@ -7,6 +7,7 @@ import type {
   CaptureFaultSymptomInput,
   CaptureSerialNumberInput,
   CollectedToWorkshopInput,
+  CompletedWorkItem,
   CompleteVisitInput,
   CorrectJobTypeInput,
   JobCardSummary,
@@ -46,6 +47,13 @@ export const getMySchedule = (date?: string) =>
 // active-status filter so a day's count here always agrees with that day's own list.
 export const getMyMonthSchedule = (month?: string) =>
   api.get<MonthDayCount[]>(`${TECH_BASE}/schedule/month`, { params: month ? { month } : {} }).then((r) => r.data);
+
+// Mobile "Completed Work" screen (2026-09-24 live finding, point 1) - the calling
+// technician's own finished work (Activity Finished Installation/Delivery jobs, plus
+// completed Repairs), most recent first. Backs the new screen that gives a technician
+// somewhere to see a job after it drops off getMySchedule() above.
+export const getCompletedWork = () =>
+  api.get<CompletedWorkItem[]>(`${TECH_BASE}/completed-work`).then((r) => r.data);
 
 export const startVisit = (appointmentId: string, data: StartVisitInput) =>
   api.post<TechnicianVisit>(`${TECH_BASE}/visits/${appointmentId}/start`, data).then((r) => r.data);

@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In, IsNull } from 'typeorm';
+import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In, IsNull, Not } from 'typeorm';
 import { Appointment, AppointmentStatus, AppointmentType, AppointmentChannel, CustomerType, JobType } from './entities/appointment.entity';
 // Job Type split (2026-09-22) Phase 8 - Installation/Delivery Installation's Start Work /
 // Pause / Resume / Activity Finished flow. Owned by this module (see AppointmentsModule).
@@ -244,6 +244,23 @@ export class AppointmentsService {
     }
   }
 
+  // Live finding (2026-09-24, point 3) - defense-in-depth mirror of the New Appointment
+  // popup's own frontend restriction (SchedulePage.tsx's jobTypeSelectOptions): Type
+  // ACTIVITY only ever pairs with the 2 Job Types the mobile Start Work/Pause/Resume/
+  // Activity Finished flow applies to. `jobType` defaults to REPAIR (the DB column
+  // default) when omitted, same as everywhere else in this file, so an omitted jobType on
+  // an ACTIVITY-typed appointment is treated as REPAIR here too - not silently allowed
+  // through just because the field wasn't sent.
+  private validateActivityJobTypePairing(type: AppointmentType, jobType: JobType | undefined): void {
+    if (type !== AppointmentType.ACTIVITY) return;
+    const resolvedJobType = jobType ?? JobType.REPAIR;
+    if (!ACTIVITY_JOB_TYPES.includes(resolvedJobType)) {
+      throw new BadRequestException(
+        `Job Type must be Installation or Delivery Installation when Type is Activity (got ${resolvedJobType}).`,
+      );
+    }
+  }
+
   private async generateAppointmentNumber(): Promise<string> {
     const today = new Date();
     const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
@@ -273,6 +290,7 @@ export class AppointmentsService {
     // mandatory-field check first, before any DB-state lookups, since a missing field is
     // a pure client-input error (400), not a business-rule conflict.
     await this.validateMandatoryFields(createAppointmentDto);
+    this.validateActivityJobTypePairing(createAppointmentDto.type, createAppointmentDto.jobType);
 
     // Validate service centre exists and is active
     const serviceCentre = await this.serviceCentreRepository.findOne({
@@ -520,6 +538,25 @@ export class AppointmentsService {
   ): Promise<Appointment> {
     const appointment = await this.findById(id);
     const oldValues = { ...appointment };
+
+    // Same Type<->Job Type pairing rule as create() - only when this edit actually
+    // CHANGES type or jobType away from what's already stored (not merely "present in
+    // the payload" - the edit popup always resubmits the whole form, so every edit would
+    // otherwise include both fields regardless of what the user actually touched).
+    // Deliberately a no-op on a same-value resubmit: this rule shipped after
+    // AppointmentType.ACTIVITY/JobType did, so an existing row that predates the pairing
+    // rule must stay editable for everything else rather than becoming permanently
+    // un-updatable just because a stricter rule was added later (same "don't silently
+    // break existing data" philosophy as the frontend's own MAINTENANCE carry-over).
+    const isChangingType = updateAppointmentDto.type !== undefined && updateAppointmentDto.type !== appointment.type;
+    const isChangingJobType =
+      updateAppointmentDto.jobType !== undefined && updateAppointmentDto.jobType !== appointment.jobType;
+    if (isChangingType || isChangingJobType) {
+      this.validateActivityJobTypePairing(
+        updateAppointmentDto.type ?? appointment.type,
+        updateAppointmentDto.jobType ?? appointment.jobType,
+      );
+    }
 
     // Reassign-until-visit-start rule - see REASSIGNABLE_APPOINTMENT_STATUSES's own doc
     // comment. Scoped to only the two fields the rule is actually about (technicianId,
@@ -875,7 +912,7 @@ export class AppointmentsService {
     const end = new Date(date);
     end.setHours(23, 59, 59, 999);
 
-    return this.appointmentRepository.find({
+    const appointments = await this.appointmentRepository.find({
       where: {
         technicianId,
         scheduledAt: Between(start, end),
@@ -884,6 +921,86 @@ export class AppointmentsService {
       relations: { serviceCentre: true },
       order: { priorityOrder: 'ASC', scheduledAt: 'ASC' },
     });
+
+    return this.excludeFinishedActivityAppointments(appointments);
+  }
+
+  /**
+   * Mobile live finding (2026-09-24): finishActivity()/overrideFinishActivity() only ever
+   * write to the AppointmentActivity row (finishedAt/finishedByUserId) - by design, see
+   * that entity's own doc comment - and deliberately never touch Appointment.status
+   * themselves (status only actually advances once a Job Card is created from the
+   * finished activity, via createFromActivity() -> completeFromJobCardCreation(), which
+   * can happen well after the technician's own "Activity Finished" tap). Left unfiltered,
+   * getTechnicianSchedule()/getTechnicianScheduleMonthCounts() would keep showing a
+   * finished Installation/Delivery Installation job in the active list indefinitely,
+   * mixed in with genuinely pending work - exactly the bug reported. This strips out any
+   * appointment (of either flavor - REPAIR appointments simply never have an
+   * AppointmentActivity row, so they're never affected) whose activity is already
+   * finished, without touching Appointment.status or any other read path (the Field
+   * Technician Schedule board's CCE-facing queries are untouched - this is scoped to the
+   * two self-service technician reads only, per the mobile bug actually reported).
+   */
+  private async excludeFinishedActivityAppointments<T extends { id: string }>(appointments: T[]): Promise<T[]> {
+    if (appointments.length === 0) return appointments;
+
+    const finishedActivities = await this.appointmentActivityRepository.find({
+      where: { appointmentId: In(appointments.map((a) => a.id)), finishedAt: Not(IsNull()) },
+      select: { appointmentId: true },
+    });
+    if (finishedActivities.length === 0) return appointments;
+
+    const finishedAppointmentIds = new Set(finishedActivities.map((a) => a.appointmentId));
+    return appointments.filter((a) => !finishedAppointmentIds.has(a.id));
+  }
+
+  /**
+   * Mobile "Completed Work" screen (2026-09-24 live finding, point 1): once a technician
+   * taps Activity Finished (Installation/Delivery Installation) or finishes an on-site
+   * Repair, the job drops out of getTechnicianSchedule() above (see
+   * excludeFinishedActivityAppointments()'s own doc comment) - this is where it goes
+   * instead, so the technician has somewhere to actually see their own finished work
+   * rather than it just disappearing. Two independent sources, since "finished" means
+   * something different for each flow: an Installation/Delivery Installation job is done
+   * the moment its AppointmentActivity.finishedAt is set (Appointment.status may still be
+   * sitting at CONFIRMED/ON_SITE - status only catches up once a Job Card is eventually
+   * created from it); a Repair job only reaches AppointmentStatus.COMPLETED once its Job
+   * Card exists (create() -> completeFromJobCardCreation()). Returns each appointment with
+   * one extra `activityFinishedAt` field (null for the Repair rows) so the caller can show
+   * "Work finished at ..." without a second round-trip, sorted most-recently-finished
+   * first and capped at 100 - a technician's own history, not an unbounded audit log.
+   */
+  async getCompletedWorkForTechnician(
+    technicianId: string,
+  ): Promise<Array<Appointment & { activityFinishedAt: Date | null }>> {
+    const activityAppointments = await this.appointmentRepository.find({
+      where: { technicianId, jobType: In(ACTIVITY_JOB_TYPES) },
+      relations: { serviceCentre: true },
+    });
+    const activityIds = activityAppointments.map((a) => a.id);
+    const finishedActivities = activityIds.length
+      ? await this.appointmentActivityRepository.find({
+          where: { appointmentId: In(activityIds), finishedAt: Not(IsNull()) },
+        })
+      : [];
+    const finishedActivityByAppointmentId = new Map(finishedActivities.map((a) => [a.appointmentId, a]));
+
+    const finishedActivityResults = activityAppointments
+      .filter((a) => finishedActivityByAppointmentId.has(a.id))
+      .map((a) => ({ ...a, activityFinishedAt: finishedActivityByAppointmentId.get(a.id)!.finishedAt }));
+
+    const completedOtherAppointments = await this.appointmentRepository.find({
+      where: { technicianId, status: AppointmentStatus.COMPLETED, jobType: Not(In(ACTIVITY_JOB_TYPES)) },
+      relations: { serviceCentre: true },
+    });
+    const completedOtherResults = completedOtherAppointments.map((a) => ({ ...a, activityFinishedAt: null }));
+
+    const getCompletedAt = (a: { activityFinishedAt: Date | null; actualEndAt: Date | null; updatedAt: Date }) =>
+      (a.activityFinishedAt ?? a.actualEndAt ?? a.updatedAt).getTime();
+
+    return [...finishedActivityResults, ...completedOtherResults]
+      .sort((a, b) => getCompletedAt(b) - getCompletedAt(a))
+      .slice(0, 100);
   }
 
   /**
@@ -901,14 +1018,17 @@ export class AppointmentsService {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const end = new Date(year, month, 0, 23, 59, 59, 999); // day 0 of next month = last day of this one
 
-    const appointments = await this.appointmentRepository.find({
+    const rawAppointments = await this.appointmentRepository.find({
       where: {
         technicianId,
         scheduledAt: Between(start, end),
         status: In([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.TECHNICIAN_ASSIGNED, AppointmentStatus.ON_SITE]),
       },
-      select: { scheduledAt: true },
+      select: { id: true, scheduledAt: true },
     });
+    // Same finished-activity exclusion as getTechnicianSchedule() above, so a day's count
+    // on the calendar never disagrees with what tapping into that day's list actually shows.
+    const appointments = await this.excludeFinishedActivityAppointments(rawAppointments);
 
     const counts = new Map<string, number>();
     for (const appt of appointments) {
@@ -1264,6 +1384,20 @@ export class AppointmentsService {
         throw new BadRequestException('This appointment’s activity has already been marked finished.');
       }
       return this.getActivity(id);
+    }
+
+    // Live finding (2026-09-24, point 2): unlike the Repair flow's startVisit() (which
+    // already folds a markOnSite() call into "Start Visit" so a field technician never
+    // has to tap a separate on-site button first), starting an Activity used to have no
+    // on-site requirement at all - a technician could Start Work, and fully finish it,
+    // while the appointment sat at CONFIRMED/TECHNICIAN_ASSIGNED the whole time. That's
+    // also why "Mark On-site" could look stuck showing on the web Schedule page straight
+    // through a finished install. Mirrors startVisit()'s exact pattern: idempotent (a
+    // no-op once already ON_SITE or later), and reuses markOnSite()'s own CONFIRMED/
+    // TECHNICIAN_ASSIGNED guard rather than duplicating it, so Start Work now marks the
+    // technician on-site the same single tap the Repair flow already offers.
+    if (appointment.status !== AppointmentStatus.ON_SITE) {
+      await this.markOnSite(id, userId, req);
     }
 
     // Point 8 of the original request: block starting a NEW activity until whatever this

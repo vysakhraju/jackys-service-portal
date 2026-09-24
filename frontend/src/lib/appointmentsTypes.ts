@@ -11,7 +11,7 @@ import type { TaskPauseReasonValue } from './jobCardsTypes';
 // keeps working unchanged. (Re-exporting alone doesn't bind the name locally - this file
 // also uses JobTypeValue itself below, e.g. on Appointment.jobType, so it's imported above
 // too, not just re-exported.)
-export { JOB_TYPES, ACTIVE_JOB_TYPES, type JobTypeValue } from './masterDataTypes';
+export { JOB_TYPES, ACTIVE_JOB_TYPES, ACTIVITY_JOB_TYPES, type JobTypeValue } from './masterDataTypes';
 
 export const APPOINTMENT_TYPES = ['WARRANTY', 'OUT_OF_WARRANTY', 'AMC', 'PREVENTIVE', 'DISMANTLING','ACTIVITY'] as const;
 export type AppointmentTypeValue = (typeof APPOINTMENT_TYPES)[number];
