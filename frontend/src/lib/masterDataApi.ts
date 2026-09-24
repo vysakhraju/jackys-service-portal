@@ -107,6 +107,13 @@ export const createPriceList = (data: CreatePriceListInput) =>
 export const updatePriceList = (id: string, data: Partial<CreatePriceListInput>) =>
   api.put<ServicePriceList>(`${BASE}/price-lists/${id}`, data).then((r) => r.data);
 export const deletePriceList = (id: string) => api.delete(`${BASE}/price-lists/${id}`).then((r) => r.data);
+// Price List CSV import (2026-09-24) - dedicated upsert import (see the backend service
+// method's own doc comment). skipSuccessToast: the page shows its own detailed
+// created/updated/error summary panel instead of the generic "Saved successfully" toast.
+export const importPriceLists = (rows: Record<string, unknown>[]) =>
+  api
+    .post<{ created: number; updated: number; errors: string[] }>(`${BASE}/price-lists/import`, rows, { skipSuccessToast: true })
+    .then((r) => r.data);
 
 // === Technician KPI Rules (create + list; no update/delete) ===
 export const listKpiRules = () => api.get<TechnicianKpiRule[]>(`${BASE}/kpi-rules`).then((r) => r.data);

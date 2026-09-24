@@ -340,6 +340,20 @@ export class MasterDataController {
     return this.masterDataService.deletePriceList(id);
   }
 
+  // Price List CSV import (2026-09-24) - dedicated upsert import, kept separate from the
+  // generic bulk-import/:entityType route below (see importPriceListRows's own doc
+  // comment for why). Body is the CSV parsed client-side into JSON rows - same "send
+  // parsed rows, not a file" shape the generic bulk-import endpoint already uses, so no
+  // multer/file-upload plumbing is needed here either.
+  @Post('price-lists/import')
+  @RequiresCapability('MASTER_DATA_PRICE_LIST_MANAGE')
+  @ApiOperation({ summary: 'Bulk import/update Price List rows from a parsed CSV (upserts on category + jobType)' })
+  @ApiBody({ schema: { type: 'array', items: { type: 'object' } } })
+  @ApiResponse({ status: 200 })
+  importPriceLists(@Body() rows: Record<string, any>[]) {
+    return this.masterDataService.importPriceListRows(rows);
+  }
+
   // === Technician KPI Rules ===
   @Post('kpi-rules')
   @RequiresCapability('MASTER_DATA_KPI_RULE_MANAGE')

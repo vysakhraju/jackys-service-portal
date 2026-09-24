@@ -8,6 +8,7 @@ vi.mock('../../lib/masterDataApi', () => ({
   createPriceList: vi.fn(),
   updatePriceList: vi.fn(),
   deletePriceList: vi.fn(),
+  importPriceLists: vi.fn(),
   listBillingChannels: vi.fn(),
 }));
 vi.mock('../../lib/auth', () => ({ useAuth: vi.fn() }));
@@ -18,6 +19,7 @@ import {
   createPriceList,
   updatePriceList,
   deletePriceList,
+  importPriceLists,
   listBillingChannels,
 } from '../../lib/masterDataApi';
 import { useAuth } from '../../lib/auth';
@@ -87,6 +89,7 @@ beforeEach(() => {
   vi.mocked(createPriceList).mockReset();
   vi.mocked(updatePriceList).mockReset();
   vi.mocked(deletePriceList).mockReset();
+  vi.mocked(importPriceLists).mockReset();
   vi.mocked(listBillingChannels)
     .mockReset()
     .mockResolvedValue([
@@ -205,5 +208,74 @@ describe('PriceListsPage - create/edit/delete', () => {
     fireEvent.click(await screen.findByText('Delete'));
 
     expect(deletePriceList).not.toHaveBeenCalled();
+  });
+});
+
+// CSV import/export (2026-09-24) - lets MASTER_DATA_PRICE_LIST_MANAGE fill in real B2B/B2C
+// rates from a spreadsheet instead of the one-row-at-a-time modal above.
+describe('PriceListsPage - CSV import/export', () => {
+  function csvFile(text: string) {
+    return new File([text], 'price-list.csv', { type: 'text/csv' });
+  }
+
+  beforeEach(() => {
+    // jsdom doesn't implement the Blob-URL APIs the download path touches.
+    URL.createObjectURL = vi.fn(() => 'blob:mock');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  it('shows Download Template even for a role with no manage capability', async () => {
+    mockUser('CCE');
+    mockCapabilities([]);
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Download Template' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upload CSV' })).not.toBeInTheDocument();
+  });
+
+  it('fetches the full unfiltered list and triggers a download when Download Template is clicked', async () => {
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    renderPage();
+    await screen.findByText('100.00');
+    vi.mocked(listPriceLists).mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download Template' }));
+
+    await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith());
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+  });
+
+  it('parses the uploaded CSV into rows and shows the created/updated summary on success', async () => {
+    vi.mocked(importPriceLists).mockResolvedValue({ created: 1, updated: 2, errors: [] });
+    renderPage();
+    await screen.findByText('100.00');
+
+    const csv = 'Category,Job Type,B2B Price,B2C Price,Billing Channel,Channel Rate,Warranty Labor Cost,Currency\n' +
+      'AC,REPAIR,120,150,,0,0,AED\n';
+    const input = screen.getByLabelText('Upload Price List CSV');
+    fireEvent.change(input, { target: { files: [csvFile(csv)] } });
+
+    await waitFor(() =>
+      expect(importPriceLists).toHaveBeenCalledWith([
+        { category: 'AC', jobType: 'REPAIR', priceB2B: '120', priceB2C: '150', billingChannel: '', billingChannelRate: '0', warrantyLaborCost: '0', currency: 'AED' },
+      ]),
+    );
+    expect(await screen.findByText('Import complete — 1 created, 2 updated.')).toBeInTheDocument();
+  });
+
+  it('shows row-level errors returned by the backend without treating the import as failed', async () => {
+    vi.mocked(importPriceLists).mockResolvedValue({
+      created: 0,
+      updated: 1,
+      errors: ['Row 3: unknown Category "TOASTER"'],
+    });
+    renderPage();
+    await screen.findByText('100.00');
+
+    const csv = 'Category,Job Type,B2B Price\nAC,REPAIR,120\nTOASTER,REPAIR,50\n';
+    fireEvent.change(screen.getByLabelText('Upload Price List CSV'), { target: { files: [csvFile(csv)] } });
+
+    expect(await screen.findByText('Row 3: unknown Category "TOASTER"')).toBeInTheDocument();
+    expect(screen.getByText(/1 updated, 1 row\(s\) skipped:/)).toBeInTheDocument();
   });
 });

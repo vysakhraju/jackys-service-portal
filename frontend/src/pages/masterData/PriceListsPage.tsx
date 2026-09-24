@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState, type ChangeEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { ActiveBadge, DataTable, ErrorNotice, type Column } from '../../components/DataTable';
@@ -7,10 +7,46 @@ import { Modal } from '../../components/Modal';
 import { NamePicker } from '../../components/pickers/NamePicker';
 import { useAuth } from '../../lib/auth';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
-import { createPriceList, deletePriceList, listPriceLists, updatePriceList } from '../../lib/masterDataApi';
+import { createPriceList, deletePriceList, importPriceLists, listPriceLists, updatePriceList } from '../../lib/masterDataApi';
 import { ACTIVE_JOB_TYPES, APPLIANCE_CATEGORIES, type ApplianceCategoryValue, type JobTypeValue } from '../../lib/masterDataTypes';
 import type { CreatePriceListInput, ServicePriceList } from '../../lib/masterDataTypes';
 import { useBillingChannelOptions } from '../../lib/useBillingChannelOptions';
+import { downloadCsv, parseCsv, toCsv } from '../../lib/csv';
+
+// CSV import/export (2026-09-24) - lets whoever has MASTER_DATA_PRICE_LIST_MANAGE fill in
+// real B2B/B2C rates for every Category x Job Type row from a spreadsheet instead of the
+// one-row-at-a-time modal above. "Download Template" exports every current row (all still
+// seeded at price 0 until filled in) under these exact headers; "Upload CSV" re-imports
+// the same headers and UPSERTS by Category + Job Type (see importPriceListRows's own doc
+// comment on the backend for why this can't just be a create). Header matching ignores
+// case/spacing/punctuation so a header surviving a round-trip through Excel still matches.
+const IMPORT_HEADERS = [
+  'Category',
+  'Job Type',
+  'B2B Price',
+  'B2C Price',
+  'Billing Channel',
+  'Channel Rate',
+  'Warranty Labor Cost',
+  'Currency',
+] as const;
+
+const HEADER_KEY_MAP: Record<string, string> = {
+  category: 'category',
+  jobtype: 'jobType',
+  b2bprice: 'priceB2B',
+  b2cprice: 'priceB2C',
+  billingchannel: 'billingChannel',
+  channelrate: 'billingChannelRate',
+  warrantylaborcost: 'warrantyLaborCost',
+  currency: 'currency',
+};
+
+function normalizeHeader(header: string): string {
+  return header.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+type ImportResult = { created: number; updated: number; errors: string[] };
 
 type FormValues = {
   category: ApplianceCategoryValue;
@@ -68,6 +104,12 @@ export function PriceListsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ServicePriceList | null>(null);
   const [mutationError, setMutationError] = useState<unknown>(null);
+
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importError, setImportError] = useState<unknown>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['price-lists', categoryFilter, jobTypeFilter],
@@ -145,6 +187,78 @@ export function PriceListsPage() {
     }
   }
 
+  // Exports every current row (ignores the on-screen category/job-type filters — the
+  // template is meant to be the whole grid, not just what happens to be shown), under the
+  // exact headers importCsv reads back. Doubles as an editable export: re-downloading
+  // after prices are filled in gives an up-to-date backup, not just a blank starting form.
+  async function handleDownloadTemplate() {
+    setIsDownloading(true);
+    try {
+      const rows = await listPriceLists();
+      const csvRows: (string | number)[][] = [
+        [...IMPORT_HEADERS],
+        ...rows.map((r) => [
+          r.category,
+          r.jobType,
+          r.priceB2B,
+          r.priceB2C,
+          r.billingChannel?.name ?? '',
+          r.billingChannelRate,
+          r.warrantyLaborCost,
+          r.currency ?? '',
+        ]),
+      ];
+      downloadCsv('price-list-template.csv', toCsv(csvRows));
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
+  function handleUploadClick() {
+    setImportResult(null);
+    setImportError(null);
+    fileInputRef.current?.click();
+  }
+
+  async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file after a fix-and-retry
+    if (!file) return;
+
+    setImportResult(null);
+    setImportError(null);
+    setIsImporting(true);
+    try {
+      const text = await file.text();
+      const parsed = parseCsv(text);
+      if (parsed.length === 0) {
+        setImportError(new Error('That file has no rows.'));
+        return;
+      }
+
+      const [headerRow, ...dataRows] = parsed;
+      const keys = headerRow.map((h) => HEADER_KEY_MAP[normalizeHeader(h)]);
+
+      const rows = dataRows
+        .filter((row) => row.some((cell) => cell.trim() !== ''))
+        .map((row) => {
+          const obj: Record<string, string> = {};
+          keys.forEach((key, i) => {
+            if (key) obj[key] = row[i] ?? '';
+          });
+          return obj;
+        });
+
+      const result = await importPriceLists(rows);
+      setImportResult(result);
+      queryClient.invalidateQueries({ queryKey: ['price-lists'] });
+    } catch (err) {
+      setImportError(err);
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
   const columns: Column<ServicePriceList>[] = [
     { key: 'category', label: 'Category', render: (r) => r.category.replace(/_/g, ' ') },
     { key: 'jobType', label: 'Job Type', render: (r) => r.jobType.replace(/_/g, ' ') },
@@ -192,15 +306,69 @@ export function PriceListsPage() {
             ))}
           </select>
         </div>
-        {canManage && (
+        <div className="flex shrink-0 items-center gap-2">
           <button
-            onClick={openCreate}
-            className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+            onClick={handleDownloadTemplate}
+            disabled={isDownloading}
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
           >
-            + New Price Row
+            {isDownloading ? 'Preparing…' : 'Download Template'}
           </button>
-        )}
+          {canManage && (
+            <>
+              <button
+                onClick={handleUploadClick}
+                disabled={isImporting}
+                className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {isImporting ? 'Importing…' : 'Upload CSV'}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                aria-label="Upload Price List CSV"
+                onChange={handleFileSelected}
+              />
+              <button
+                onClick={openCreate}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+              >
+                + New Price Row
+              </button>
+            </>
+          )}
+        </div>
       </div>
+
+      {(importResult !== null || importError !== null) && (
+        <div
+          className={`mb-4 rounded-md border p-3 text-sm ${
+            importError || importResult!.errors.length > 0
+              ? 'border-amber-200 bg-amber-50 text-amber-800'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          }`}
+        >
+          {importError ? (
+            <ErrorNotice error={importError} />
+          ) : (
+            <>
+              <p className="font-medium">
+                Import complete — {importResult!.created} created, {importResult!.updated} updated
+                {importResult!.errors.length > 0 ? `, ${importResult!.errors.length} row(s) skipped:` : '.'}
+              </p>
+              {importResult!.errors.length > 0 && (
+                <ul className="mt-1 list-inside list-disc space-y-0.5">
+                  {importResult!.errors.map((err) => (
+                    <li key={err}>{err}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <DataTable
         columns={columns}

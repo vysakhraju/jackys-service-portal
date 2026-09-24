@@ -348,6 +348,120 @@ export class MasterDataService {
     await this.servicePriceListRepository.update(id, { isActive: false });
   }
 
+  // Price List CSV import (requested 2026-09-24, closing out the last open item from the
+  // Job Type split batch - "fill in real B2B/B2C rates for the 30 seeded rows"). Deliberately
+  // NOT routed through the generic bulkImportFromCsv/'price-list' case: that case only ever
+  // calls createServicePriceList, which throws ConflictException whenever the (category,
+  // jobType) row already exists - and by design every combo the template covers already
+  // exists (seeded at price 0 in Phase 11), so every single row would fail on that path.
+  // This is a dedicated UPSERT: match on (category, jobType), update the row if found,
+  // create it if not - same identity rule as the entity's own unique index.
+  //
+  // Billing Channel is looked up by name (case-insensitive), not a raw UUID, since a name
+  // is the only reasonable thing an admin filling a spreadsheet would know. Blank numeric
+  // cells are left untouched on an update (so re-uploading a sheet with only some columns
+  // corrected never silently zeroes out the others) and default to 0 on create, matching
+  // the manual-entry form's own defaults. A present-but-blank Billing Channel cell clears
+  // any existing channel override; an absent column leaves it alone.
+  async importPriceListRows(rows: Record<string, any>[]): Promise<{ created: number; updated: number; errors: string[] }> {
+    const errors: string[] = [];
+    let created = 0;
+    let updated = 0;
+
+    const normalizeEnumValue = (raw: unknown): string =>
+      String(raw ?? '')
+        .trim()
+        .toUpperCase()
+        .replace(/[\s-]+/g, '_');
+
+    const parseOptionalNumber = (raw: unknown, field: string): number | undefined => {
+      if (raw === undefined || raw === null || String(raw).trim() === '') {
+        return undefined;
+      }
+      const num = Number(raw);
+      if (Number.isNaN(num)) {
+        throw new Error(`${field} "${raw}" is not a valid number`);
+      }
+      return num;
+    };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] ?? {};
+      const rowNum = i + 2; // spreadsheet row (header is row 1)
+
+      try {
+        const categoryRaw = normalizeEnumValue(row.category);
+        if (!Object.values(ApplianceCategory).includes(categoryRaw as ApplianceCategory)) {
+          errors.push(`Row ${rowNum}: unknown Category "${row.category ?? ''}"`);
+          continue;
+        }
+        const jobTypeRaw = normalizeEnumValue(row.jobType);
+        if (!Object.values(JobType).includes(jobTypeRaw as JobType)) {
+          errors.push(`Row ${rowNum}: unknown Job Type "${row.jobType ?? ''}"`);
+          continue;
+        }
+        const category = categoryRaw as ApplianceCategory;
+        const jobType = jobTypeRaw as JobType;
+
+        let billingChannelId: string | null | undefined;
+        const billingChannelName = row.billingChannel !== undefined ? String(row.billingChannel).trim() : '';
+        if (billingChannelName) {
+          const channel = await this.billingChannelRepository
+            .createQueryBuilder('c')
+            .where('LOWER(c.name) = LOWER(:name)', { name: billingChannelName })
+            .getOne();
+          if (!channel) {
+            errors.push(`Row ${rowNum}: unknown Billing Channel "${billingChannelName}"`);
+            continue;
+          }
+          billingChannelId = channel.id;
+        } else if ('billingChannel' in row) {
+          billingChannelId = null; // column present but blank - explicit clear
+        }
+
+        const priceB2B = parseOptionalNumber(row.priceB2B, 'B2B Price');
+        const priceB2C = parseOptionalNumber(row.priceB2C, 'B2C Price');
+        const billingChannelRate = parseOptionalNumber(row.billingChannelRate, 'Channel Rate');
+        const warrantyLaborCost = parseOptionalNumber(row.warrantyLaborCost, 'Warranty Labor Cost');
+        const currency =
+          row.currency !== undefined && String(row.currency).trim() !== '' ? String(row.currency).trim() : undefined;
+
+        const existing = await this.servicePriceListRepository.findOne({ where: { category, jobType } });
+
+        if (existing) {
+          const patch: Partial<ServicePriceList> = {};
+          if (priceB2B !== undefined) patch.priceB2B = priceB2B;
+          if (priceB2C !== undefined) patch.priceB2C = priceB2C;
+          if (billingChannelId !== undefined) patch.billingChannelId = billingChannelId;
+          if (billingChannelRate !== undefined) patch.billingChannelRate = billingChannelRate;
+          if (warrantyLaborCost !== undefined) patch.warrantyLaborCost = warrantyLaborCost;
+          if (currency !== undefined) patch.currency = currency;
+          if (Object.keys(patch).length > 0) {
+            await this.servicePriceListRepository.update(existing.id, patch);
+          }
+          updated++;
+        } else {
+          const newRow = this.servicePriceListRepository.create({
+            category,
+            jobType,
+            priceB2B: priceB2B ?? 0,
+            priceB2C: priceB2C ?? 0,
+            billingChannelId: billingChannelId ?? null,
+            billingChannelRate: billingChannelRate ?? 0,
+            warrantyLaborCost: warrantyLaborCost ?? 0,
+            currency: currency ?? undefined,
+          });
+          await this.servicePriceListRepository.save(newRow);
+          created++;
+        }
+      } catch (error) {
+        errors.push(`Row ${rowNum}: ${error.message}`);
+      }
+    }
+
+    return { created, updated, errors };
+  }
+
   // Technician KPI Rules
   async createKpiRule(data: Partial<TechnicianKpiRule>): Promise<TechnicianKpiRule> {
     const existing = await this.technicianKpiRuleRepository.findOne({ where: { kpiName: data.kpiName } });
