@@ -112,7 +112,10 @@ export class ServicePriceList {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   warrantyLaborCost: number;
 
-  @Column({ length: 100, nullable: true })
+  // Master-level default (2026-09-25) - single-country (UAE) deployment, AED
+  // everywhere; column stays free-text/nullable in case a future multi-currency need
+  // ever comes up, but a Super Admin never has to type it for a new row.
+  @Column({ length: 100, nullable: true, default: 'AED' })
   currency: string;
 
   @Column({ default: true })
