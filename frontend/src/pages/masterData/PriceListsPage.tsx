@@ -72,7 +72,7 @@ const EMPTY_FORM: FormValues = {
   price: 0,
   billingChannelId: '',
   warrantyLaborCost: 0,
-  currency: '',
+  currency: 'AED',
   isActive: true,
 };
 
