@@ -2051,12 +2051,43 @@ describe('AppointmentsService', () => {
         where: { appointmentId: In(['apt-1']), finishedAt: Not(IsNull()) },
       });
       expect(appointmentRepository.find).toHaveBeenNthCalledWith(2, {
-        where: { technicianId: 'tech-1', status: AppointmentStatus.COMPLETED, jobType: Not(In(ACTIVITY_JOB_TYPES)) },
+        where: {
+          technicianId: 'tech-1',
+          status: In([AppointmentStatus.COMPLETED, AppointmentStatus.COLLECTED_TO_WS]),
+          jobType: Not(In(ACTIVITY_JOB_TYPES)),
+        },
         relations: { serviceCentre: true },
       });
       expect(result.map((r: any) => r.id)).toEqual(['apt-2', 'apt-1']); // apt-2 completed later
       expect(result[0].activityFinishedAt).toBeNull();
       expect(result[1].activityFinishedAt).toEqual(new Date('2026-09-20T10:00:00Z'));
+    });
+
+    // Live finding (2026-09-24), reported live: a Repair a field technician collects to
+    // the workshop never reaches AppointmentStatus.COMPLETED at all (that only advances
+    // further via the workshop's own separate JobCard lifecycle, which the field
+    // technician has no part in) - so before this fix, that job vanished off the active
+    // schedule (getTechnicianSchedule already excludes COLLECTED_TO_WS) but never
+    // reappeared here either. From the field technician's own point of view their work is
+    // done the moment they collect the unit, so COLLECTED_TO_WS must count as completed
+    // for them too.
+    it('includes a Repair collected to the workshop as completed for the field technician', async () => {
+      appointmentRepository.find
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          appointment({
+            id: 'apt-3',
+            jobType: JobType.REPAIR,
+            status: AppointmentStatus.COLLECTED_TO_WS,
+            actualEndAt: null,
+            updatedAt: new Date('2026-09-24T09:00:00Z'),
+          }),
+        ]);
+
+      const result = await service.getCompletedWorkForTechnician('tech-1');
+
+      expect(result.map((r: any) => r.id)).toEqual(['apt-3']);
+      expect(result[0].status).toBe(AppointmentStatus.COLLECTED_TO_WS);
     });
 
     it('excludes an Activity-job-type appointment whose activity is not yet finished', async () => {

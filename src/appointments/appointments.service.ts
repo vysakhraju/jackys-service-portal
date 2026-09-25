@@ -964,11 +964,15 @@ export class AppointmentsService {
    * something different for each flow: an Installation/Delivery Installation job is done
    * the moment its AppointmentActivity.finishedAt is set (Appointment.status may still be
    * sitting at CONFIRMED/ON_SITE - status only catches up once a Job Card is eventually
-   * created from it); a Repair job only reaches AppointmentStatus.COMPLETED once its Job
-   * Card exists (create() -> completeFromJobCardCreation()). Returns each appointment with
-   * one extra `activityFinishedAt` field (null for the Repair rows) so the caller can show
-   * "Work finished at ..." without a second round-trip, sorted most-recently-finished
-   * first and capped at 100 - a technician's own history, not an unbounded audit log.
+   * created from it); a Repair job is done from the field technician's own point of view
+   * once Appointment.status reaches either COMPLETED (finished fully on-site) or
+   * COLLECTED_TO_WS (handed off to the workshop - the field technician's part ends there;
+   * Appointment.status never advances further on its own, the workshop side's separate
+   * JobCard lifecycle takes over from that point and the field technician has no part in
+   * it). Returns each appointment with one extra `activityFinishedAt` field (null for the
+   * Repair rows) so the caller can show "Work finished at ..." without a second
+   * round-trip, sorted most-recently-finished first and capped at 100 - a technician's
+   * own history, not an unbounded audit log.
    */
   async getCompletedWorkForTechnician(
     technicianId: string,
@@ -989,8 +993,26 @@ export class AppointmentsService {
       .filter((a) => finishedActivityByAppointmentId.has(a.id))
       .map((a) => ({ ...a, activityFinishedAt: finishedActivityByAppointmentId.get(a.id)!.finishedAt }));
 
+    // Live finding (2026-09-24): COLLECTED_TO_WS was missing here - a Repair a field
+    // technician collects to the workshop (markCollectedToWorkshop()) never reaches
+    // AppointmentStatus.COMPLETED at all; that status only advances further once the
+    // workshop side finishes its own, separate JobCard lifecycle (QC/delivery), which the
+    // field technician has no part in and Appointment.status never reflects (no field
+    // technician action ever sets it past COLLECTED_TO_WS). From the field technician's
+    // own point of view their work IS done the moment they collect the unit - so this now
+    // counts COLLECTED_TO_WS as completed for them too, same as COMPLETED. The mobile
+    // screen already renders the real status alongside a "Completed" label for any row
+    // here without activityFinishedAt (see completed-work.tsx's completionLabel()) and
+    // already blocks every mobile edit action past COLLECTED_TO_WS (see
+    // NOT_COLLECTIBLE_TO_WS_STATUSES/NOT_JOB_TYPE_CORRECTABLE_STATUSES on the mobile
+    // appointment-detail screen) - so no other change was needed for this to render and
+    // behave correctly once included here.
     const completedOtherAppointments = await this.appointmentRepository.find({
-      where: { technicianId, status: AppointmentStatus.COMPLETED, jobType: Not(In(ACTIVITY_JOB_TYPES)) },
+      where: {
+        technicianId,
+        status: In([AppointmentStatus.COMPLETED, AppointmentStatus.COLLECTED_TO_WS]),
+        jobType: Not(In(ACTIVITY_JOB_TYPES)),
+      },
       relations: { serviceCentre: true },
     });
     const completedOtherResults = completedOtherAppointments.map((a) => ({ ...a, activityFinishedAt: null }));
