@@ -53,6 +53,10 @@ export enum AuditAction {
   // Job Type split (2026-09-22) Phase 9 - CCE manual override when a technician skips
   // the mobile flow entirely and hands over a paper completion document instead
   ACTIVITY_OVERRIDE_FINISHED = 'ACTIVITY_OVERRIDE_FINISHED',
+  // Billing Channel dead-end fix (2026-09-25) - InvoicingService.regenerateDraftInvoice.
+  // Only ever logged for a never-paid DRAFT invoice; a paid/partially-paid one can never
+  // trigger this action (the service refuses it outright).
+  INVOICE_REGENERATE = 'INVOICE_REGENERATE',
 }
 
 @Entity('audit_logs')

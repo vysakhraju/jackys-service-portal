@@ -97,3 +97,12 @@ export interface AgingReport {
   buckets: AgingBucket[];
   totalOutstanding: number;
 }
+
+// Matches InvoicingService.regenerateDraftInvoice()'s return shape (2026-09-25, the JER-C
+// AED 0.00 dead-end fix) - only ever succeeds for a never-paid DRAFT, and returns a fresh
+// Invoice under a NEW invoiceNumber/id, not an in-place edit.
+export interface RegenerateInvoiceResult {
+  invoice: Invoice;
+  oldInvoiceNumber: string;
+  oldAmount: number;
+}

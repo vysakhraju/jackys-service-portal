@@ -21,7 +21,7 @@ describe('resolveAppointmentBillingChannel', () => {
     expect(resolveAppointmentBillingChannel(undefined, priceRow())).toBeNull();
   });
 
-  it('falls back to the Price List row\'s own channel/rate when the appointment has no override', () => {
+  it("falls back to the Price List row's own channel/rate when the appointment has no channel picked", () => {
     const row = priceRow({ billingChannelId: 'bc-row', billingChannelRate: 80, billingChannel: { id: 'bc-row', name: 'Row Channel' } });
 
     const result = resolveAppointmentBillingChannel({} as any, row);
@@ -29,41 +29,38 @@ describe('resolveAppointmentBillingChannel', () => {
     expect(result).toEqual({ billingChannelId: 'bc-row', billingChannelName: 'Row Channel', rate: 80 });
   });
 
-  it("the appointment's own picked channel overrides the row's channel, using the channel's own defaultRate", () => {
-    const row = priceRow({ billingChannelId: 'bc-row', billingChannelRate: 80, billingChannel: { id: 'bc-row', name: 'Row Channel' } });
-    const appointment = { billingChannel: { id: 'bc-appt', name: 'Appointment Channel', defaultRate: 120 } } as any;
+  it('uses the Price List row rate when the appointment picks the SAME channel the row is configured for', () => {
+    const row = priceRow({ billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } });
+    const appointment = { billingChannelId: 'bc-jer-c', billingChannel: { id: 'bc-jer-c', name: 'JER-C' } } as any;
 
     const result = resolveAppointmentBillingChannel(appointment, row);
 
-    expect(result).toEqual({ billingChannelId: 'bc-appt', billingChannelName: 'Appointment Channel', rate: 120 });
+    expect(result).toEqual({ billingChannelId: 'bc-jer-c', billingChannelName: 'JER-C', rate: 55 });
   });
 
-  it('the appointment override wins even when the row has no channel configured at all', () => {
-    const appointment = { billingChannel: { id: 'bc-appt', name: 'Appointment Channel', defaultRate: 99 } } as any;
-
-    const result = resolveAppointmentBillingChannel(appointment, priceRow());
-
-    expect(result).toEqual({ billingChannelId: 'bc-appt', billingChannelName: 'Appointment Channel', rate: 99 });
-  });
-
-  it('throws rather than silently falling back when the picked channel has no defaultRate set', () => {
-    const appointment = { billingChannel: { id: 'bc-appt', name: 'No Rate Channel', defaultRate: null } } as any;
+  it('throws rather than silently billing plain/other-channel rate when the picked channel has no matching Price List row rate', () => {
+    const appointment = { billingChannelId: 'bc-jer-c', billingChannel: { id: 'bc-jer-c', name: 'JER-C' } } as any;
 
     expect(() => resolveAppointmentBillingChannel(appointment, priceRow())).toThrow(BadRequestException);
-    expect(() => resolveAppointmentBillingChannel(appointment, priceRow())).toThrow(/No Rate Channel/);
+    expect(() => resolveAppointmentBillingChannel(appointment, priceRow())).toThrow(/JER-C/);
   });
 
-  it('throws when the picked channel\'s defaultRate is undefined (never set)', () => {
-    const appointment = { billingChannel: { id: 'bc-appt', name: 'Undefined Rate Channel' } } as any;
+  it('throws when the picked channel differs from the channel the Price List row is actually configured for', () => {
+    const row = priceRow({ billingChannelId: 'bc-other', billingChannelRate: 80, billingChannel: { id: 'bc-other', name: 'Other Channel' } });
+    const appointment = { billingChannelId: 'bc-jer-c', billingChannel: { id: 'bc-jer-c', name: 'JER-C' } } as any;
 
-    expect(() => resolveAppointmentBillingChannel(appointment, priceRow())).toThrow(BadRequestException);
+    expect(() => resolveAppointmentBillingChannel(appointment, row)).toThrow(BadRequestException);
   });
 
-  it('treats defaultRate 0 as a valid, set rate (not "missing")', () => {
-    const appointment = { billingChannel: { id: 'bc-appt', name: 'Zero Rate Channel', defaultRate: 0 } } as any;
+  it('never reads BillingChannel.defaultRate at all - a channel-level flat rate no longer drives pricing', () => {
+    const row = priceRow({ billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } });
+    const appointment = {
+      billingChannelId: 'bc-jer-c',
+      billingChannel: { id: 'bc-jer-c', name: 'JER-C', defaultRate: 0 },
+    } as any;
 
-    const result = resolveAppointmentBillingChannel(appointment, priceRow());
+    const result = resolveAppointmentBillingChannel(appointment, row);
 
-    expect(result).toEqual({ billingChannelId: 'bc-appt', billingChannelName: 'Zero Rate Channel', rate: 0 });
+    expect(result?.rate).toBe(55);
   });
 });

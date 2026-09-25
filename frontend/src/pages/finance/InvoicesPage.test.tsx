@@ -11,9 +11,10 @@ vi.mock('../../lib/invoicingApi', () => ({
   getPayments: vi.fn(),
   recordPayment: vi.fn(),
   getInvoiceByJobCard: vi.fn(),
+  regenerateInvoice: vi.fn(),
 }));
 
-import { getInvoice, getPayments, listInvoices } from '../../lib/invoicingApi';
+import { getInvoice, getPayments, listInvoices, regenerateInvoice } from '../../lib/invoicingApi';
 import { InvoicesPage } from './InvoicesPage';
 
 function renderPage(initialEntry = '/finance/invoices') {
@@ -32,6 +33,7 @@ beforeEach(() => {
   vi.mocked(getInvoice).mockReset();
   vi.mocked(getPayments).mockReset();
   vi.mocked(getPayments).mockResolvedValue([]);
+  vi.mocked(regenerateInvoice).mockReset();
 });
 
 describe('InvoicesPage - list + filters', () => {
@@ -98,5 +100,44 @@ describe('InvoicesPage - detail panel', () => {
     await user.click(screen.getByRole('button', { name: 'View' }));
     await screen.findByText(/Paid so far/);
     expect(screen.queryByRole('button', { name: 'Record Payment' })).not.toBeInTheDocument();
+  });
+
+  it('shows Recalculate Invoice only while DRAFT, and hides it once settled', async () => {
+    vi.mocked(listInvoices).mockResolvedValue([makeInvoice({ id: 'inv-1', status: 'PAID' })]);
+    vi.mocked(getInvoice).mockResolvedValue(makeInvoice({ id: 'inv-1', status: 'PAID' }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('INV-0001');
+    await user.click(screen.getByRole('button', { name: 'View' }));
+    await screen.findByText(/Paid so far/);
+    expect(screen.queryByRole('button', { name: 'Recalculate Invoice' })).not.toBeInTheDocument();
+  });
+
+  it('Recalculate Invoice regenerates a DRAFT and re-points the detail panel at the new invoice id', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(listInvoices).mockResolvedValue([makeInvoice({ id: 'inv-1', jobCardId: 'jc-1', status: 'DRAFT', amount: 0 })]);
+    vi.mocked(getInvoice).mockImplementation((id: string) =>
+      Promise.resolve(
+        id === 'inv-2'
+          ? makeInvoice({ id: 'inv-2', invoiceNumber: 'INV-0002', jobCardId: 'jc-1', status: 'DRAFT', amount: 385 })
+          : makeInvoice({ id: 'inv-1', jobCardId: 'jc-1', status: 'DRAFT', amount: 0 }),
+      ),
+    );
+    vi.mocked(regenerateInvoice).mockResolvedValue({
+      invoice: makeInvoice({ id: 'inv-2', invoiceNumber: 'INV-0002', jobCardId: 'jc-1', status: 'DRAFT', amount: 385 }),
+      oldInvoiceNumber: 'INV-0001',
+      oldAmount: 0,
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText('INV-0001');
+    await user.click(screen.getByRole('button', { name: 'View' }));
+    await user.click(await screen.findByRole('button', { name: 'Recalculate Invoice' }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(regenerateInvoice).toHaveBeenCalledWith('jc-1');
+    await waitFor(() => expect(getInvoice).toHaveBeenCalledWith('inv-2'));
+    confirmSpy.mockRestore();
   });
 });

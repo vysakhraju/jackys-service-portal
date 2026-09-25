@@ -5,7 +5,7 @@ vi.mock('./api', () => ({
 }));
 
 import { api } from './api';
-import { getB2bAging, getInvoice, getInvoiceByJobCard, getPayments, listInvoices, recordPayment } from './invoicingApi';
+import { getB2bAging, getInvoice, getInvoiceByJobCard, getPayments, listInvoices, recordPayment, regenerateInvoice } from './invoicingApi';
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
@@ -55,5 +55,12 @@ describe('invoicingApi', () => {
     (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { buckets: [], totalOutstanding: 0 } });
     await getB2bAging();
     expect(api.get).toHaveBeenCalledWith('/invoicing/b2b-aging');
+  });
+
+  // 2026-09-25 (JER-C AED 0.00 dead-end fix)
+  it('regenerateInvoice posts to /invoicing/job-card/:jobCardId/regenerate with no body', async () => {
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {} });
+    await regenerateInvoice('jc-1');
+    expect(api.post).toHaveBeenCalledWith('/invoicing/job-card/jc-1/regenerate');
   });
 });

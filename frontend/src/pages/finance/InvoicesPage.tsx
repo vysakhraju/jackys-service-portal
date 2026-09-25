@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { DataTable, ErrorNotice, type Column } from '../../components/DataTable';
 import { StatusBadge } from '../../components/StatusBadge';
-import { getInvoice, getPayments, listInvoices } from '../../lib/invoicingApi';
+import { getInvoice, getPayments, listInvoices, regenerateInvoice } from '../../lib/invoicingApi';
 import type { Invoice, InvoiceStatusValue } from '../../lib/invoicingTypes';
 import type { CustomerTypeValue } from '../../lib/appointmentsTypes';
 import { RecordPaymentModal } from '../delivery/RecordPaymentModal';
@@ -99,6 +99,7 @@ export function InvoicesPage() {
 
 export function InvoiceDetail({ id }: { id: string }) {
   const queryClient = useQueryClient();
+  const [, setSearchParams] = useSearchParams();
   const [payOpen, setPayOpen] = useState(false);
 
   const invoiceQuery = useQuery({ queryKey: ['invoice', id], queryFn: () => getInvoice(id) });
@@ -110,6 +111,20 @@ export function InvoiceDetail({ id }: { id: string }) {
     queryClient.invalidateQueries({ queryKey: ['invoices'] });
     queryClient.invalidateQueries({ queryKey: ['aging-report'] });
   }
+
+  // 2026-09-25 (JER-C AED 0.00 dead-end fix) - regenerating replaces this invoice with a
+  // NEW row/id (a fresh one-shot computation, never an in-place edit - see
+  // InvoicingService.regenerateDraftInvoice's own doc comment), so the URL's
+  // ?invoiceId= is repointed at the new id once it comes back, or this page keeps
+  // querying an id that no longer exists.
+  const regenerateMutation = useMutation({
+    mutationFn: (jobCardId: string) => regenerateInvoice(jobCardId),
+    onSuccess: (result) => {
+      setSearchParams({ invoiceId: result.invoice.id });
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['aging-report'] });
+    },
+  });
 
   if (invoiceQuery.isLoading) return <p className="text-sm text-slate-400">Loading invoice…</p>;
   if (invoiceQuery.error) return <ErrorNotice error={invoiceQuery.error} />;
@@ -173,6 +188,27 @@ export function InvoiceDetail({ id }: { id: string }) {
           </ul>
         )}
       </div>
+
+      {invoice.status === 'DRAFT' && (
+        <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+          <p className="text-xs text-amber-800">
+            Still a draft. If Master Data (Price List / Billing Channel) has changed since this was computed, recalculate it
+            from current data instead of billing the stale amount above.
+          </p>
+          <ErrorNotice error={regenerateMutation.error} />
+          <button
+            onClick={() => {
+              if (confirm(`Delete ${invoice.invoiceNumber} and recompute it from current Price List/Billing Channel data?`)) {
+                regenerateMutation.mutate(invoice.jobCardId);
+              }
+            }}
+            disabled={regenerateMutation.isPending}
+            className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            {regenerateMutation.isPending ? 'Recalculating…' : 'Recalculate Invoice'}
+          </button>
+        </div>
+      )}
 
       {!settled && (
         <button

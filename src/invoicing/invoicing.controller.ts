@@ -89,4 +89,25 @@ export class InvoicingController {
   async recordPayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RecordPaymentDto, @CurrentUser() user: User) {
     return this.invoicingService.recordPayment(id, dto.method, dto.amountReceived, user.id, dto.reference);
   }
+
+  @Post('job-card/:jobCardId/regenerate')
+  @RequiresCapability('INVOICING_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.INVOICE_REGENERATE,
+    entityType: 'Invoice',
+    getEntityId: (req) => req.params.jobCardId,
+    getNewValues: (result) => ({
+      newInvoiceNumber: result?.invoice?.invoiceNumber,
+      newAmount: result?.invoice?.amount,
+      oldInvoiceNumber: result?.oldInvoiceNumber,
+      oldAmount: result?.oldAmount,
+    }),
+  })
+  @ApiOperation({ summary: 'Delete a never-paid DRAFT invoice for this Job Card and recreate it from current master data (e.g. after a Price List/Billing Channel fix) - refused once any payment has been recorded' })
+  @ApiResponse({ status: 200, description: 'Regenerated invoice, plus the old invoice number/amount it replaced' })
+  @ApiResponse({ status: 400, description: 'No invoice exists yet, it is not DRAFT, or a payment has already been recorded against it' })
+  async regenerateDraftInvoice(@Param('jobCardId', ParseUUIDPipe) jobCardId: string, @CurrentUser() user: User) {
+    return this.invoicingService.regenerateDraftInvoice(jobCardId, user.id);
+  }
 }

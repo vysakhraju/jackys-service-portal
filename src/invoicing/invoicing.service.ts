@@ -157,20 +157,18 @@ export class InvoicingService {
     let billingChannelName: string | null = null;
     let basePrice: number;
 
-    if (appointment?.customerType === CustomerType.B2C) {
+    // 2026-09-25 revision: Billing Channel resolution is no longer gated on
+    // customerType === B2B_SALES_CHANNEL - any appointment (B2C or B2B included) that
+    // has a Billing Channel picked bills through that channel's Price List rate. See
+    // billing-channel-resolution.util.ts for the full "channel selects, Price List
+    // supplies the rate" design and why the old channel-defaultRate override was retired.
+    const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
+    if (resolved) {
+      basePrice = resolved.rate;
+      billingChannelId = resolved.billingChannelId;
+      billingChannelName = resolved.billingChannelName;
+    } else if (appointment?.customerType === CustomerType.B2C) {
       basePrice = Number(priceRow.priceB2C);
-    } else if (appointment?.customerType === CustomerType.B2B_SALES_CHANNEL) {
-      // Phase 5 (2026-09-22) - the appointment's own picked Billing Channel (when set)
-      // overrides the Price List row's own configured channel; see
-      // billing-channel-resolution.util.ts for the full precedence/throw rules.
-      const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
-      if (resolved) {
-        basePrice = resolved.rate;
-        billingChannelId = resolved.billingChannelId;
-        billingChannelName = resolved.billingChannelName;
-      } else {
-        basePrice = Number(priceRow.priceB2B);
-      }
     } else {
       basePrice = Number(priceRow.priceB2B);
     }
@@ -260,17 +258,15 @@ export class InvoicingService {
       let billingChannelName: string | null = null;
       let unitPrice: number;
 
-      if (appointment?.customerType === CustomerType.B2C) {
+      // 2026-09-25 revision - same "channel selects, Price List supplies the rate"
+      // change as resolveBaselinePricing above, no longer gated on customerType.
+      const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
+      if (resolved) {
+        unitPrice = resolved.rate;
+        billingChannelId = resolved.billingChannelId;
+        billingChannelName = resolved.billingChannelName;
+      } else if (appointment?.customerType === CustomerType.B2C) {
         unitPrice = Number(priceRow.priceB2C);
-      } else if (appointment?.customerType === CustomerType.B2B_SALES_CHANNEL) {
-        const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
-        if (resolved) {
-          unitPrice = resolved.rate;
-          billingChannelId = resolved.billingChannelId;
-          billingChannelName = resolved.billingChannelName;
-        } else {
-          unitPrice = Number(priceRow.priceB2B);
-        }
       } else {
         unitPrice = Number(priceRow.priceB2B);
       }
@@ -440,6 +436,55 @@ export class InvoicingService {
       }
       throw err;
     }
+  }
+
+  /**
+   * Safety valve for a DRAFT invoice that was computed wrong because of a master-data
+   * gap that has since been fixed (2026-09-25, following the JER-C AED 0.00 dead-end -
+   * see billing-channel-resolution.util.ts's doc comment for the root cause). Invoice
+   * generation is otherwise a deliberate one-shot, immutable computation - this does NOT
+   * change that: it never edits an invoice's numbers in place. It only deletes a DRAFT
+   * that has zero payments recorded against it and lets getOrCreateForJobCard build a
+   * fresh one from current master data, under a brand-new invoice number.
+   *
+   * Why this is safe where in-place editing wouldn't be: a DRAFT with nothing paid
+   * against it was never a real financial record to begin with - nothing to reconcile
+   * against, no "why did this number change" question for Finance, no clobbering a
+   * concurrent payment (blocked below). Once a single AED has been recorded against it,
+   * this refuses outright and the invoice is permanently frozen exactly as before - nothing
+   * about this method weakens that guarantee for a paid or partially-paid invoice.
+   *
+   * No GL posting here - unlike recordPayment, nothing financial actually happened (no
+   * money moved), so there is nothing for the ledger to record. Traceability instead
+   * comes from the controller's @Audit(AuditAction.INVOICE_REGENERATE) - old/new invoice
+   * number and amount are both passed back to the caller for that log entry.
+   */
+  async regenerateDraftInvoice(
+    jobCardId: string,
+    requestedByUserId: string,
+  ): Promise<{ invoice: Invoice; oldInvoiceNumber: string; oldAmount: number }> {
+    const existing = await this.findByJobCardId(jobCardId);
+    if (!existing) {
+      throw new BadRequestException(`No invoice exists yet for Job Card ${jobCardId} - nothing to regenerate.`);
+    }
+    if (existing.status !== InvoiceStatus.DRAFT) {
+      throw new BadRequestException(
+        `Invoice ${existing.invoiceNumber} is ${existing.status}, not DRAFT - only a never-paid draft invoice can be regenerated.`,
+      );
+    }
+    const alreadyPaid = await this.getAmountPaid(existing.id);
+    if (alreadyPaid > 0) {
+      throw new BadRequestException(
+        `Invoice ${existing.invoiceNumber} already has ${alreadyPaid} recorded against it - it cannot be regenerated. Contact Finance for a correction.`,
+      );
+    }
+
+    const oldInvoiceNumber = existing.invoiceNumber;
+    const oldAmount = Number(existing.amount);
+    await this.invoiceRepository.remove(existing);
+
+    const invoice = await this.getOrCreateForJobCard(jobCardId);
+    return { invoice, oldInvoiceNumber, oldAmount };
   }
 
   /**

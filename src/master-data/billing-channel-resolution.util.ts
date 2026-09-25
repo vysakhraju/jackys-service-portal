@@ -2,30 +2,38 @@ import { BadRequestException } from '@nestjs/common';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { ServicePriceList } from './entities/service-price-list.entity';
 
-// Per-appointment Billing Channel override (Phase 5, 2026-09-22 modification #4 gap
-// fix): the original request's point #4 asked for a "Billing Channel" dropdown on the
-// New Appointment popup itself, but Phases 1-4 only ever wired Billing Channel into
-// Price List rows (ServicePriceList.billingChannelId/billingChannelRate) - the New
-// Appointment field was never actually built. This adds the appointment-level field
-// (Appointment.billingChannelId/billingChannel, see that entity) and this shared
-// resolver, used by both InvoicingService.resolveBaselinePricing and
-// DebitNotesService.resolveLaborCost so the override logic isn't duplicated across the
-// two call sites.
+// Per-appointment Billing Channel (Phase 5, 2026-09-22 modification #4 gap fix; REVISED
+// 2026-09-25 following the JER-C AED 0.00 invoice dead-end - see
+// MODIFICATION_REQUESTS.md and the-fool pre-mortem discussion that day).
 //
-// Locked design decisions (both via explicit user choice):
-//  1. The appointment's own picked Billing Channel, when set, OVERRIDES the matched
-//     Price List row's own configured channel - it doesn't have to differ to win; an
-//     appointment-level pick is always the more specific, more recently-stated intent.
-//  2. The override amount is that channel's own flat `defaultRate` (a new column on
-//     BillingChannel - see that entity), not the row's `billingChannelRate`. If the
-//     picked channel has no `defaultRate` set, this throws rather than silently falling
-//     back to 0 or to the row's rate - same "never invent a number" philosophy every
-//     other pricing-resolution failure mode in this app already follows.
+// Phase 5 originally let an appointment's picked Billing Channel override the matched
+// Price List row using that channel's OWN flat `BillingChannel.defaultRate`. Real-world
+// result: `defaultRate` defaults to null, a CCE hit the "must have a default rate" error
+// and typed 0 just to get past it, and every appointment on that channel then silently
+// invoiced at AED 0.00 - a real corporate account's job going out looking "paid in full
+// for free" with no error anywhere. Root cause: two independent places could set a
+// channel's price (BillingChannel.defaultRate vs. ServicePriceList.billingChannelRate)
+// and the wrong one won unconditionally.
 //
-// Deliberately returns null (not a fallback amount) when neither an appointment
-// override nor a row-configured channel applies - the "no channel at all" fallback
-// (priceB2B for invoices, warrantyLaborCost for debit notes) differs by caller, so each
-// caller applies its own fallback rather than this shared function guessing one.
+// Fix (owner's own decision, 2026-09-25): `BillingChannel.defaultRate` is retired as a
+// pricing input. There is exactly ONE source of truth for what a Billing Channel bills
+// at: the Price List row for the matched (category, jobType) - `billingChannelId`/
+// `billingChannelRate` on ServicePriceList, same column that already existed since the
+// Phase 3 rebuild. The appointment's picked Billing Channel now only SELECTS which
+// channel to bill through; it never supplies its own rate.
+//
+//  1. No Billing Channel picked on the appointment -> return null (caller falls back to
+//     its own plain B2B/B2C or warranty-labor price, as before).
+//  2. A Billing Channel picked, and the matched Price List row is configured for that
+//     SAME channel -> use the row's billingChannelRate. This is the normal, correct path
+//     for a genuine negotiated-rate partner (e.g. JER-C) once Master Data has that
+//     partner's per-category rate entered.
+//  3. A Billing Channel picked, but the matched Price List row has no channel configured
+//     (or a DIFFERENT one) -> throw. This is deliberate, not a gap: a CCE/system that
+//     explicitly picked a channel and got silently billed some other way (or for free)
+//     is exactly the dangerous-wrong-invoice scenario the previous design produced.
+//     Surfacing a clear 400 naming the missing Price List row is the same "never invent
+//     a number" rule every other pricing failure mode in this app already follows.
 export interface ResolvedBillingChannel {
   billingChannelId: string;
   billingChannelName: string | null;
@@ -36,27 +44,29 @@ export function resolveAppointmentBillingChannel(
   appointment: Appointment | null | undefined,
   priceRow: ServicePriceList,
 ): ResolvedBillingChannel | null {
-  const overrideChannel = appointment?.billingChannel;
-  if (overrideChannel) {
-    if (overrideChannel.defaultRate === null || overrideChannel.defaultRate === undefined) {
-      throw new BadRequestException(
-        `Billing Channel "${overrideChannel.name}" has no default rate set - set one on the Billing Channel master before an appointment using it can be billed.`,
-      );
+  const pickedChannelId = appointment?.billingChannelId ?? null;
+
+  if (!pickedChannelId) {
+    if (priceRow.billingChannelId) {
+      return {
+        billingChannelId: priceRow.billingChannelId,
+        billingChannelName: priceRow.billingChannel?.name ?? null,
+        rate: Number(priceRow.billingChannelRate),
+      };
     }
-    return {
-      billingChannelId: overrideChannel.id,
-      billingChannelName: overrideChannel.name,
-      rate: Number(overrideChannel.defaultRate),
-    };
+    return null;
   }
 
-  if (priceRow.billingChannelId) {
-    return {
-      billingChannelId: priceRow.billingChannelId,
-      billingChannelName: priceRow.billingChannel?.name ?? null,
-      rate: Number(priceRow.billingChannelRate),
-    };
+  if (priceRow.billingChannelId !== pickedChannelId) {
+    const pickedChannelName = appointment?.billingChannel?.name ?? pickedChannelId;
+    throw new BadRequestException(
+      `Billing Channel "${pickedChannelName}" has no rate configured for this Category/Job Type - add a Price List row with that Billing Channel set before an invoice can be generated.`,
+    );
   }
 
-  return null;
+  return {
+    billingChannelId: priceRow.billingChannelId,
+    billingChannelName: priceRow.billingChannel?.name ?? null,
+    rate: Number(priceRow.billingChannelRate),
+  };
 }

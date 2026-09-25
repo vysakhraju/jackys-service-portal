@@ -96,6 +96,7 @@ describe('InvoicingService', () => {
       find: jest.fn().mockResolvedValue([]),
       create: jest.fn((data: any) => data),
       save: jest.fn((data: any) => Promise.resolve({ ...data, id: data.id || 'inv-1' })),
+      remove: jest.fn((data: any) => Promise.resolve(data)),
       createQueryBuilder: jest.fn(() => queryBuilder),
     };
     paymentRepository = {
@@ -295,52 +296,82 @@ describe('InvoicingService', () => {
         expect(result.billingChannelName).toBe('Acme Partner');
       });
 
-      // Phase 5 (2026-09-22, per-appointment Billing Channel override) - the appointment's
-      // own picked channel now overrides the row's channel, using that channel's own
-      // defaultRate rather than the row's billingChannelRate.
-      it("uses the appointment's own picked Billing Channel and its defaultRate, overriding the Price List row's channel", async () => {
+      // 2026-09-25 revision (JER-C AED 0.00 dead-end fix) - BillingChannel.defaultRate is
+      // retired as a pricing input. An appointment's picked Billing Channel now only
+      // SELECTS the channel; the Price List row's own billingChannelRate is the only rate
+      // source, and the gate is no longer customerType === B2B_SALES_CHANNEL - a B2C or
+      // plain B2B job with a Billing Channel picked is priced through it too.
+      it("uses the Price List row's billingChannelRate when the appointment picks the SAME channel the row is configured for", async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
           jobCard({
             appointment: {
-              customerType: CustomerType.B2B_SALES_CHANNEL,
+              customerType: CustomerType.B2B,
               jobType: 'REPAIR',
               serviceCentre: { vatRate: 5 },
               applianceModel: { category: 'REFRIGERATOR' },
-              billingChannel: { id: 'bc-appt', name: 'Appointment Channel', defaultRate: 650 },
+              billingChannelId: 'bc-jer-c',
+              billingChannel: { id: 'bc-jer-c', name: 'JER-C' },
             },
           }),
         );
         estimateRepository.find.mockResolvedValue([]);
         priceListRepository.findOne.mockResolvedValue(
-          priceRow({ priceB2B: 300, billingChannelId: 'bc-row', billingChannelRate: 500, billingChannel: { id: 'bc-row', name: 'Row Channel' } }),
+          priceRow({ priceB2B: 300, billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } }),
         );
         queryBuilder.getOne.mockResolvedValue(null);
 
         const result = await service.getOrCreateForJobCard('jc-1');
 
-        expect(result.subtotal).toBe(650);
-        expect(result.billingChannelId).toBe('bc-appt');
-        expect(result.billingChannelName).toBe('Appointment Channel');
+        expect(result.subtotal).toBe(55);
+        expect(result.billingChannelId).toBe('bc-jer-c');
+        expect(result.billingChannelName).toBe('JER-C');
       });
 
-      it("throws when the appointment's picked Billing Channel has no defaultRate set, rather than silently falling back", async () => {
+      it('applies a picked Billing Channel for a plain B2C job too - no longer gated on customerType', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
           jobCard({
             appointment: {
-              customerType: CustomerType.B2B_SALES_CHANNEL,
+              customerType: CustomerType.B2C,
               jobType: 'REPAIR',
               serviceCentre: { vatRate: 5 },
               applianceModel: { category: 'REFRIGERATOR' },
-              billingChannel: { id: 'bc-appt', name: 'No Rate Channel', defaultRate: null },
+              billingChannelId: 'bc-jer-c',
+              billingChannel: { id: 'bc-jer-c', name: 'JER-C' },
             },
           }),
         );
         estimateRepository.find.mockResolvedValue([]);
-        priceListRepository.findOne.mockResolvedValue(priceRow({ priceB2B: 300 }));
+        priceListRepository.findOne.mockResolvedValue(
+          priceRow({ priceB2C: 200, billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } }),
+        );
+        queryBuilder.getOne.mockResolvedValue(null);
+
+        const result = await service.getOrCreateForJobCard('jc-1');
+
+        expect(result.subtotal).toBe(55);
+      });
+
+      it("throws when the appointment picks a Billing Channel the matched Price List row has no rate for, rather than silently billing the plain price (the JER-C AED 0.00 bug)", async () => {
+        invoiceRepository.findOne.mockResolvedValue(null);
+        jobCardsService.findById.mockResolvedValue(
+          jobCard({
+            appointment: {
+              customerType: CustomerType.B2B,
+              jobType: 'REPAIR',
+              serviceCentre: { vatRate: 5 },
+              applianceModel: { category: 'REFRIGERATOR' },
+              billingChannelId: 'bc-jer-c',
+              billingChannel: { id: 'bc-jer-c', name: 'JER-C' },
+            },
+          }),
+        );
+        estimateRepository.find.mockResolvedValue([]);
+        priceListRepository.findOne.mockResolvedValue(priceRow({ priceB2B: 300, billingChannelId: null }));
 
         await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+        await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(/JER-C/);
       });
 
       it('falls back to plain priceB2B for a B2B_SALES_CHANNEL job whose Price List row has no Billing Channel set', async () => {
@@ -666,6 +697,64 @@ describe('InvoicingService', () => {
       const result = await service.recordPayment('inv-1', PaymentMethod.CASH, 1000, 'user-1');
 
       expect(result.status).toBe(InvoiceStatus.PAID);
+    });
+  });
+
+  describe('regenerateDraftInvoice', () => {
+    it('throws when no invoice exists yet for the Job Card', async () => {
+      invoiceRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.regenerateDraftInvoice('jc-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(invoiceRepository.remove).not.toHaveBeenCalled();
+    });
+
+    it('throws when the invoice is not DRAFT (PAID/PARTIALLY_PAID/CANCELLED are all frozen)', async () => {
+      invoiceRepository.findOne.mockResolvedValue(invoice({ status: InvoiceStatus.PARTIALLY_PAID }));
+
+      await expect(service.regenerateDraftInvoice('jc-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(invoiceRepository.remove).not.toHaveBeenCalled();
+    });
+
+    it('throws when any payment has already been recorded, even if the status is still (stale) DRAFT', async () => {
+      invoiceRepository.findOne.mockResolvedValue(invoice({ status: InvoiceStatus.DRAFT }));
+      paymentRepository.find.mockResolvedValue([payment({ amount: 50 })]);
+
+      await expect(service.regenerateDraftInvoice('jc-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(invoiceRepository.remove).not.toHaveBeenCalled();
+    });
+
+    it('deletes the stale never-paid DRAFT and recreates it from current master data under a new invoice number (the JER-C AED 0.00 fix)', async () => {
+      const stale = invoice({ id: 'inv-1', invoiceNumber: 'INV-0001', amount: 0, status: InvoiceStatus.DRAFT });
+      invoiceRepository.findOne
+        .mockResolvedValueOnce(stale) // findByJobCardId inside regenerateDraftInvoice
+        .mockResolvedValueOnce(null); // findByJobCardId inside the getOrCreateForJobCard it calls next
+      paymentRepository.find.mockResolvedValue([]);
+      jobCardsService.findById.mockResolvedValue(
+        jobCard({
+          appointment: {
+            customerType: CustomerType.B2B,
+            jobType: 'INSTALLATION',
+            serviceCentre: { vatRate: 5 },
+            applianceModel: { category: 'REFRIGERATOR' },
+            billingChannelId: 'bc-jer-c',
+            billingChannel: { id: 'bc-jer-c', name: 'JER-C' },
+          },
+        }),
+      );
+      estimateRepository.find.mockResolvedValue([]);
+      priceListRepository.findOne.mockResolvedValue(
+        priceRow({ jobType: 'INSTALLATION', billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } }),
+      );
+      queryBuilder.getOne.mockResolvedValue(invoice({ invoiceNumber: 'INV-0001' }));
+
+      const result = await service.regenerateDraftInvoice('jc-1', 'user-1');
+
+      expect(invoiceRepository.remove).toHaveBeenCalledWith(stale);
+      expect(result.oldInvoiceNumber).toBe('INV-0001');
+      expect(result.oldAmount).toBe(0);
+      expect(result.invoice.invoiceNumber).toBe('INV-0002');
+      expect(result.invoice.subtotal).toBe(55);
+      expect(result.invoice.billingChannelId).toBe('bc-jer-c');
     });
   });
 

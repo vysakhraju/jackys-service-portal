@@ -29,16 +29,15 @@ export class BillingChannel {
   @Column({ default: true })
   isActive: boolean;
 
-  // Phase 5 (2026-09-22, per-appointment Billing Channel override) - the flat rate this
-  // channel bills at when an appointment picks it directly (Appointment.billingChannelId),
-  // overriding whatever the matched Price List row's own billingChannelRate would
-  // otherwise produce. Nullable: a channel can exist (and still back a Price-List-row-
-  // level rate) without ever being picked on an appointment - only throws (in
-  // billing-channel-resolution.util.ts) at the moment an appointment actually tries to
-  // use it with no rate set. `numeric`, not `double precision`, to match every other
-  // money column in this app (priceB2B/priceB2C/billingChannelRate on ServicePriceList) -
-  // TypeORM maps this back as a string, parsed with Number() at every read site, same as
-  // those.
+  // DEPRECATED (2026-09-25) - Phase 5 (2026-09-22) originally made this the flat rate an
+  // appointment-picked channel billed at, overriding the matched Price List row's own
+  // billingChannelRate. In practice this let a channel with no (or an accidentally-0)
+  // defaultRate silently zero out an invoice with no error anywhere - the JER-C AED 0.00
+  // dead-end. billing-channel-resolution.util.ts no longer reads this column at all: the
+  // Price List row's own billingChannelRate (per category/jobType) is the single source
+  // of truth for what a channel bills. Column kept (nullable, unused) rather than dropped
+  // to avoid an enum/column migration on a dev DB with no migrations folder - do not wire
+  // this back into pricing.
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   defaultRate: number | null;
 

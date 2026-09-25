@@ -12,11 +12,6 @@ import type { BillingChannel, CreateBillingChannelInput } from '../../lib/master
 type FormValues = {
   name: string;
   isActive: boolean;
-  // Phase 5 (2026-09-22, per-appointment Billing Channel override) - plain string, not
-  // `valueAsNumber`-backed, for the same reason SchedulePage's customerLat/customerLng
-  // are: an empty number input's native `.valueAsNumber` reads back NaN, not '', on every
-  // watch()/getValues() call. Parsed explicitly at submit time below instead.
-  defaultRate: string;
 };
 
 // Master-Data/New-Appointment billing modification (requested 2026-09-21) Phase 2, req. 4 -
@@ -43,7 +38,7 @@ export function BillingChannelsPage() {
     handleSubmit,
     reset,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ defaultValues: { name: '', isActive: true, defaultRate: '' } });
+  } = useForm<FormValues>({ defaultValues: { name: '', isActive: true } });
 
   const createMutation = useMutation({
     mutationFn: (data: CreateBillingChannelInput) => createBillingChannel(data),
@@ -71,14 +66,14 @@ export function BillingChannelsPage() {
   function openCreate() {
     setEditing(null);
     setMutationError(null);
-    reset({ name: '', isActive: true, defaultRate: '' });
+    reset({ name: '', isActive: true });
     setModalOpen(true);
   }
 
   function openEdit(row: BillingChannel) {
     setEditing(row);
     setMutationError(null);
-    reset({ name: row.name, isActive: row.isActive, defaultRate: row.defaultRate != null ? String(row.defaultRate) : '' });
+    reset({ name: row.name, isActive: row.isActive });
     setModalOpen(true);
   }
 
@@ -87,11 +82,9 @@ export function BillingChannelsPage() {
   }
 
   function onSubmit(values: FormValues) {
-    const trimmedRate = values.defaultRate.trim();
     const payload: CreateBillingChannelInput = {
       name: values.name,
       isActive: values.isActive,
-      defaultRate: trimmedRate === '' ? undefined : Number(trimmedRate),
     };
     if (editing) {
       updateMutation.mutate({ id: editing.id, data: payload });
@@ -102,9 +95,6 @@ export function BillingChannelsPage() {
 
   const columns: Column<BillingChannel>[] = [
     { key: 'name', label: 'Name', render: (r) => <span className="font-medium text-slate-900">{r.name}</span> },
-    // Phase 5 (2026-09-22, per-appointment Billing Channel override) - the flat rate this
-    // channel bills at when an appointment picks it directly (see SchedulePage.tsx).
-    { key: 'defaultRate', label: 'Default Rate', render: (r) => (r.defaultRate != null ? Number(r.defaultRate).toFixed(2) : '—') },
     { key: 'status', label: 'Status', render: (r) => <ActiveBadge active={r.isActive} /> },
   ];
 
@@ -112,8 +102,9 @@ export function BillingChannelsPage() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <p className="text-sm text-slate-500">
-          Billing channels for B2B interdepartment routing — used by the New Appointment popup and Finance billing, separate
-          from the intake Channel field.
+          Billing channels for interdepartment routing — used by the New Appointment popup and Finance billing, separate from
+          the intake Channel field. Rates are set per Category/Job Type in Price List, not here — add a Billing Channel row in
+          Price List for each channel that needs to bill a category at its own rate.
         </p>
         {canManage && (
           <button
@@ -163,13 +154,6 @@ export function BillingChannelsPage() {
           <ErrorNotice error={mutationError} />
           <Field label="Name" error={errors.name?.message}>
             <input className={inputClass} placeholder="Corporate Interdepartment" {...register('name', { required: 'Name is required' })} />
-          </Field>
-          <Field
-            label="Default rate (optional)"
-            hint="What this channel bills at when picked directly on an appointment - see the New Appointment popup"
-            error={errors.defaultRate?.message}
-          >
-            <input type="number" step="any" className={inputClass} placeholder="450" {...register('defaultRate')} />
           </Field>
           <Checkbox label="Active" {...register('isActive')} />
 

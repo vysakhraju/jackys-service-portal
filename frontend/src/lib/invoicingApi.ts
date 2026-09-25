@@ -6,7 +6,7 @@
 // none of the existing routes gave Finance a full system-of-record view) and the AC-16 B2B
 // aging report (getB2bAging).
 import { api } from './api';
-import type { AgingReport, Invoice, InvoiceListFilters, Payment, RecordPaymentInput } from './invoicingTypes';
+import type { AgingReport, Invoice, InvoiceListFilters, Payment, RecordPaymentInput, RegenerateInvoiceResult } from './invoicingTypes';
 
 const BASE = '/invoicing';
 
@@ -28,3 +28,8 @@ export const getPayments = (id: string) => api.get<Payment[]>(`${BASE}/${id}/pay
 
 export const recordPayment = (id: string, data: RecordPaymentInput) =>
   api.post<Invoice>(`${BASE}/${id}/record-payment`, data).then((r) => r.data);
+
+// 2026-09-25 (JER-C AED 0.00 dead-end fix) - deletes a never-paid DRAFT and recreates it
+// from current master data under a new invoice number. Refused once any payment exists.
+export const regenerateInvoice = (jobCardId: string) =>
+  api.post<RegenerateInvoiceResult>(`${BASE}/job-card/${jobCardId}/regenerate`).then((r) => r.data);
