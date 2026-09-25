@@ -178,7 +178,15 @@ function WorkshopDetail({ state, onChanged }: { state: WorkshopState; onChanged:
   // tab uses (see its own comment), in a Modal. Gated on INVENTORY_VIEW at the pill itself
   // (not just inside the panel) so a caller who can't look up stock doesn't see a button
   // that only opens a "you don't have access" notice.
-  const canViewStock = has('INVENTORY_VIEW');
+  // 2026-09-25 (Activity dashboard/report request) - a COMPLETED (ERP-sourced Installation/
+  // Delivery Installation) Job Card never has a Workshop section, never reserves spares
+  // through this Repair-flow custody system at all (it uses JobCardActivityLineItem
+  // instead - appliance models, not SparePart reservations), so the generic stock-lookup
+  // button here was pure dead-end noise on an Activity job's page - it opens, and there's
+  // nothing on this screen it could ever be for. Repair-flow jobs (every other status)
+  // keep it regardless of section, same as before this change - it's a genuinely useful
+  // "can I fulfil this?" check at any stage of a real repair.
+  const canViewStock = has('INVENTORY_VIEW') && jobCard.status !== 'COMPLETED';
   const isPrivileged = useIsPrivilegedWorkshopCaller();
   // 2026-09-14: was ASSIGN_ROLES, a hardcoded mirror of WorkshopController's own
   // WORKSHOP_ASSIGN gate - now checks the real capability, so a Designation-access grant
