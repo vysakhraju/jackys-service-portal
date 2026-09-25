@@ -20,6 +20,9 @@ import { JobCardCrewHelper } from '../job-cards/entities/job-card-crew-helper.en
 // TypeOrmModule.forFeature alongside JobCard/JobCardTaskPause/JobCardCrewHelper above, for
 // createFromActivity()'s line items.
 import { JobCardActivityLineItem } from '../job-cards/entities/job-card-activity-line-item.entity';
+// Activity spares record-keeping (2026-09-25) - registered in JobCardsModule's own
+// TypeOrmModule.forFeature alongside JobCardActivityLineItem above.
+import { JobCardActivitySpareLine } from '../job-cards/entities/job-card-activity-spare-line.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 // Job Type split (2026-09-22) Phase 8 - registered in AppointmentsModule's own
 // TypeOrmModule.forFeature alongside Appointment (see that module's own comment).
@@ -105,6 +108,8 @@ describe('JobCardJourneyModule wiring', () => {
       JobCardCrewHelper,
       // Job Type split (2026-09-22) Phase 10 - see the import above.
       JobCardActivityLineItem,
+      // Activity spares record-keeping (2026-09-25) - see the import above.
+      JobCardActivitySpareLine,
       Appointment,
       ServiceCentre,
       User,

@@ -6,6 +6,8 @@ import { JobCard, JobCardStatus, JobCardSection } from './entities/job-card.enti
 import { JobCardTaskPause, TaskPauseReason } from './entities/job-card-task-pause.entity';
 import { JobCardCrewHelper } from './entities/job-card-crew-helper.entity';
 import { JobCardActivityLineItem } from './entities/job-card-activity-line-item.entity';
+import { JobCardActivitySpareLine } from './entities/job-card-activity-spare-line.entity';
+import { SparePart } from '../master-data/entities/spare-part.entity';
 import { User } from '../auth/entities/user.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
 import { getJobCardProgressFields, JobCardProgressFields } from './job-card-progress.util';
@@ -21,6 +23,7 @@ import { AssignSectionDto } from './dto/assign-section.dto';
 import { WarrantyOverrideDto } from './dto/warranty-override.dto';
 import { ApproveCustomerDto } from './dto/approve-customer.dto';
 import { PauseTaskDto } from './dto/pause-task.dto';
+import { AddActivitySpareLineDto } from './dto/add-activity-spare-line.dto';
 
 // Statuses a task timer can be manually paused from. Deliberately includes
 // SECTION_ASSIGNED (the only "work under way" status an ON_SITE_REPAIR job ever reaches -
@@ -58,6 +61,13 @@ export class JobCardsService {
     // (JobCardActivityLineItem) and their applianceModelId validation.
     @InjectRepository(JobCardActivityLineItem)
     private activityLineItemRepository: Repository<JobCardActivityLineItem>,
+    // Activity spares record-keeping (2026-09-25): addActivitySpareLine()'s SparePart
+    // existence/active check, same "validate the referenced row exists, don't just trust
+    // the FK constraint" discipline the ApplianceModel check above already follows.
+    @InjectRepository(JobCardActivitySpareLine)
+    private activitySpareLineRepository: Repository<JobCardActivitySpareLine>,
+    @InjectRepository(SparePart)
+    private sparePartRepository: Repository<SparePart>,
     @InjectRepository(ApplianceModel)
     private applianceModelRepository: Repository<ApplianceModel>,
     // Same direct-injection pattern InventoryService already uses for its own
@@ -690,6 +700,61 @@ export class JobCardsService {
       relations: { applianceModel: true },
       order: { createdAt: 'ASC' },
     });
+  }
+
+  /** Activity spares record-keeping (2026-09-25) - see JobCardActivitySpareLine's own doc
+   * comment. No ownership gate, same shape as getActivityLineItems()/getTaskPauses() above. */
+  async getActivitySpareLines(jobCardId: string): Promise<JobCardActivitySpareLine[]> {
+    await this.findEntityById(jobCardId);
+    return this.activitySpareLineRepository.find({
+      where: { jobCardId },
+      relations: { sparePart: true, addedByUser: true },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  /** Record-only for now (locked answer, 2026-09-25) - no stock reservation/deduction, no
+   * capacity/availability check against SparePart stock levels. Restricted to a COMPLETED
+   * (Activity-flow) Job Card - a REPAIR-flow job already has its own real custody path
+   * (Workshop's Request Spare -> Reserve -> Consume) and shouldn't grow a second, competing
+   * one here by accident. */
+  async addActivitySpareLine(jobCardId: string, dto: AddActivitySpareLineDto, userId: string): Promise<JobCardActivitySpareLine> {
+    const jobCard = await this.findEntityById(jobCardId);
+    if (jobCard.status !== JobCardStatus.COMPLETED) {
+      throw new BadRequestException(
+        `Spares can only be recorded on a COMPLETED (Activity-flow) Job Card - use the Workshop screen's Request Spare flow for a Repair job.`,
+      );
+    }
+    const sparePart = await this.sparePartRepository.findOne({ where: { id: dto.sparePartId } });
+    if (!sparePart) {
+      throw new NotFoundException(`Spare part ${dto.sparePartId} not found.`);
+    }
+    if (!sparePart.isActive) {
+      throw new BadRequestException(`Spare part ${sparePart.name} (${sparePart.code}) is inactive.`);
+    }
+    const line = this.activitySpareLineRepository.create({
+      jobCardId,
+      sparePartId: dto.sparePartId,
+      quantity: dto.quantity,
+      addedByUserId: userId,
+    });
+    const saved = await this.activitySpareLineRepository.save(line);
+    return this.activitySpareLineRepository.findOne({
+      where: { id: saved.id },
+      relations: { sparePart: true, addedByUser: true },
+    }) as Promise<JobCardActivitySpareLine>;
+  }
+
+  /** Corrects a mistaken add - no edit-lock/late-stage restriction, since a COMPLETED Job
+   * Card is already past every other stage this app gates on (unlike a REPAIR-flow job's
+   * task pauses, which lock once QC-adjacent). */
+  async removeActivitySpareLine(jobCardId: string, lineId: string): Promise<void> {
+    await this.findEntityById(jobCardId);
+    const line = await this.activitySpareLineRepository.findOne({ where: { id: lineId, jobCardId } });
+    if (!line) {
+      throw new NotFoundException(`Spare line ${lineId} not found on Job Card ${jobCardId}.`);
+    }
+    await this.activitySpareLineRepository.remove(line);
   }
 
   /**

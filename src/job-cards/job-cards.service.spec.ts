@@ -14,6 +14,8 @@ describe('JobCardsService', () => {
   let userRepository: any;
   let appointmentRepository: any;
   let activityLineItemRepository: any;
+  let activitySpareLineRepository: any;
+  let sparePartRepository: any;
   let applianceModelRepository: any;
   let dataSource: any;
   let activityManager: any;
@@ -129,6 +131,16 @@ describe('JobCardsService', () => {
       create: jest.fn((data: any) => data),
       find: jest.fn().mockResolvedValue([]),
     };
+    activitySpareLineRepository = {
+      create: jest.fn((data: any) => data),
+      save: jest.fn((data: any) => Promise.resolve({ ...data, id: data.id || 'spare-line-1' })),
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn(),
+      remove: jest.fn(),
+    };
+    sparePartRepository = {
+      findOne: jest.fn(),
+    };
     applianceModelRepository = {
       findOne: jest.fn(),
     };
@@ -160,6 +172,8 @@ describe('JobCardsService', () => {
       userRepository,
       appointmentRepository,
       activityLineItemRepository,
+      activitySpareLineRepository,
+      sparePartRepository,
       applianceModelRepository,
       dataSource,
       appointmentsService,
@@ -1711,6 +1725,87 @@ describe('JobCardsService', () => {
         relations: { applianceModel: true },
         order: { createdAt: 'ASC' },
       });
+    });
+  });
+
+  // Activity spares record-keeping (2026-09-25) - record-only for now, see
+  // JobCardActivitySpareLine's own doc comment.
+  describe('activity spare lines', () => {
+    it('getActivitySpareLines returns recorded lines, oldest first, with sparePart + addedByUser loaded', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard({ id: 'jc-1' }));
+
+      await service.getActivitySpareLines('jc-1');
+
+      expect(activitySpareLineRepository.find).toHaveBeenCalledWith({
+        where: { jobCardId: 'jc-1' },
+        relations: { sparePart: true, addedByUser: true },
+        order: { createdAt: 'ASC' },
+      });
+    });
+
+    it('addActivitySpareLine records a line on a COMPLETED Job Card', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard({ id: 'jc-1', status: JobCardStatus.COMPLETED }));
+      sparePartRepository.findOne.mockResolvedValueOnce({ id: 'sp-1', name: 'Mounting Kit', code: 'SP-001', isActive: true });
+      activitySpareLineRepository.findOne.mockResolvedValueOnce({ id: 'spare-line-1', jobCardId: 'jc-1', sparePartId: 'sp-1', quantity: 2 });
+
+      const result = await service.addActivitySpareLine('jc-1', { sparePartId: 'sp-1', quantity: 2 }, 'user-1');
+
+      expect(activitySpareLineRepository.create).toHaveBeenCalledWith({
+        jobCardId: 'jc-1',
+        sparePartId: 'sp-1',
+        quantity: 2,
+        addedByUserId: 'user-1',
+      });
+      expect(activitySpareLineRepository.save).toHaveBeenCalled();
+      expect(result).toEqual({ id: 'spare-line-1', jobCardId: 'jc-1', sparePartId: 'sp-1', quantity: 2 });
+    });
+
+    it('addActivitySpareLine rejects a non-COMPLETED (Repair-flow) Job Card', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard({ id: 'jc-1', status: JobCardStatus.WORKSHOP_ASSIGNED }));
+
+      await expect(service.addActivitySpareLine('jc-1', { sparePartId: 'sp-1', quantity: 1 }, 'user-1')).rejects.toThrow(
+        'Spares can only be recorded on a COMPLETED (Activity-flow) Job Card',
+      );
+      expect(activitySpareLineRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('addActivitySpareLine 404s when the spare part does not exist', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard({ id: 'jc-1', status: JobCardStatus.COMPLETED }));
+      sparePartRepository.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.addActivitySpareLine('jc-1', { sparePartId: 'sp-missing', quantity: 1 }, 'user-1')).rejects.toThrow(
+        'Spare part sp-missing not found',
+      );
+    });
+
+    it('addActivitySpareLine rejects an inactive spare part', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard({ id: 'jc-1', status: JobCardStatus.COMPLETED }));
+      sparePartRepository.findOne.mockResolvedValueOnce({ id: 'sp-1', name: 'Old Part', code: 'SP-001', isActive: false });
+
+      await expect(service.addActivitySpareLine('jc-1', { sparePartId: 'sp-1', quantity: 1 }, 'user-1')).rejects.toThrow(
+        'Old Part (SP-001) is inactive',
+      );
+    });
+
+    it('removeActivitySpareLine removes an existing line', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard({ id: 'jc-1' }));
+      const line = { id: 'spare-line-1', jobCardId: 'jc-1' };
+      activitySpareLineRepository.findOne.mockResolvedValueOnce(line);
+
+      await service.removeActivitySpareLine('jc-1', 'spare-line-1');
+
+      expect(activitySpareLineRepository.findOne).toHaveBeenCalledWith({ where: { id: 'spare-line-1', jobCardId: 'jc-1' } });
+      expect(activitySpareLineRepository.remove).toHaveBeenCalledWith(line);
+    });
+
+    it('removeActivitySpareLine 404s when the line does not exist on this Job Card', async () => {
+      jobCardRepository.findOne.mockResolvedValueOnce(jobCard({ id: 'jc-1' }));
+      activitySpareLineRepository.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.removeActivitySpareLine('jc-1', 'missing-line')).rejects.toThrow(
+        'Spare line missing-line not found on Job Card jc-1',
+      );
+      expect(activitySpareLineRepository.remove).not.toHaveBeenCalled();
     });
   });
 });

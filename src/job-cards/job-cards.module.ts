@@ -6,9 +6,11 @@ import { JobCard } from './entities/job-card.entity';
 import { JobCardTaskPause } from './entities/job-card-task-pause.entity';
 import { JobCardCrewHelper } from './entities/job-card-crew-helper.entity';
 import { JobCardActivityLineItem } from './entities/job-card-activity-line-item.entity';
+import { JobCardActivitySpareLine } from './entities/job-card-activity-spare-line.entity';
 import { User } from '../auth/entities/user.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { ApplianceModel } from '../master-data/entities/appliance-model.entity';
+import { SparePart } from '../master-data/entities/spare-part.entity';
 import { AppointmentsModule } from '../appointments/appointments.module';
 import { TechnicianModule } from '../technician/technician.module';
 import { AuthModule } from '../auth/auth.module';
@@ -28,7 +30,17 @@ import { WorkshopIntakeModule } from '../workshop-intake/workshop-intake.module'
     // existing single-appointment-shaped methods.
     // JobCardActivityLineItem/ApplianceModel (Job Type split, Phase 10): createFromActivity()'s
     // line items and their applianceModelId existence check.
-    TypeOrmModule.forFeature([JobCard, JobCardTaskPause, JobCardCrewHelper, User, Appointment, JobCardActivityLineItem, ApplianceModel]),
+    TypeOrmModule.forFeature([
+      JobCard,
+      JobCardTaskPause,
+      JobCardCrewHelper,
+      User,
+      Appointment,
+      JobCardActivityLineItem,
+      JobCardActivitySpareLine,
+      ApplianceModel,
+      SparePart,
+    ]),
     AppointmentsModule,
     TechnicianModule,
     // Needed because JobCardsController's @UseInterceptors(AuditInterceptor) resolves

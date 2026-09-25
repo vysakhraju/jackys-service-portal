@@ -15,6 +15,7 @@ import { WarrantyStatus } from '../../technician/entities/technician-visit.entit
 import { Delivery } from '../../delivery/entities/delivery.entity';
 import { OneToMany } from 'typeorm';
 import { JobCardActivityLineItem } from './job-card-activity-line-item.entity';
+import { JobCardActivitySpareLine } from './job-card-activity-spare-line.entity';
 
 export enum JobCardStatus {
   OPEN = 'OPEN',
@@ -260,6 +261,11 @@ export class JobCard {
   // rather than a JSON column. Always empty for a REPAIR-flow Job Card.
   @OneToMany(() => JobCardActivityLineItem, (lineItem) => lineItem.jobCard)
   activityLineItems: JobCardActivityLineItem[];
+
+  // Activity spares record-keeping (2026-09-25) - see JobCardActivitySpareLine's own doc
+  // comment. Always empty for a REPAIR-flow Job Card, same as activityLineItems above.
+  @OneToMany(() => JobCardActivitySpareLine, (line) => line.jobCard)
+  activitySpareLines: JobCardActivitySpareLine[];
 
   @ManyToOne(() => User)
   @JoinColumn({ name: 'createdById' })

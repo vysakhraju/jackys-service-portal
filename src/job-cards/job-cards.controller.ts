@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, UseInterceptors, ParseUUIDPipe, Request } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards, UseInterceptors, ParseUUIDPipe, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { JobCardsService } from './job-cards.service';
 import { CreateJobCardDto } from './dto/create-job-card.dto';
@@ -10,6 +10,7 @@ import { ApproveCustomerDto } from './dto/approve-customer.dto';
 import { CancelJobCardDto } from './dto/cancel-job-card.dto';
 import { QcRejectDto } from './dto/qc-reject.dto';
 import { PauseTaskDto } from './dto/pause-task.dto';
+import { AddActivitySpareLineDto } from './dto/add-activity-spare-line.dto';
 import { JobCard } from './entities/job-card.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -306,6 +307,58 @@ export class JobCardsController {
   @ApiResponse({ status: 200 })
   async getActivityLineItems(@Param('id', ParseUUIDPipe) id: string) {
     return this.jobCardsService.getActivityLineItems(id);
+  }
+
+  // Activity spares record-keeping (2026-09-25) - record-only for now (no stock
+  // reservation/deduction, see JobCardActivitySpareLine's own doc comment). Gated
+  // JOB_CARD_MANAGE on the two mutating routes, same capability every other Job Card
+  // mutation in this controller already uses; the GET stays open like getActivityLineItems
+  // above (no gate beyond class-level auth).
+  @Get(':id/spare-lines')
+  @ApiOperation({ summary: 'Spare parts recorded against an Activity (COMPLETED) Job Card - empty for a REPAIR-flow Job Card' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 200 })
+  async getActivitySpareLines(@Param('id', ParseUUIDPipe) id: string) {
+    return this.jobCardsService.getActivitySpareLines(id);
+  }
+
+  @Post(':id/spare-lines')
+  @RequiresCapability('JOB_CARD_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Record a spare part used on an Activity (COMPLETED) Job Card - record only, no stock deduction' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiResponse({ status: 201 })
+  @ApiResponse({ status: 400, description: 'Job Card is not COMPLETED, or the spare part is inactive' })
+  @ApiResponse({ status: 404, description: 'Job Card or spare part not found' })
+  async addActivitySpareLine(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddActivitySpareLineDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.jobCardsService.addActivitySpareLine(id, dto, user.id);
+  }
+
+  @Delete(':id/spare-lines/:lineId')
+  @RequiresCapability('JOB_CARD_MANAGE')
+  @UseInterceptors(AuditInterceptor)
+  @Audit({
+    action: AuditAction.UPDATE,
+    entityType: 'JobCard',
+    getEntityId: (args) => args.params?.id,
+  })
+  @ApiOperation({ summary: 'Remove a mistakenly-recorded spare line from an Activity Job Card' })
+  @ApiParam({ name: 'id', type: String })
+  @ApiParam({ name: 'lineId', type: String })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Job Card or spare line not found' })
+  async removeActivitySpareLine(@Param('id', ParseUUIDPipe) id: string, @Param('lineId', ParseUUIDPipe) lineId: string) {
+    await this.jobCardsService.removeActivitySpareLine(id, lineId);
+    return { success: true };
   }
 
   // Must stay ABOVE @Get(':id') below - that route's ParseUUIDPipe would otherwise 400
