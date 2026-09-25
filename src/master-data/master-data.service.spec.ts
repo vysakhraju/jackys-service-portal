@@ -1,4 +1,5 @@
 ﻿import { NotFoundException, ConflictException } from '@nestjs/common';
+import { IsNull } from 'typeorm';
 import { MasterDataService } from './master-data.service';
 
 describe('MasterDataService', () => {
@@ -404,66 +405,81 @@ describe('MasterDataService', () => {
     });
   });
 
-  // Price List rebuild (requested 2026-09-22, Phase 3) - full CRUD + uniqueness on
-  // (category, jobType), replacing the old activityType/modelId shape.
+  // Super-admin pricing matrix rebuild (2026-09-25) - full CRUD + uniqueness on
+  // (category, jobType, customerType, billingChannelId), replacing the Phase 3
+  // (category, jobType) shape. billingChannelId is null-safe via IsNull() since Postgres
+  // treats each NULL as distinct in a unique index.
   describe('Service Price List', () => {
-    it('creates a price list row when the category/jobType combo is unused', async () => {
+    it('creates a price list row when the combo is unused', async () => {
       servicePriceListRepository.findOne.mockResolvedValue(null);
 
-      const result = await service.createServicePriceList({ category: 'AC' as any, jobType: 'REPAIR' as any });
+      const result = await service.createServicePriceList({
+        category: 'AC' as any,
+        jobType: 'REPAIR' as any,
+        customerType: 'B2C' as any,
+      });
 
       expect(servicePriceListRepository.findOne).toHaveBeenCalledWith({
-        where: { category: 'AC', jobType: 'REPAIR' },
+        where: { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', billingChannelId: IsNull() },
       });
-      expect(result).toEqual(expect.objectContaining({ category: 'AC', jobType: 'REPAIR' }));
+      expect(result).toEqual(expect.objectContaining({ category: 'AC', jobType: 'REPAIR', customerType: 'B2C' }));
     });
 
-    it('throws ConflictException when an ACTIVE row for that category/jobType already exists', async () => {
+    it('throws ConflictException when an ACTIVE row for that combo already exists', async () => {
       servicePriceListRepository.findOne.mockResolvedValue({ id: 'existing', isActive: true });
 
       await expect(
-        service.createServicePriceList({ category: 'AC' as any, jobType: 'REPAIR' as any }),
+        service.createServicePriceList({ category: 'AC' as any, jobType: 'REPAIR' as any, customerType: 'B2C' as any }),
       ).rejects.toThrow(ConflictException);
     });
 
-    // Reactivate-on-create bug fix (2026-09-24): reported live - a previously deleted
-    // REFRIGERATOR/INSTALLATION row blocked re-creating it forever (the unique
-    // (category, jobType) index applies regardless of isActive), while the row itself
-    // was invisible in the UI (findAllPriceLists only lists active rows), so the
-    // ConflictException's own "edit that row instead" advice was impossible to follow.
+    // Reactivate-on-create bug fix (2026-09-24, preserved through the matrix rebuild):
+    // reported live - a previously deleted row blocked re-creating it forever (the
+    // unique index applies regardless of isActive), while the row itself was invisible
+    // in the UI (findAllPriceLists only lists active rows), so the ConflictException's
+    // own "edit that row instead" advice was impossible to follow.
     it('reactivates a soft-deleted row with the newly submitted values instead of throwing', async () => {
       servicePriceListRepository.findOne.mockResolvedValue({
         id: 'existing',
         category: 'AC',
         jobType: 'REPAIR',
+        customerType: 'B2C',
         isActive: false,
       });
 
-      await service.createServicePriceList({ category: 'AC' as any, jobType: 'REPAIR' as any, priceB2B: 99 });
+      await service.createServicePriceList({
+        category: 'AC' as any,
+        jobType: 'REPAIR' as any,
+        customerType: 'B2C' as any,
+        price: 99,
+      });
 
       expect(servicePriceListRepository.update).toHaveBeenCalledWith('existing', {
         category: 'AC',
         jobType: 'REPAIR',
-        priceB2B: 99,
+        customerType: 'B2C',
+        price: 99,
+        billingChannelId: null,
         isActive: true,
       });
       expect(servicePriceListRepository.save).not.toHaveBeenCalled();
     });
 
-    it('filters active rows, optionally by category and/or job type', async () => {
+    it('filters active rows, optionally by category/jobType/customerType', async () => {
       const qb = buildQb([{ id: '1' }], true);
       servicePriceListRepository.createQueryBuilder.mockReturnValue(qb);
 
-      const result = await service.findAllPriceLists('AC' as any, 'REPAIR' as any);
+      const result = await service.findAllPriceLists('AC' as any, 'REPAIR' as any, 'B2C' as any);
 
       expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('price.billingChannel', 'billingChannel');
       expect(qb.where).toHaveBeenCalledWith('price.isActive = :isActive', { isActive: true });
       expect(qb.andWhere).toHaveBeenCalledWith('price.category = :category', { category: 'AC' });
       expect(qb.andWhere).toHaveBeenCalledWith('price.jobType = :jobType', { jobType: 'REPAIR' });
+      expect(qb.andWhere).toHaveBeenCalledWith('price.customerType = :customerType', { customerType: 'B2C' });
       expect(result).toEqual([{ id: '1' }]);
     });
 
-    it('skips both filters when neither category nor jobType is given', async () => {
+    it('skips every filter when none is given', async () => {
       const qb = buildQb([], true);
       servicePriceListRepository.createQueryBuilder.mockReturnValue(qb);
 
@@ -471,6 +487,7 @@ describe('MasterDataService', () => {
 
       expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('category'), expect.anything());
       expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('jobType'), expect.anything());
+      expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('customerType'), expect.anything());
     });
 
     it('throws NotFoundException for a missing price list row', async () => {
@@ -480,15 +497,29 @@ describe('MasterDataService', () => {
     });
 
     it('updates rates/status on an existing row', async () => {
-      servicePriceListRepository.findOne.mockResolvedValue({ id: '1', category: 'AC', jobType: 'REPAIR' });
+      servicePriceListRepository.findOne.mockResolvedValue({ id: '1', category: 'AC', jobType: 'REPAIR', customerType: 'B2C' });
 
-      await service.updatePriceList('1', { priceB2B: 150 });
+      await service.updatePriceList('1', { price: 150 });
 
-      expect(servicePriceListRepository.update).toHaveBeenCalledWith('1', { priceB2B: 150 });
+      expect(servicePriceListRepository.update).toHaveBeenCalledWith('1', { price: 150 });
+    });
+
+    it('strips category/jobType/customerType/billingChannelId from the update patch - identity fields never change via update', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue({ id: '1', category: 'AC', jobType: 'REPAIR', customerType: 'B2C' });
+
+      await service.updatePriceList('1', {
+        category: 'WASHING_MACHINE' as any,
+        jobType: 'INSTALLATION' as any,
+        customerType: 'B2B' as any,
+        billingChannelId: 'bc-1',
+        price: 150,
+      });
+
+      expect(servicePriceListRepository.update).toHaveBeenCalledWith('1', { price: 150 });
     });
 
     it('soft-deletes an existing row', async () => {
-      servicePriceListRepository.findOne.mockResolvedValue({ id: '1', category: 'AC', jobType: 'REPAIR' });
+      servicePriceListRepository.findOne.mockResolvedValue({ id: '1', category: 'AC', jobType: 'REPAIR', customerType: 'B2C' });
 
       await service.deletePriceList('1');
 
@@ -496,43 +527,50 @@ describe('MasterDataService', () => {
     });
   });
 
-  // Price List CSV import (requested 2026-09-24) - dedicated upsert import distinct from
-  // createServicePriceList (which throws on an existing row - see importPriceListRows's
-  // own doc comment for why that path is wrong for this feature).
+  // Price List CSV import - dedicated upsert import distinct from createServicePriceList
+  // (which throws on an existing row - see importPriceListRows's own doc comment for why
+  // that path is wrong for this feature). Super-admin pricing matrix rebuild (2026-09-25)
+  // adds customerType and Active (Y/N) columns and collapses priceB2B/priceB2C/
+  // billingChannelRate into a single Price column.
   describe('Service Price List CSV import', () => {
-    it('creates a new row when the category/jobType combo has no existing row', async () => {
+    it('creates a new row when the combo has no existing row', async () => {
       servicePriceListRepository.findOne.mockResolvedValue(null);
 
       const result = await service.importPriceListRows([
-        { category: 'AC', jobType: 'REPAIR', priceB2B: '120', priceB2C: '150' },
+        { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', price: '120' },
       ]);
 
       expect(servicePriceListRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ category: 'AC', jobType: 'REPAIR', priceB2B: 120, priceB2C: 150 }),
+        expect.objectContaining({ category: 'AC', jobType: 'REPAIR', customerType: 'B2C', price: 120 }),
       );
       expect(result).toEqual({ created: 1, updated: 0, errors: [] });
     });
 
     it('updates only the columns present, leaving blank numeric cells untouched on an existing row', async () => {
-      servicePriceListRepository.findOne.mockResolvedValue({ id: 'row-1', category: 'AC', jobType: 'REPAIR' });
+      servicePriceListRepository.findOne.mockResolvedValue({ id: 'row-1', category: 'AC', jobType: 'REPAIR', customerType: 'B2C' });
 
       const result = await service.importPriceListRows([
-        { category: 'AC', jobType: 'REPAIR', priceB2B: '999', priceB2C: '' },
+        { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', price: '999', warrantyLaborCost: '' },
       ]);
 
-      expect(servicePriceListRepository.update).toHaveBeenCalledWith('row-1', { priceB2B: 999 });
+      expect(servicePriceListRepository.update).toHaveBeenCalledWith('row-1', { price: 999 });
       expect(result).toEqual({ created: 0, updated: 1, errors: [] });
     });
 
-    it('normalizes spaced/lowercased category and job type values', async () => {
+    it('normalizes spaced/lowercased category, job type and customer type values', async () => {
       servicePriceListRepository.findOne.mockResolvedValue(null);
 
       await service.importPriceListRows([
-        { category: 'washing machine', jobType: 'delivery installation', priceB2B: '10' },
+        { category: 'washing machine', jobType: 'delivery installation', customerType: 'b2b sales channel', price: '10' },
       ]);
 
       expect(servicePriceListRepository.findOne).toHaveBeenCalledWith({
-        where: { category: 'WASHING_MACHINE', jobType: 'DELIVERY_INSTALLATION' },
+        where: {
+          category: 'WASHING_MACHINE',
+          jobType: 'DELIVERY_INSTALLATION',
+          customerType: 'B2B_SALES_CHANNEL',
+          billingChannelId: IsNull(),
+        },
       });
     });
 
@@ -540,8 +578,8 @@ describe('MasterDataService', () => {
       servicePriceListRepository.findOne.mockResolvedValue(null);
 
       const result = await service.importPriceListRows([
-        { category: 'TOASTER', jobType: 'REPAIR', priceB2B: '10' },
-        { category: 'AC', jobType: 'REPAIR', priceB2B: '20' },
+        { category: 'TOASTER', jobType: 'REPAIR', customerType: 'B2C', price: '10' },
+        { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', price: '20' },
       ]);
 
       expect(result.created).toBe(1);
@@ -549,17 +587,39 @@ describe('MasterDataService', () => {
     });
 
     it('records a row-level error for an unknown job type', async () => {
-      const result = await service.importPriceListRows([{ category: 'AC', jobType: 'FUMIGATION', priceB2B: '10' }]);
+      const result = await service.importPriceListRows([
+        { category: 'AC', jobType: 'FUMIGATION', customerType: 'B2C', price: '10' },
+      ]);
 
       expect(result).toEqual({ created: 0, updated: 0, errors: ['Row 2: unknown Job Type "FUMIGATION"'] });
+    });
+
+    it('records a row-level error for an unknown customer type', async () => {
+      const result = await service.importPriceListRows([
+        { category: 'AC', jobType: 'REPAIR', customerType: 'ENTERPRISE', price: '10' },
+      ]);
+
+      expect(result).toEqual({ created: 0, updated: 0, errors: ['Row 2: unknown Customer Type "ENTERPRISE"'] });
     });
 
     it('records a row-level error for a non-numeric price cell', async () => {
       servicePriceListRepository.findOne.mockResolvedValue(null);
 
-      const result = await service.importPriceListRows([{ category: 'AC', jobType: 'REPAIR', priceB2B: 'abc' }]);
+      const result = await service.importPriceListRows([
+        { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', price: 'abc' },
+      ]);
 
-      expect(result).toEqual({ created: 0, updated: 0, errors: ['Row 2: B2B Price "abc" is not a valid number'] });
+      expect(result).toEqual({ created: 0, updated: 0, errors: ['Row 2: Price "abc" is not a valid number'] });
+    });
+
+    it('records a row-level error for an Active cell that is not Y/N', async () => {
+      servicePriceListRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.importPriceListRows([
+        { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', price: '10', isActive: 'MAYBE' },
+      ]);
+
+      expect(result).toEqual({ created: 0, updated: 0, errors: ['Row 2: Active "MAYBE" is not Y/N'] });
     });
 
     it('resolves Billing Channel by case-insensitive name and stamps its id', async () => {
@@ -568,7 +628,7 @@ describe('MasterDataService', () => {
       billingChannelRepository.createQueryBuilder.mockReturnValue(qb);
 
       await service.importPriceListRows([
-        { category: 'AC', jobType: 'REPAIR', billingChannel: 'corporate interdepartment' },
+        { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', billingChannel: 'corporate interdepartment' },
       ]);
 
       expect(servicePriceListRepository.save).toHaveBeenCalledWith(expect.objectContaining({ billingChannelId: 'bc-1' }));
@@ -580,16 +640,18 @@ describe('MasterDataService', () => {
       billingChannelRepository.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.importPriceListRows([
-        { category: 'AC', jobType: 'REPAIR', billingChannel: 'Not A Real Channel' },
+        { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', billingChannel: 'Not A Real Channel' },
       ]);
 
       expect(result).toEqual({ created: 0, updated: 0, errors: ['Row 2: unknown Billing Channel "Not A Real Channel"'] });
     });
 
     it('clears an existing Billing Channel when the column is present but blank', async () => {
-      servicePriceListRepository.findOne.mockResolvedValue({ id: 'row-1', category: 'AC', jobType: 'REPAIR' });
+      servicePriceListRepository.findOne.mockResolvedValue({ id: 'row-1', category: 'AC', jobType: 'REPAIR', customerType: 'B2C' });
 
-      await service.importPriceListRows([{ category: 'AC', jobType: 'REPAIR', billingChannel: '' }]);
+      await service.importPriceListRows([
+        { category: 'AC', jobType: 'REPAIR', customerType: 'B2C', billingChannel: '' },
+      ]);
 
       expect(servicePriceListRepository.update).toHaveBeenCalledWith('row-1', { billingChannelId: null });
     });

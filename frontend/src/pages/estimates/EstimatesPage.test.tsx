@@ -141,10 +141,9 @@ describe('EstimatesPage - Price List baseline prefill (Phase 4, requested 2026-0
         id: 'price-1',
         category: 'WASHING_MACHINE',
         jobType: 'REPAIR',
-        priceB2B: 300,
-        priceB2C: 220,
+        customerType: 'B2C',
+        price: 220,
         billingChannelId: null,
-        billingChannelRate: 0,
         billingChannel: null,
         warrantyLaborCost: 0,
         currency: 'AED',
@@ -156,10 +155,12 @@ describe('EstimatesPage - Price List baseline prefill (Phase 4, requested 2026-0
     renderPage();
 
     await screen.findByText('Create Estimate');
-    // Default customerType on the fixture is B2C, so priceB2C (220) is the suggested rate.
+    // Default customerType on the fixture is B2C - the Price List lookup is now scoped
+    // to it directly (super-admin pricing matrix rebuild, 2026-09-25), and the single
+    // row's `price` (220) is the suggested rate.
     const unitPriceInput = (await screen.findByDisplayValue('220')) as HTMLInputElement;
     expect(unitPriceInput).toBeInTheDocument();
-    expect(listPriceLists).toHaveBeenCalledWith('WASHING_MACHINE', 'REPAIR');
+    expect(listPriceLists).toHaveBeenCalledWith('WASHING_MACHINE', 'REPAIR', 'B2C');
   });
 
   it('leaves the line item blank when the Appliance Model has no Category set', async () => {

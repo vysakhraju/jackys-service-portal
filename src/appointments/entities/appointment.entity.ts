@@ -22,8 +22,8 @@ import { JobCard } from '../../job-cards/entities/job-card.entity';
 // exported under the same name here so every existing `import { JobType } from
 // '../entities/appointment.entity'` (create-appointment.dto.ts, this app's own tests)
 // keeps working unchanged; the string values themselves are untouched.
-import { JobType } from '../../master-data/entities/service-price-list.entity';
-export { JobType };
+import { JobType, CustomerType } from '../../master-data/entities/service-price-list.entity';
+export { JobType, CustomerType };
 
 // Appointment/Mobile/Job Card overhaul (2026-09-16) Phase 1, req. 3d/3e: COLLECTED_TO_WS
 // is the new intermediate status for the mobile "Collection to WS" action. Deliberately
@@ -79,11 +79,9 @@ export enum AppointmentCountry {
   KSA = 'KSA',
 }
 
-export enum CustomerType {
-  B2C = 'B2C',
-  B2B = 'B2B',
-  B2B_SALES_CHANNEL = 'B2B_SALES_CHANNEL',
-}
+// CustomerType moved to master-data/entities/service-price-list.entity.ts (Price List
+// matrix rebuild, 2026-09-25) for the same reason JobType moved there in Phase 3 -
+// re-exported above via the import block at the top of this file.
 
 // Service Desk gap flagged in REDTRA360_REVIEW.md - the vendor's demo had a single
 // channel-agnostic triage inbox (phone/email/WhatsApp/walk-in/portal-dealer all landing in

@@ -2,7 +2,7 @@
 // (src/appointments/entities/appointment.entity.ts, src/appointments/dto/*, and
 // src/technician/entities/technician-visit.entity.ts, src/technician/dto/*).
 
-import type { ApplianceCategoryValue, JobTypeValue } from './masterDataTypes';
+import type { ApplianceCategoryValue, JobTypeValue, CustomerTypeValue } from './masterDataTypes';
 import type { TaskPauseReasonValue } from './jobCardsTypes';
 // Price List rebuild (requested 2026-09-22, Phase 3) moved JOB_TYPES/JobTypeValue's
 // definition into masterDataTypes.ts so master-data (the Price List rebuild) and this
@@ -12,6 +12,11 @@ import type { TaskPauseReasonValue } from './jobCardsTypes';
 // also uses JobTypeValue itself below, e.g. on Appointment.jobType, so it's imported above
 // too, not just re-exported.)
 export { JOB_TYPES, ACTIVE_JOB_TYPES, ACTIVITY_JOB_TYPES, type JobTypeValue } from './masterDataTypes';
+// Super-admin pricing matrix rebuild (2026-09-25) moved CUSTOMER_TYPES/CustomerTypeValue
+// into masterDataTypes.ts the same way, since CustomerType is now a Price List row
+// dimension too, not just an appointment field. Re-exported here so every existing
+// `import { CUSTOMER_TYPES } from './appointmentsTypes'` keeps working unchanged.
+export { CUSTOMER_TYPES, type CustomerTypeValue } from './masterDataTypes';
 
 export const APPOINTMENT_TYPES = ['WARRANTY', 'OUT_OF_WARRANTY', 'AMC', 'PREVENTIVE', 'DISMANTLING','ACTIVITY'] as const;
 export type AppointmentTypeValue = (typeof APPOINTMENT_TYPES)[number];
@@ -69,8 +74,8 @@ export const GLANCE_TILES: readonly {
 export const APPOINTMENT_COUNTRIES = ['UAE', 'KSA'] as const;
 export type AppointmentCountryValue = (typeof APPOINTMENT_COUNTRIES)[number];
 
-export const CUSTOMER_TYPES = ['B2C', 'B2B', 'B2B_SALES_CHANNEL'] as const;
-export type CustomerTypeValue = (typeof CUSTOMER_TYPES)[number];
+// (CUSTOMER_TYPES/CustomerTypeValue are now defined in masterDataTypes.ts and
+// re-exported above - super-admin pricing matrix rebuild, 2026-09-25.)
 
 // Mirrors AppointmentChannel in src/appointments/entities/appointment.entity.ts - how the
 // request came in (Service Desk triage gap from REDTRA360_REVIEW.md).

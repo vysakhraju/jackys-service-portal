@@ -8,9 +8,10 @@ import { ServicePriceList } from '../master-data/entities/service-price-list.ent
 import { JobCardsService } from '../job-cards/job-cards.service';
 import { JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
-import { Appointment, CustomerType, JobType } from '../appointments/entities/appointment.entity';
+import { Appointment } from '../appointments/entities/appointment.entity';
+import { CustomerType, JobType } from '../master-data/entities/service-price-list.entity';
 import { GlLedgerService } from '../gl-ledger/gl-ledger.service';
-import { resolveAppointmentBillingChannel } from '../master-data/billing-channel-resolution.util';
+import { resolvePriceListRow } from '../master-data/billing-channel-resolution.util';
 
 @Injectable()
 export class DebitNotesService {
@@ -56,32 +57,27 @@ export class DebitNotesService {
   }
 
   /**
-   * Price List rebuild (2026-09-22, Phase 3) changed the row shape to Appliance
-   * Category x Job Type (dropping the loose model text field the original design used),
-   * so this now resolves the interdepartment labor rate the same way the rest of the app
-   * resolves a Price List row: via the appointment's linked ApplianceModel.category
-   * (req. 1e's proper FK, not the legacy modelNumber string) crossed with the
-   * appointment's own jobType. `warrantyLaborCost` is the correct column for this call
-   * site specifically - getOrCreateForJobCard already only reaches here for
-   * WarrantyStatus.IN_WARRANTY jobs (see the check above), so "labor cost while under
-   * warranty" is exactly the interdepartment recharge this Debit Note is for.
+   * Resolves the interdepartment labor rate via the appointment's linked
+   * ApplianceModel.category (never the legacy modelNumber string), crossed with the
+   * appointment's own jobType - and, per the super-admin pricing matrix rebuild
+   * (2026-09-25), always the B2B_SALES_CHANNEL row explicitly (this call site only ever
+   * reaches getOrCreateForJobCard's B2B_SALES_CHANNEL branch, see the check above, so a
+   * Debit Note is by definition always that customerType's rate, never plain B2C/B2B).
+   * `warrantyLaborCost` is the correct column for this call site specifically -
+   * getOrCreateForJobCard already only reaches here for WarrantyStatus.IN_WARRANTY jobs,
+   * so "labor cost while under warranty" is exactly the interdepartment recharge this
+   * Debit Note is for.
    *
-   * Billing logic + Billing Channel routing (2026-09-22, Phase 4): when the matched row
-   * has a Billing Channel configured, that channel's own `billingChannelRate` overrides
-   * the plain `warrantyLaborCost` - Finance needs to see which named interdepartment
-   * channel a recharge actually ran through, and at what rate, rather than always the
-   * generic one. billingChannelId/Name below are only ever set in that case.
-   *
-   * Phase 5 (2026-09-22): the appointment's own picked Billing Channel, when set, now
-   * overrides the row's own channel here too - see resolveAppointmentBillingChannel() in
-   * billing-channel-resolution.util.ts for the shared precedence/throw rules.
-   *
-   * Both failure modes below throw rather than silently charging 0 labor - a silent 0
-   * would understate every interdepartment recharge and is exactly the kind of gap a
-   * real Finance audit would flag, so these are hard stops instead: (1) the model has no
+   * Billing Channel routing: resolvePriceListRow() does the whole 4-dimension lookup,
+   * including the appointment's own picked Billing Channel (when set) - a channel-picked
+   * appointment resolves a distinct row for that exact channel, with its own
+   * warrantyLaborCost, rather than a plain row with an override field on it. Both
+   * failure modes throw rather than silently charging 0 labor - a silent 0 would
+   * understate every interdepartment recharge and is exactly the kind of gap a real
+   * Finance audit would flag, so these are hard stops instead: (1) the model has no
    * Category set yet (still a known, nullable-by-design gap from #301 - see
-   * ApplianceModel's own doc comment); (2) a Category resolves but no matching, active
-   * Price List row exists for it.
+   * ApplianceModel's own doc comment); (2) no matching active Price List row exists for
+   * the resolved combination.
    */
   private async resolveLaborCost(
     appointment: Appointment | null | undefined,
@@ -93,27 +89,24 @@ export class DebitNotesService {
       );
     }
     const jobType = appointment?.jobType ?? JobType.REPAIR;
-    const priceRow = await this.priceListRepository.findOne({
-      where: { category, jobType, isActive: true },
-      relations: { billingChannel: true },
+
+    // 2026-09-25 pricing matrix rebuild: this call site only ever reaches
+    // getOrCreateForJobCard's B2B_SALES_CHANNEL branch (see the doc comment above), so
+    // the lookup is explicit about that dimension rather than reading it off the
+    // appointment - a Debit Note is, by definition, always the B2B_SALES_CHANNEL
+    // interdepartment rate row, never the plain B2C/B2B one.
+    const resolved = await resolvePriceListRow(this.priceListRepository, {
+      category,
+      jobType,
+      customerType: CustomerType.B2B_SALES_CHANNEL,
+      billingChannelId: appointment?.billingChannelId ?? null,
+      billingChannelName: appointment?.billingChannel?.name ?? null,
     });
-    if (!priceRow) {
-      throw new BadRequestException(
-        `No active Price List row exists for ${category} / ${jobType} - add one before a Debit Note can be generated.`,
-      );
-    }
-    // Phase 5 (2026-09-22) - the appointment's own picked Billing Channel (when set)
-    // overrides the row's own configured channel here too, same precedence as
-    // InvoicingService.resolveBaselinePricing - see billing-channel-resolution.util.ts.
-    const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
-    if (resolved) {
-      return {
-        laborCost: resolved.rate,
-        billingChannelId: resolved.billingChannelId,
-        billingChannelName: resolved.billingChannelName,
-      };
-    }
-    return { laborCost: Number(priceRow.warrantyLaborCost), billingChannelId: null, billingChannelName: null };
+    return {
+      laborCost: Number(resolved.row.warrantyLaborCost),
+      billingChannelId: resolved.billingChannelId,
+      billingChannelName: resolved.billingChannelName,
+    };
   }
 
   async findById(id: string): Promise<DebitNote> {

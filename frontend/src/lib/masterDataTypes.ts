@@ -29,6 +29,13 @@ export type ApplianceCategoryValue = (typeof APPLIANCE_CATEGORIES)[number];
 export const JOB_TYPES = ['REPAIR', 'INSTALLATION', 'DELIVERY_INSTALLATION', 'MAINTENANCE'] as const;
 export type JobTypeValue = (typeof JOB_TYPES)[number];
 
+// Super-admin pricing matrix rebuild (2026-09-25) - moved here from appointmentsTypes.ts
+// (which now just re-exports it) for the same reason JOB_TYPES moved above: master-data
+// and the New Appointment popup share ONE list instead of two that could drift, and
+// CustomerType is now a Price List row dimension, not just an appointment field.
+export const CUSTOMER_TYPES = ['B2C', 'B2B', 'B2B_SALES_CHANNEL'] as const;
+export type CustomerTypeValue = (typeof CUSTOMER_TYPES)[number];
+
 // Job Type split (requested 2026-09-22), Phase 6 - MAINTENANCE soft-hidden per the locked
 // decision: it stays a valid JobType value in the database/enum (existing MAINTENANCE
 // appointments keep working untouched, including one still ON_SITE) but is dropped from
@@ -197,19 +204,19 @@ export interface CreateSparePartModelInput {
   modelName: string;
 }
 
-// === Service Price List === (rebuilt 2026-09-22, Phase 3 - see the backend
-// service-price-list.entity.ts's own doc comment for the row-shape reasoning). Row key
-// is now (category, jobType) instead of (activityType, modelId); billingChannelId/Rate
-// is an optional interdepartment-billing override on that same row.
+// === Service Price List === (super-admin pricing matrix rebuild, 2026-09-25 - see the
+// backend service-price-list.entity.ts's own doc comment for the row-shape reasoning).
+// Row key is now (category, jobType, customerType, billingChannelId) instead of
+// (category, jobType) - one row per combination, with a single `price` column instead of
+// priceB2B/priceB2C/billingChannelRate.
 export interface ServicePriceList {
   id: string;
   category: ApplianceCategoryValue;
   jobType: JobTypeValue;
-  priceB2B: number;
-  priceB2C: number;
+  customerType: CustomerTypeValue;
+  price: number;
   billingChannelId: string | null;
   billingChannel: BillingChannel | null;
-  billingChannelRate: number;
   warrantyLaborCost: number;
   currency: string | null;
   isActive: boolean;
@@ -220,10 +227,9 @@ export interface ServicePriceList {
 export interface CreatePriceListInput {
   category: ApplianceCategoryValue;
   jobType: JobTypeValue;
-  priceB2B?: number;
-  priceB2C?: number;
+  customerType: CustomerTypeValue;
   billingChannelId?: string;
-  billingChannelRate?: number;
+  price?: number;
   warrantyLaborCost?: number;
   currency?: string;
   isActive?: boolean;

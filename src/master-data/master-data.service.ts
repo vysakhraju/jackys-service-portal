@@ -5,7 +5,7 @@
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Like, ILike } from 'typeorm';
+import { Repository, In, Like, ILike, IsNull } from 'typeorm';
 import { ServiceCentre } from './entities/service-centre.entity';
 import { FaultSymptom } from './entities/fault-symptom.entity';
 import { SparePart } from './entities/spare-part.entity';
@@ -22,7 +22,7 @@ import { BillingChannel } from './entities/billing-channel.entity';
 import { AppointmentFieldConfig } from './entities/appointment-field-config.entity';
 import { Country } from './entities/service-centre.entity';
 import { ApplianceCategory } from './entities/fault-symptom.entity';
-import { JobType } from './entities/service-price-list.entity';
+import { JobType, CustomerType } from './entities/service-price-list.entity';
 import { NotificationTrigger, NotificationChannel } from './entities/notification-template.entity';
 import { RecoveryCategory } from './entities/component-yield-matrix.entity';
 import { User, UserStatus } from '../auth/entities/user.entity';
@@ -292,52 +292,70 @@ export class MasterDataService {
     return this.sparePartModelRepository.find({ relations: { spareParts: true } });
   }
 
-  // Service Price List - Price List rebuild (requested 2026-09-22, Phase 3). Same
+  // Service Price List - super-admin pricing matrix rebuild (2026-09-25), replacing the
+  // Phase 3 (category, jobType)-keyed row (baked-in priceB2B/priceB2C/billingChannelRate)
+  // with one row per (category, jobType, customerType, billingChannelId) and a single
+  // `price` column - see service-price-list.entity.ts's own doc comment. Same
   // create/findAll(active-only, optionally filtered)/update/soft-delete shape as City/
-  // BillingChannel above - the original design (create + list-by-activityType only, no
-  // update/delete route at all) predates this rebuild and never had one, so this is a
-  // real capability add, not just a schema change. Uniqueness is on (category, jobType)
-  // now, the entity's own doc comment covers why.
+  // BillingChannel. Uniqueness is a DB unique index on all 4 columns, but Postgres treats
+  // each NULL billingChannelId as distinct - so the duplicate check below is what
+  // actually enforces "at most one null-channel row per (category,jobType,customerType)"
+  // in practice, same null-safe pattern already used elsewhere in this app.
   async createServicePriceList(data: Partial<ServicePriceList>): Promise<ServicePriceList> {
+    const billingChannelId = data.billingChannelId ?? null;
     const existing = await this.servicePriceListRepository.findOne({
-      where: { category: data.category, jobType: data.jobType },
+      where: {
+        category: data.category,
+        jobType: data.jobType,
+        customerType: data.customerType,
+        billingChannelId: billingChannelId ?? IsNull(),
+      },
     });
     if (existing) {
       if (!existing.isActive) {
-        // Reactivate-on-create bug fix (2026-09-24): the unique (category, jobType)
-        // index on this entity is a real DB constraint, not just an app-level check, and
-        // it applies regardless of isActive - soft-deleting a row never frees its slot.
-        // Before this fix, a deleted row blocked its combo forever: create() threw
-        // "already exists - edit that row instead", but findAllPriceLists() only lists
-        // isActive rows, so the row this error points at is invisible and un-editable in
-        // the UI - a permanent dead end for anyone who ever clicked Delete once. Reviving
-        // the old row with the newly submitted values (instead of trying to insert a
-        // second row for the same combo, which the DB would reject anyway) is the only
-        // way back.
-        await this.servicePriceListRepository.update(existing.id, { ...data, isActive: true });
+        // Reactivate-on-create bug fix (2026-09-24, preserved through the matrix
+        // rebuild): the unique index on this entity is a real DB constraint, not just an
+        // app-level check, and it applies regardless of isActive - soft-deleting a row
+        // never frees its slot. Before this fix, a deleted row blocked its combo
+        // forever: create() threw "already exists - edit that row instead", but
+        // findAllPriceLists() only lists isActive rows, so the row this error points at
+        // is invisible and un-editable in the UI - a permanent dead end for anyone who
+        // ever clicked Delete once. Reviving the old row with the newly submitted values
+        // (instead of trying to insert a second row for the same combo, which the DB
+        // would reject anyway) is the only way back.
+        await this.servicePriceListRepository.update(existing.id, { ...data, billingChannelId, isActive: true });
         return this.findPriceListById(existing.id);
       }
+      const channelSuffix = billingChannelId ? ' on that Billing Channel' : '';
       throw new ConflictException(
-        `A price list row for ${data.category} / ${data.jobType} already exists - edit that row instead of creating a duplicate.`,
+        `A price list row for ${data.category} / ${data.jobType} / ${data.customerType}${channelSuffix} already exists - edit that row instead of creating a duplicate.`,
       );
     }
-    const price = this.servicePriceListRepository.create(data);
+    const price = this.servicePriceListRepository.create({ ...data, billingChannelId });
     return this.servicePriceListRepository.save(price);
   }
 
-  async findAllPriceLists(category?: ApplianceCategory, jobType?: JobType): Promise<ServicePriceList[]> {
+  async findAllPriceLists(
+    category?: ApplianceCategory,
+    jobType?: JobType,
+    customerType?: CustomerType,
+  ): Promise<ServicePriceList[]> {
     const query = this.servicePriceListRepository
       .createQueryBuilder('price')
       .leftJoinAndSelect('price.billingChannel', 'billingChannel')
       .where('price.isActive = :isActive', { isActive: true })
       .orderBy('price.category', 'ASC')
-      .addOrderBy('price.jobType', 'ASC');
+      .addOrderBy('price.jobType', 'ASC')
+      .addOrderBy('price.customerType', 'ASC');
 
     if (category) {
       query.andWhere('price.category = :category', { category });
     }
     if (jobType) {
       query.andWhere('price.jobType = :jobType', { jobType });
+    }
+    if (customerType) {
+      query.andWhere('price.customerType = :customerType', { customerType });
     }
 
     return query.getMany();
@@ -353,7 +371,11 @@ export class MasterDataService {
 
   async updatePriceList(id: string, data: Partial<ServicePriceList>): Promise<ServicePriceList> {
     await this.findPriceListById(id);
-    await this.servicePriceListRepository.update(id, data);
+    // category/jobType/customerType/billingChannelId are the row's identity (the unique
+    // index) - never mutated via update, only via delete+recreate under a new key. See
+    // CreatePriceListDto's own comment on UpdatePriceListDto.
+    const { category, jobType, customerType, billingChannelId, ...patch } = data;
+    await this.servicePriceListRepository.update(id, patch);
     return this.findPriceListById(id);
   }
 
@@ -417,6 +439,13 @@ export class MasterDataService {
         const category = categoryRaw as ApplianceCategory;
         const jobType = jobTypeRaw as JobType;
 
+        const customerTypeRaw = normalizeEnumValue(row.customerType);
+        if (!Object.values(CustomerType).includes(customerTypeRaw as CustomerType)) {
+          errors.push(`Row ${rowNum}: unknown Customer Type "${row.customerType ?? ''}"`);
+          continue;
+        }
+        const customerType = customerTypeRaw as CustomerType;
+
         let billingChannelId: string | null | undefined;
         const billingChannelName = row.billingChannel !== undefined ? String(row.billingChannel).trim() : '';
         if (billingChannelName) {
@@ -433,23 +462,43 @@ export class MasterDataService {
           billingChannelId = null; // column present but blank - explicit clear
         }
 
-        const priceB2B = parseOptionalNumber(row.priceB2B, 'B2B Price');
-        const priceB2C = parseOptionalNumber(row.priceB2C, 'B2C Price');
-        const billingChannelRate = parseOptionalNumber(row.billingChannelRate, 'Channel Rate');
+        const price = parseOptionalNumber(row.price, 'Price');
         const warrantyLaborCost = parseOptionalNumber(row.warrantyLaborCost, 'Warranty Labor Cost');
         const currency =
           row.currency !== undefined && String(row.currency).trim() !== '' ? String(row.currency).trim() : undefined;
+        let isActive: boolean | undefined;
+        if (row.isActive !== undefined && String(row.isActive).trim() !== '') {
+          const activeRaw = String(row.isActive).trim().toUpperCase();
+          if (['Y', 'YES', 'TRUE', '1'].includes(activeRaw)) {
+            isActive = true;
+          } else if (['N', 'NO', 'FALSE', '0'].includes(activeRaw)) {
+            isActive = false;
+          } else {
+            errors.push(`Row ${rowNum}: Active "${row.isActive}" is not Y/N`);
+            continue;
+          }
+        }
 
-        const existing = await this.servicePriceListRepository.findOne({ where: { category, jobType } });
+        // Matches the entity's own unique index (category, jobType, customerType,
+        // billingChannelId) - null-safe on billingChannelId, same as
+        // createServicePriceList above, since TypeORM's findOne treats an undefined
+        // where-value as "column not filtered" rather than "column is null".
+        const existing = await this.servicePriceListRepository.findOne({
+          where: {
+            category,
+            jobType,
+            customerType,
+            billingChannelId: (billingChannelId ?? null) ?? IsNull(),
+          },
+        });
 
         if (existing) {
           const patch: Partial<ServicePriceList> = {};
-          if (priceB2B !== undefined) patch.priceB2B = priceB2B;
-          if (priceB2C !== undefined) patch.priceB2C = priceB2C;
+          if (price !== undefined) patch.price = price;
           if (billingChannelId !== undefined) patch.billingChannelId = billingChannelId;
-          if (billingChannelRate !== undefined) patch.billingChannelRate = billingChannelRate;
           if (warrantyLaborCost !== undefined) patch.warrantyLaborCost = warrantyLaborCost;
           if (currency !== undefined) patch.currency = currency;
+          if (isActive !== undefined) patch.isActive = isActive;
           if (Object.keys(patch).length > 0) {
             await this.servicePriceListRepository.update(existing.id, patch);
           }
@@ -458,12 +507,12 @@ export class MasterDataService {
           const newRow = this.servicePriceListRepository.create({
             category,
             jobType,
-            priceB2B: priceB2B ?? 0,
-            priceB2C: priceB2C ?? 0,
+            customerType,
+            price: price ?? 0,
             billingChannelId: billingChannelId ?? null,
-            billingChannelRate: billingChannelRate ?? 0,
             warrantyLaborCost: warrantyLaborCost ?? 0,
             currency: currency ?? undefined,
+            isActive: isActive ?? true,
           });
           await this.servicePriceListRepository.save(newRow);
           created++;

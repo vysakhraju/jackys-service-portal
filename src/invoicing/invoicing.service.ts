@@ -4,13 +4,13 @@ import { Repository } from 'typeorm';
 import { Invoice, InvoiceStatus, PaymentMethod, InvoicePriceSource } from './entities/invoice.entity';
 import { Payment } from './entities/payment.entity';
 import { Estimate, EstimateStatus } from '../estimates/entities/estimate.entity';
-import { ServicePriceList, JobType } from '../master-data/entities/service-price-list.entity';
+import { ServicePriceList, JobType, CustomerType } from '../master-data/entities/service-price-list.entity';
 import { JobCardsService } from '../job-cards/job-cards.service';
 import { JobCard, JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
-import { Appointment, CustomerType } from '../appointments/entities/appointment.entity';
+import { Appointment } from '../appointments/entities/appointment.entity';
 import { GlLedgerService } from '../gl-ledger/gl-ledger.service';
-import { resolveAppointmentBillingChannel } from '../master-data/billing-channel-resolution.util';
+import { resolvePriceListRow } from '../master-data/billing-channel-resolution.util';
 
 const B2B_CREDIT_TERM_DAYS = 30;
 
@@ -92,8 +92,9 @@ export class InvoicingService {
   }
 
   /**
-   * Billing logic + Billing Channel routing (2026-09-22, Phase 4). Real gap found before
-   * writing this: an OOW Job Card can reach QC_PASSED/DELIVERED with NO Estimate at all -
+   * Billing logic + Billing Channel routing (2026-09-22, Phase 4; rebuilt 2026-09-25 for
+   * the super-admin pricing matrix). Real gap found before Phase 4 was written: an OOW
+   * Job Card can reach QC_PASSED/DELIVERED with NO Estimate at all -
    * JobCardsService.approveCustomer's FR-06 manual stopgap sets customerApproved=true
    * directly, bypassing the Estimate flow entirely - and getOrCreateForJobCard used to
    * hard-block ("cannot determine an invoice amount") whenever that happened. This
@@ -101,24 +102,15 @@ export class InvoicingService {
    * one exists, still always overrides this (the "billing tiebreaker" decision locked in
    * the original 2026-09-22 request) - this method is only ever called when none does.
    *
-   * Resolution mirrors DebitNotesService.resolveLaborCost exactly: category from the
-   * appointment's linked ApplianceModel (never the legacy modelNumber string), crossed
-   * with the appointment's own jobType. Same hard-stop philosophy on both failure modes
-   * (no Category set, no matching active Price List row) - a silently-invented price is
-   * a worse outcome than a clear 400 telling staff what master-data gap to fix first.
-   *
-   * Billing Channel routing: for a B2B_SALES_CHANNEL job (billed externally to the
-   * channel/department - only IN_WARRANTY B2B_SALES_CHANNEL jobs go through Debit Notes
-   * instead), a Billing Channel configured on the matched row overrides the plain
-   * priceB2B with that channel's own billingChannelRate, and the invoice records which
-   * channel. Plain B2B/B2C jobs never look at billingChannelId - it's specifically an
-   * interdepartment concept, per how this column is named/scoped.
-   *
-   * Phase 5 (2026-09-22): the appointment's own picked Billing Channel
-   * (Appointment.billingChannelId, see that entity), when set, now overrides the row's
-   * own channel - resolved via resolveAppointmentBillingChannel(), which also throws if
-   * the picked channel has no defaultRate configured. Still scoped to B2B_SALES_CHANNEL
-   * only, same as the row-level mechanism it extends.
+   * Category comes from the appointment's linked ApplianceModel (never the legacy
+   * modelNumber string), crossed with the appointment's own jobType and customerType -
+   * all 4 Price List dimensions now (category, jobType, customerType, billingChannelId)
+   * are resolved in one call to resolvePriceListRow(), which does the whole lookup
+   * (including "channel picked but no row configured for it") and returns the single
+   * `price` column directly - no more client-side B2B/B2C/channel branching. Same
+   * hard-stop philosophy on every failure mode (no Category set, no matching active
+   * Price List row, no row for a picked channel) - a silently-invented price is a worse
+   * outcome than a clear 400 telling staff what master-data gap to fix first.
    */
   private async resolveBaselinePricing(jobCard: JobCard): Promise<{
     subtotal: number;
@@ -143,42 +135,34 @@ export class InvoicingService {
       );
     }
     const jobType = appointment?.jobType ?? JobType.REPAIR;
-    const priceRow = await this.priceListRepository.findOne({
-      where: { category, jobType, isActive: true },
-      relations: { billingChannel: true },
+    const customerType = appointment?.customerType ?? CustomerType.B2C;
+
+    // 2026-09-25 pricing matrix rebuild: customerType is now baked into the Price List
+    // lookup itself (one row per Category/JobType/CustomerType/BillingChannel), so there's
+    // no more separate B2B/B2C branch here - resolvePriceListRow does the whole lookup,
+    // including the "channel picked but no row configured for it" hard-stop.
+    const resolved = await resolvePriceListRow(this.priceListRepository, {
+      category,
+      jobType,
+      customerType,
+      billingChannelId: appointment?.billingChannelId ?? null,
+      billingChannelName: appointment?.billingChannel?.name ?? null,
     });
-    if (!priceRow) {
-      throw new BadRequestException(
-        `No active Price List row exists for ${category} / ${jobType} - add one before an invoice can be generated without an approved Estimate.`,
-      );
-    }
-
-    let billingChannelId: string | null = null;
-    let billingChannelName: string | null = null;
-    let basePrice: number;
-
-    // 2026-09-25 revision: Billing Channel resolution is no longer gated on
-    // customerType === B2B_SALES_CHANNEL - any appointment (B2C or B2B included) that
-    // has a Billing Channel picked bills through that channel's Price List rate. See
-    // billing-channel-resolution.util.ts for the full "channel selects, Price List
-    // supplies the rate" design and why the old channel-defaultRate override was retired.
-    const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
-    if (resolved) {
-      basePrice = resolved.rate;
-      billingChannelId = resolved.billingChannelId;
-      billingChannelName = resolved.billingChannelName;
-    } else if (appointment?.customerType === CustomerType.B2C) {
-      basePrice = Number(priceRow.priceB2C);
-    } else {
-      basePrice = Number(priceRow.priceB2B);
-    }
+    const basePrice = Number(resolved.row.price);
 
     const vatRate = Number(appointment?.serviceCentre?.vatRate ?? 5);
     const subtotal = Math.round(basePrice * 100) / 100;
     const vatAmount = Math.round(subtotal * (vatRate / 100) * 100) / 100;
     const amount = Math.round((subtotal + vatAmount) * 100) / 100;
 
-    return { subtotal, vatRate, vatAmount, amount, billingChannelId, billingChannelName };
+    return {
+      subtotal,
+      vatRate,
+      vatAmount,
+      amount,
+      billingChannelId: resolved.billingChannelId,
+      billingChannelName: resolved.billingChannelName,
+    };
   }
 
   /**
@@ -244,32 +228,31 @@ export class InvoicingService {
           `Line item for Appliance Model ${line.applianceModelId} on Job Card ${jobCard.jobCardNumber} has no Category set - set one on the Appliance Model master before an invoice can be generated.`,
         );
       }
-      const priceRow = await this.priceListRepository.findOne({
-        where: { category, jobType: line.jobType, isActive: true },
-        relations: { billingChannel: true },
-      });
-      if (!priceRow) {
-        throw new BadRequestException(
-          `No active Price List row exists for ${category} / ${line.jobType} - add one before an invoice can be generated for Job Card ${jobCard.jobCardNumber}.`,
-        );
-      }
+      const customerType = appointment?.customerType ?? CustomerType.B2C;
 
-      let billingChannelId: string | null = null;
-      let billingChannelName: string | null = null;
-      let unitPrice: number;
-
-      // 2026-09-25 revision - same "channel selects, Price List supplies the rate"
-      // change as resolveBaselinePricing above, no longer gated on customerType.
-      const resolved = resolveAppointmentBillingChannel(appointment, priceRow);
-      if (resolved) {
-        unitPrice = resolved.rate;
-        billingChannelId = resolved.billingChannelId;
-        billingChannelName = resolved.billingChannelName;
-      } else if (appointment?.customerType === CustomerType.B2C) {
-        unitPrice = Number(priceRow.priceB2C);
-      } else {
-        unitPrice = Number(priceRow.priceB2B);
+      // 2026-09-25 pricing matrix rebuild - same "customerType baked into the lookup,
+      // no separate B2B/B2C branch" change as resolveBaselinePricing above, applied
+      // per-line since each line can carry its own category/jobType.
+      let lineResolved;
+      try {
+        lineResolved = await resolvePriceListRow(this.priceListRepository, {
+          category,
+          jobType: line.jobType,
+          customerType,
+          billingChannelId: appointment?.billingChannelId ?? null,
+          billingChannelName: appointment?.billingChannel?.name ?? null,
+        });
+      } catch (err) {
+        if (err instanceof BadRequestException) {
+          throw new BadRequestException(
+            `${err.message} (Job Card ${jobCard.jobCardNumber}, line for Appliance Model ${line.applianceModelId})`,
+          );
+        }
+        throw err;
       }
+      const unitPrice = Number(lineResolved.row.price);
+      const billingChannelId = lineResolved.billingChannelId;
+      const billingChannelName = lineResolved.billingChannelName;
 
       const lineTotal = Math.round(unitPrice * line.quantity * 100) / 100;
       subtotal = Math.round((subtotal + lineTotal) * 100) / 100;

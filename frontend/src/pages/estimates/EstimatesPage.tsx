@@ -224,25 +224,34 @@ function CreateEstimateCard({
   const category = jobCard.appointment?.applianceModel?.category ?? null;
   const jobType = jobCard.appointment?.jobType;
   const customerType = jobCard.appointment?.customerType;
+  const billingChannelId = jobCard.appointment?.billingChannelId ?? null;
+  // Super-admin pricing matrix rebuild (2026-09-25): customerType is now baked into the
+  // Price List lookup itself, so the query is scoped to it too, and the row shape has a
+  // single `price` column instead of priceB2B/priceB2C/billingChannelRate - no more
+  // client-side B2B/B2C/channel branching. A category/jobType/customerType combo can now
+  // legitimately return >1 active row (the plain row plus a channel-specific one), so pick
+  // the row matching the appointment's own picked Billing Channel first, falling back to
+  // the plain (no-channel) row - same precedence the backend's resolvePriceListRow enforces.
   const priceListQuery = useQuery({
-    queryKey: ['master-data', 'price-lists', category, jobType],
-    queryFn: () => listPriceLists(category ?? undefined, jobType),
-    enabled: !!category && !!jobType,
+    queryKey: ['master-data', 'price-lists', category, jobType, customerType],
+    queryFn: () => listPriceLists(category ?? undefined, jobType, customerType),
+    enabled: !!category && !!jobType && !!customerType,
   });
 
   useEffect(() => {
-    const row = priceListQuery.data?.find((r) => r.isActive);
-    if (!row) return;
+    const rows = priceListQuery.data?.filter((r) => r.isActive) ?? [];
+    if (rows.length === 0) return;
     // Only prefill while the form is still untouched - never clobber what staff already
     // typed (e.g. if they started editing before this query resolved).
     const current = getValues('lineItems');
     if (current.length !== 1 || current[0].description !== '' || current[0].unitPrice !== 0) return;
 
-    const usesChannelRate = customerType === 'B2B_SALES_CHANNEL' && !!row.billingChannelId;
-    const suggestedPrice = usesChannelRate ? row.billingChannelRate : customerType === 'B2C' ? row.priceB2C : row.priceB2B;
+    const row = (billingChannelId && rows.find((r) => r.billingChannelId === billingChannelId)) || rows.find((r) => !r.billingChannelId);
+    if (!row) return;
+
     const label = `${(category ?? '').replace(/_/g, ' ')} ${(jobType ?? '').replace(/_/g, ' ')} (Price List baseline)`;
-    reset({ lineItems: [{ description: label, quantity: 1, unitPrice: suggestedPrice }] });
-  }, [priceListQuery.data, category, jobType, customerType, getValues, reset]);
+    reset({ lineItems: [{ description: label, quantity: 1, unitPrice: row.price }] });
+  }, [priceListQuery.data, category, jobType, customerType, billingChannelId, getValues, reset]);
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">

@@ -1,13 +1,17 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsUUID, IsString, IsNumber, IsBoolean, MaxLength } from 'class-validator';
 import { ApplianceCategory } from '../entities/fault-symptom.entity';
-import { JobType } from '../entities/service-price-list.entity';
+import { JobType, CustomerType } from '../entities/service-price-list.entity';
 
-// Price List rebuild (requested 2026-09-22, Phase 3) - see service-price-list.entity.ts's
-// own doc comment for the full reasoning behind this row shape. `category`/`jobType`
-// together are the row's business key (unique index on the entity); creating a second
-// row for a combo that already has one is rejected by the service, same pattern as
-// City/BillingChannel's own name-uniqueness check.
+// Super-admin pricing matrix rebuild (2026-09-25) - replaces the Phase 3
+// (category,jobType)-keyed row (with baked-in priceB2B/priceB2C/billingChannelRate
+// columns) with one row per (category, jobType, customerType, billingChannelId) tuple
+// and a single `price` column - see service-price-list.entity.ts's own doc comment for
+// the full reasoning. Those 4 fields together are the row's business key (unique index
+// on the entity, backed by an app-level duplicate check in master-data.service.ts since
+// Postgres treats each NULL billingChannelId as distinct in a unique index); creating a
+// second row for a combo that already has one is rejected by the service, same pattern
+// as City/BillingChannel's own name-uniqueness check.
 export class CreatePriceListDto {
   @ApiProperty({ enum: ApplianceCategory })
   @IsEnum(ApplianceCategory)
@@ -17,27 +21,21 @@ export class CreatePriceListDto {
   @IsEnum(JobType)
   jobType: JobType;
 
-  @ApiProperty({ required: false, default: 0 })
-  @IsOptional()
-  @IsNumber()
-  priceB2B?: number;
-
-  @ApiProperty({ required: false, default: 0 })
-  @IsOptional()
-  @IsNumber()
-  priceB2C?: number;
+  @ApiProperty({ enum: CustomerType })
+  @IsEnum(CustomerType)
+  customerType: CustomerType;
 
   @ApiPropertyOptional({
-    description: 'Billing Channel this interdepartment rate applies to. Leave unset if this row has no channel-specific rate.',
+    description: 'Billing Channel this rate applies to. Leave unset for the plain (non-channel) rate for this Category/JobType/CustomerType.',
   })
   @IsOptional()
   @IsUUID()
   billingChannelId?: string;
 
-  @ApiProperty({ required: false, default: 0, description: 'Rate used when billed via billingChannelId, instead of priceB2B.' })
+  @ApiProperty({ required: false, default: 0, description: 'The single price for this Category/JobType/CustomerType/BillingChannel combination.' })
   @IsOptional()
   @IsNumber()
-  billingChannelRate?: number;
+  price?: number;
 
   @ApiProperty({ required: false, default: 0 })
   @IsOptional()
@@ -56,8 +54,9 @@ export class CreatePriceListDto {
   isActive?: boolean;
 }
 
-// category/jobType are excluded from the partial update surface deliberately - they're
+// category/jobType/customerType/billingChannelId are excluded from the partial update
+// surface deliberately (enforced in master-data.service.ts's updatePriceList) - they're
 // the row's identity (the unique index); changing them on an existing row would just be
-// a delete-and-recreate under a different key, so the service treats this as
-// rates/status only, same as every other master's Update DTO in this app.
+// a delete-and-recreate under a different key, so this DTO is rates/status only, same
+// as every other master's Update DTO in this app.
 export class UpdatePriceListDto extends PartialType(CreatePriceListDto) {}

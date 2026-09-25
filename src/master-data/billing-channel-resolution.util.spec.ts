@@ -1,66 +1,71 @@
 import { BadRequestException } from '@nestjs/common';
-import { resolveAppointmentBillingChannel } from './billing-channel-resolution.util';
+import { Repository } from 'typeorm';
+import { resolvePriceListRow } from './billing-channel-resolution.util';
+import { ServicePriceList, JobType, CustomerType } from './entities/service-price-list.entity';
+import { ApplianceCategory } from './entities/fault-symptom.entity';
 
-describe('resolveAppointmentBillingChannel', () => {
-  const priceRow = (overrides: any = {}) =>
+describe('resolvePriceListRow', () => {
+  const makeRepo = (row: any) =>
     ({
-      id: 'price-1',
-      billingChannelId: null,
-      billingChannelRate: 0,
-      billingChannel: null,
-      ...overrides,
-    } as any);
+      findOne: jest.fn().mockResolvedValue(row),
+    } as unknown as Repository<ServicePriceList>);
 
-  it('returns null when neither the appointment nor the Price List row has a channel', () => {
-    const result = resolveAppointmentBillingChannel({} as any, priceRow());
-    expect(result).toBeNull();
+  const baseParams = {
+    category: ApplianceCategory.REFRIGERATOR,
+    jobType: JobType.REPAIR,
+    customerType: CustomerType.B2C,
+    billingChannelId: null,
+  };
+
+  it('resolves a plain (no billing channel) row and passes an IsNull() operator for billingChannelId', async () => {
+    const row = { id: 'p1', price: 100, billingChannelId: null, billingChannel: null } as any;
+    const repo = makeRepo(row);
+
+    const result = await resolvePriceListRow(repo, baseParams);
+
+    expect(result).toEqual({ row, billingChannelId: null, billingChannelName: null });
+    const where = (repo.findOne as jest.Mock).mock.calls[0][0].where;
+    expect(where.category).toBe(ApplianceCategory.REFRIGERATOR);
+    expect(where.jobType).toBe(JobType.REPAIR);
+    expect(where.customerType).toBe(CustomerType.B2C);
+    expect(where.isActive).toBe(true);
+    // IsNull() operator, not a raw null - TypeORM would otherwise ignore the filter.
+    expect(where.billingChannelId).toBeDefined();
+    expect(typeof where.billingChannelId).toBe('object');
   });
 
-  it('returns null when the appointment is null/undefined and the row has no channel', () => {
-    expect(resolveAppointmentBillingChannel(null, priceRow())).toBeNull();
-    expect(resolveAppointmentBillingChannel(undefined, priceRow())).toBeNull();
-  });
-
-  it("falls back to the Price List row's own channel/rate when the appointment has no channel picked", () => {
-    const row = priceRow({ billingChannelId: 'bc-row', billingChannelRate: 80, billingChannel: { id: 'bc-row', name: 'Row Channel' } });
-
-    const result = resolveAppointmentBillingChannel({} as any, row);
-
-    expect(result).toEqual({ billingChannelId: 'bc-row', billingChannelName: 'Row Channel', rate: 80 });
-  });
-
-  it('uses the Price List row rate when the appointment picks the SAME channel the row is configured for', () => {
-    const row = priceRow({ billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } });
-    const appointment = { billingChannelId: 'bc-jer-c', billingChannel: { id: 'bc-jer-c', name: 'JER-C' } } as any;
-
-    const result = resolveAppointmentBillingChannel(appointment, row);
-
-    expect(result).toEqual({ billingChannelId: 'bc-jer-c', billingChannelName: 'JER-C', rate: 55 });
-  });
-
-  it('throws rather than silently billing plain/other-channel rate when the picked channel has no matching Price List row rate', () => {
-    const appointment = { billingChannelId: 'bc-jer-c', billingChannel: { id: 'bc-jer-c', name: 'JER-C' } } as any;
-
-    expect(() => resolveAppointmentBillingChannel(appointment, priceRow())).toThrow(BadRequestException);
-    expect(() => resolveAppointmentBillingChannel(appointment, priceRow())).toThrow(/JER-C/);
-  });
-
-  it('throws when the picked channel differs from the channel the Price List row is actually configured for', () => {
-    const row = priceRow({ billingChannelId: 'bc-other', billingChannelRate: 80, billingChannel: { id: 'bc-other', name: 'Other Channel' } });
-    const appointment = { billingChannelId: 'bc-jer-c', billingChannel: { id: 'bc-jer-c', name: 'JER-C' } } as any;
-
-    expect(() => resolveAppointmentBillingChannel(appointment, row)).toThrow(BadRequestException);
-  });
-
-  it('never reads BillingChannel.defaultRate at all - a channel-level flat rate no longer drives pricing', () => {
-    const row = priceRow({ billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } });
-    const appointment = {
+  it('resolves a channel-specific row, filtering on the exact billingChannelId', async () => {
+    const row = {
+      id: 'p2',
+      price: 55,
       billingChannelId: 'bc-jer-c',
-      billingChannel: { id: 'bc-jer-c', name: 'JER-C', defaultRate: 0 },
+      billingChannel: { id: 'bc-jer-c', name: 'JER-C' },
     } as any;
+    const repo = makeRepo(row);
 
-    const result = resolveAppointmentBillingChannel(appointment, row);
+    const result = await resolvePriceListRow(repo, { ...baseParams, billingChannelId: 'bc-jer-c' });
 
-    expect(result?.rate).toBe(55);
+    expect(result).toEqual({ row, billingChannelId: 'bc-jer-c', billingChannelName: 'JER-C' });
+    const where = (repo.findOne as jest.Mock).mock.calls[0][0].where;
+    expect(where.billingChannelId).toBe('bc-jer-c');
+  });
+
+  it('throws a clear 400 naming the combination when no channel is picked and no row matches', async () => {
+    const repo = makeRepo(null);
+
+    await expect(resolvePriceListRow(repo, baseParams)).rejects.toThrow(BadRequestException);
+    await expect(resolvePriceListRow(repo, baseParams)).rejects.toThrow(/REFRIGERATOR.*REPAIR.*B2C/);
+  });
+
+  it('throws naming the picked channel, and never silently falls back to the non-channel rate, when a channel is picked but no matching row exists', async () => {
+    const repo = makeRepo(null);
+
+    await expect(
+      resolvePriceListRow(repo, {
+        ...baseParams,
+        billingChannelId: 'bc-jer-c',
+        billingChannelName: 'JER-C',
+      }),
+    ).rejects.toThrow(/JER-C/);
   });
 });

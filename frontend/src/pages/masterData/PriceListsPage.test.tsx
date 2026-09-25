@@ -56,16 +56,18 @@ function mockCapabilities(capabilities: string[], fullAccess = false) {
   });
 }
 
+// Super-admin pricing matrix rebuild (2026-09-25) - one row per (category, jobType,
+// customerType, billingChannelId), single `price` column instead of
+// priceB2B/priceB2C/billingChannelRate.
 function priceRow(overrides: Partial<ServicePriceList> = {}): ServicePriceList {
   return {
     id: 'pl-1',
     category: 'REFRIGERATOR',
     jobType: 'REPAIR',
-    priceB2B: 100,
-    priceB2C: 150,
+    customerType: 'B2C',
+    price: 100,
     billingChannelId: null,
     billingChannel: null,
-    billingChannelRate: 0,
     warrantyLaborCost: 20,
     currency: 'AED',
     isActive: true,
@@ -130,12 +132,12 @@ describe('PriceListsPage - action visibility by capability/role', () => {
 });
 
 describe('PriceListsPage - list filters', () => {
-  it('refetches with the chosen category/job type filters', async () => {
+  it('refetches with the chosen category/job type/customer type filters', async () => {
     renderPage();
     await screen.findByText('100.00');
 
     fireEvent.change(screen.getByDisplayValue('All categories'), { target: { value: 'AC' } });
-    await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith('AC', undefined));
+    await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith('AC', undefined, undefined));
 
     // Job Type split (2026-09-22) Phase 6 - MAINTENANCE is soft-hidden out of every
     // NEW-pick dropdown, including this filter (ACTIVE_JOB_TYPES, not the full JobType
@@ -143,19 +145,22 @@ describe('PriceListsPage - list filters', () => {
     // stays a valid stored value on any pre-existing row; this filter just can no longer
     // pick it (no live ServicePriceList rows reference it today, so nothing to filter to).
     fireEvent.change(screen.getByDisplayValue('All job types'), { target: { value: 'INSTALLATION' } });
-    await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith('AC', 'INSTALLATION'));
+    await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith('AC', 'INSTALLATION', undefined));
+
+    fireEvent.change(screen.getByDisplayValue('All customer types'), { target: { value: 'B2B' } });
+    await waitFor(() => expect(listPriceLists).toHaveBeenCalledWith('AC', 'INSTALLATION', 'B2B'));
   });
 });
 
 describe('PriceListsPage - create/edit/delete', () => {
-  it('creates a new price row via the modal form, including an optional billing channel', async () => {
+  it('creates a new price row via the modal form, including customer type and an optional billing channel', async () => {
     vi.mocked(createPriceList).mockResolvedValue(priceRow({ id: 'pl-2' }));
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: '+ New Price Row' }));
 
-    fireEvent.change(screen.getByLabelText('B2B Price'), { target: { value: '200' } });
-    fireEvent.change(screen.getByLabelText('B2C Price'), { target: { value: '250' } });
+    fireEvent.change(screen.getByLabelText('Customer Type'), { target: { value: 'B2B' } });
+    fireEvent.change(screen.getByLabelText('Price'), { target: { value: '200' } });
 
     const billingChannelPicker = (await screen.findAllByTestId('name-picker-input'))[0];
     fireEvent.focus(billingChannelPicker);
@@ -168,8 +173,8 @@ describe('PriceListsPage - create/edit/delete', () => {
         expect.objectContaining({
           category: 'REFRIGERATOR',
           jobType: 'REPAIR',
-          priceB2B: 200,
-          priceB2C: 250,
+          customerType: 'B2B',
+          price: 200,
           billingChannelId: 'bc-1',
         }),
       ),
@@ -177,7 +182,7 @@ describe('PriceListsPage - create/edit/delete', () => {
   });
 
   it('opens pre-filled from the row and saves an edit via updatePriceList', async () => {
-    vi.mocked(updatePriceList).mockResolvedValue(priceRow({ priceB2B: 175 }));
+    vi.mocked(updatePriceList).mockResolvedValue(priceRow({ price: 175 }));
     renderPage();
 
     fireEvent.click(await screen.findByText('Edit'));
@@ -187,7 +192,7 @@ describe('PriceListsPage - create/edit/delete', () => {
     fireEvent.click(screen.getByText('Save changes'));
 
     await waitFor(() =>
-      expect(updatePriceList).toHaveBeenCalledWith('pl-1', expect.objectContaining({ priceB2B: 175 })),
+      expect(updatePriceList).toHaveBeenCalledWith('pl-1', expect.objectContaining({ price: 175 })),
     );
   });
 
@@ -211,8 +216,9 @@ describe('PriceListsPage - create/edit/delete', () => {
   });
 });
 
-// CSV import/export (2026-09-24) - lets MASTER_DATA_PRICE_LIST_MANAGE fill in real B2B/B2C
-// rates from a spreadsheet instead of the one-row-at-a-time modal above.
+// CSV import/export - super-admin pricing matrix rebuild (2026-09-25) - lets
+// MASTER_DATA_PRICE_LIST_MANAGE fill in real rates from a spreadsheet instead of the
+// one-row-at-a-time modal above.
 describe('PriceListsPage - CSV import/export', () => {
   function csvFile(text: string) {
     return new File([text], 'price-list.csv', { type: 'text/csv' });
@@ -250,14 +256,23 @@ describe('PriceListsPage - CSV import/export', () => {
     renderPage();
     await screen.findByText('100.00');
 
-    const csv = 'Category,Job Type,B2B Price,B2C Price,Billing Channel,Channel Rate,Warranty Labor Cost,Currency\n' +
-      'AC,REPAIR,120,150,,0,0,AED\n';
+    const csv = 'Category,Job Type,Customer Type,Billing Channel,Price,Warranty Labor Cost,Currency,Active\n' +
+      'AC,REPAIR,B2C,,120,0,AED,Y\n';
     const input = screen.getByLabelText('Upload Price List CSV');
     fireEvent.change(input, { target: { files: [csvFile(csv)] } });
 
     await waitFor(() =>
       expect(importPriceLists).toHaveBeenCalledWith([
-        { category: 'AC', jobType: 'REPAIR', priceB2B: '120', priceB2C: '150', billingChannel: '', billingChannelRate: '0', warrantyLaborCost: '0', currency: 'AED' },
+        {
+          category: 'AC',
+          jobType: 'REPAIR',
+          customerType: 'B2C',
+          billingChannel: '',
+          price: '120',
+          warrantyLaborCost: '0',
+          currency: 'AED',
+          isActive: 'Y',
+        },
       ]),
     );
     expect(await screen.findByText('Import complete — 1 created, 2 updated.')).toBeInTheDocument();
@@ -272,7 +287,7 @@ describe('PriceListsPage - CSV import/export', () => {
     renderPage();
     await screen.findByText('100.00');
 
-    const csv = 'Category,Job Type,B2B Price\nAC,REPAIR,120\nTOASTER,REPAIR,50\n';
+    const csv = 'Category,Job Type,Customer Type,Price\nAC,REPAIR,B2C,120\nTOASTER,REPAIR,B2C,50\n';
     fireEvent.change(screen.getByLabelText('Upload Price List CSV'), { target: { files: [csvFile(csv)] } });
 
     expect(await screen.findByText('Row 3: unknown Category "TOASTER"')).toBeInTheDocument();

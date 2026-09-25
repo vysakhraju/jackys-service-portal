@@ -4,7 +4,8 @@ import { DebitNoteStatus } from './entities/debit-note.entity';
 import { ReservationStatus } from '../inventory/entities/inventory-reservation.entity';
 import { JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
-import { CustomerType, JobType } from '../appointments/entities/appointment.entity';
+import { CustomerType, JobType } from '../master-data/entities/service-price-list.entity';
+import { IsNull } from 'typeorm';
 
 describe('DebitNotesService', () => {
   let service: DebitNotesService;
@@ -113,7 +114,7 @@ describe('DebitNotesService', () => {
       await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('sums unitCost * quantityReserved across CONSUMED reservations for spare parts cost', async () => {
+    it('sums unitCost * quantityReserved across CONSUMED reservations for spare parts cost, and resolves labor cost via the B2B_SALES_CHANNEL Price List row', async () => {
       debitNoteRepository.findOne.mockResolvedValue(null);
       jobCardsService.findById.mockResolvedValue(interdeptJobCard());
       reservationRepository.find.mockResolvedValue([
@@ -132,39 +133,27 @@ describe('DebitNotesService', () => {
       expect(result.laborCost).toBe(50);
       expect(result.totalAmount).toBe(150);
       expect(result.billingChannelId).toBeNull();
+      // Super-admin pricing matrix rebuild (2026-09-25): a Debit Note is, by definition,
+      // always the B2B_SALES_CHANNEL interdepartment rate row - the lookup is explicit
+      // about that dimension rather than reading it off the appointment.
       expect(priceListRepository.findOne).toHaveBeenCalledWith({
-        where: { category: 'REFRIGERATOR', jobType: JobType.REPAIR, isActive: true },
+        where: {
+          category: 'REFRIGERATOR',
+          jobType: JobType.REPAIR,
+          customerType: CustomerType.B2B_SALES_CHANNEL,
+          billingChannelId: IsNull(),
+          isActive: true,
+        },
         relations: { billingChannel: true },
       });
     });
 
-    // Phase 4 (billing logic + Billing Channel routing, 2026-09-22): when the matched
-    // Price List row has a Billing Channel configured, its billingChannelRate overrides
-    // the plain warrantyLaborCost, and the Debit Note records which channel applied.
-    it('uses billingChannelRate instead of warrantyLaborCost, and stamps the channel, when the matched Price List row has a Billing Channel set', async () => {
-      debitNoteRepository.findOne.mockResolvedValue(null);
-      jobCardsService.findById.mockResolvedValue(interdeptJobCard());
-      reservationRepository.find.mockResolvedValue([]);
-      priceListRepository.findOne.mockResolvedValue({
-        warrantyLaborCost: 50,
-        billingChannelId: 'bc-1',
-        billingChannelRate: 80,
-        billingChannel: { id: 'bc-1', name: 'Acme Partner' },
-      });
-
-      const result = await service.getOrCreateForJobCard('jc-1');
-
-      expect(result.laborCost).toBe(80);
-      expect(result.totalAmount).toBe(80);
-      expect(result.billingChannelId).toBe('bc-1');
-      expect(result.billingChannelName).toBe('Acme Partner');
-    });
-
-    // 2026-09-25 revision (JER-C AED 0.00 dead-end fix) - BillingChannel.defaultRate is
-    // retired as a pricing input. An appointment's picked Billing Channel now only
-    // SELECTS the channel; the Price List row's own billingChannelRate is the only rate
-    // source, matched against the appointment's billingChannelId (not a flat channel rate).
-    it("uses the Price List row's billingChannelRate when the appointment picks the SAME channel the row is configured for", async () => {
+    // Super-admin pricing matrix rebuild (2026-09-25): there is no more single row with
+    // both a plain warrantyLaborCost AND a channel-override rate on it - a channel-picked
+    // appointment resolves a completely separate Price List row (its own
+    // (category, jobType, customerType, billingChannelId) combination), with its own
+    // warrantyLaborCost value.
+    it("resolves the channel-specific row's own warrantyLaborCost, and stamps the channel, when the appointment has a Billing Channel picked", async () => {
       debitNoteRepository.findOne.mockResolvedValue(null);
       jobCardsService.findById.mockResolvedValue(
         interdeptJobCard({
@@ -172,27 +161,37 @@ describe('DebitNotesService', () => {
             customerType: CustomerType.B2B_SALES_CHANNEL,
             jobType: JobType.REPAIR,
             applianceModel: { category: 'REFRIGERATOR' },
-            billingChannelId: 'bc-row',
-            billingChannel: { id: 'bc-row', name: 'Row Channel' },
+            billingChannelId: 'bc-1',
+            billingChannel: { id: 'bc-1', name: 'Acme Partner' },
           },
         }),
       );
       reservationRepository.find.mockResolvedValue([]);
       priceListRepository.findOne.mockResolvedValue({
-        warrantyLaborCost: 50,
-        billingChannelId: 'bc-row',
-        billingChannelRate: 80,
-        billingChannel: { id: 'bc-row', name: 'Row Channel' },
+        warrantyLaborCost: 80,
+        billingChannelId: 'bc-1',
+        billingChannel: { id: 'bc-1', name: 'Acme Partner' },
       });
 
       const result = await service.getOrCreateForJobCard('jc-1');
 
+      expect(priceListRepository.findOne).toHaveBeenCalledWith({
+        where: {
+          category: 'REFRIGERATOR',
+          jobType: JobType.REPAIR,
+          customerType: CustomerType.B2B_SALES_CHANNEL,
+          billingChannelId: 'bc-1',
+          isActive: true,
+        },
+        relations: { billingChannel: true },
+      });
       expect(result.laborCost).toBe(80);
-      expect(result.billingChannelId).toBe('bc-row');
-      expect(result.billingChannelName).toBe('Row Channel');
+      expect(result.totalAmount).toBe(80);
+      expect(result.billingChannelId).toBe('bc-1');
+      expect(result.billingChannelName).toBe('Acme Partner');
     });
 
-    it("throws when the appointment picks a Billing Channel the matched Price List row has no rate for, rather than silently charging 0 labor or the wrong channel's rate", async () => {
+    it("throws, naming the channel, when the appointment picks a Billing Channel with no matching Price List row, rather than silently charging 0 labor or the wrong channel's rate", async () => {
       debitNoteRepository.findOne.mockResolvedValue(null);
       jobCardsService.findById.mockResolvedValue(
         interdeptJobCard({
@@ -206,9 +205,10 @@ describe('DebitNotesService', () => {
         }),
       );
       reservationRepository.find.mockResolvedValue([]);
-      priceListRepository.findOne.mockResolvedValue({ warrantyLaborCost: 50, billingChannelId: null });
+      priceListRepository.findOne.mockResolvedValue(null);
 
       await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+      await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(/No Rate Channel/);
     });
 
     it('throws when the appointment has no Appliance Model / Category linked, rather than silently charging 0 labor', async () => {

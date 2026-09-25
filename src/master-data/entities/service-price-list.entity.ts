@@ -28,36 +28,61 @@ export enum JobType {
   MAINTENANCE = 'MAINTENANCE',
 }
 
-// Price List rebuild (requested 2026-09-22, Phase 3) - full rewrite of the row shape,
-// replacing the original (requested 2026-09-14) ServiceActivityType/modelId design.
+// Super-admin pricing matrix (requested 2026-09-25, backlog item opened by the JER-C
+// billing fix that same day). Moved here for exactly the same one-directional-dependency
+// reason JobType was moved above (Phase 3): the pricing matrix needs CustomerType as one
+// of its own row-key columns, and master-data must never import from appointments.
+// appointment.entity.ts re-exports this under the same name - every existing `import {
+// CustomerType } from '../entities/appointment.entity'` keeps working unchanged, and the
+// string values are untouched, so this move alone does not touch stored appointment data.
+export enum CustomerType {
+  B2C = 'B2C',
+  B2B = 'B2B',
+  B2B_SALES_CHANNEL = 'B2B_SALES_CHANNEL',
+}
+
+// Super-admin pricing matrix rebuild (requested 2026-09-25) - full rewrite of the row
+// shape, replacing the Phase 3 (2026-09-22) priceB2B/priceB2C/billingChannelRate design.
 //
-// Why: the original ServiceActivityType enum (INSTALL/REPAIR/DEMO/ON_SITE/PM/DISMANTLE)
-// was its own, separate list from the New Appointment popup's JobType enum
-// (REPAIR/INSTALLATION/DELIVERY_INSTALLATION/MAINTENANCE) - two independent copies of
-// "what work is being done" that could silently drift, the exact failure mode this app
-// already hit once for real (the ACTIVITY appointment-type bug, see
-// MODIFICATION_REQUESTS.md's "Backend crash" section). Per req. #6/#7 of the 2026-09-22
-// request ("sync the Pricing screen's Activity Type list with New Appointment's" /
-// "rebuild the Price List row around Appliance Model->category, Activity Type..."),
-// ServiceActivityType is retired outright and Price List rows now key off the SAME
-// JobType enum the appointment itself uses, plus ApplianceCategory (already reused from
-// FaultSymptom/ApplianceModel) instead of a loose SparePartModel.modelId string that had
-// nothing to do with the appliance the appointment was actually for (see
-// appliance-model.entity.ts's own doc comment on that exact confusion).
+// Why: the owner's own ask was a matrix configurable across FOUR dimensions - appliance
+// Category ("Type"), Job Type, Customer Type, and Billing Channel - not two hardcoded
+// price columns (B2B/B2C) plus an optional third (a single channel override per row).
+// Hardcoding exactly two customer types into fixed columns meant Customer Type was never
+// actually a matrix dimension a Super Admin could configure - it was baked into the
+// schema. This rebuild makes every one of the four dimensions a real row-key column,
+// with ONE `price` column holding the rate for that exact combination. Adding a new
+// priceable combination (a new Billing Channel's rate for an existing
+// category/jobType/customerType, for instance) is now "add a row" - no entity/column
+// change needed, which is the whole point of "super-admin configurable."
 //
-// Row shape, per the business owner's own design clarification: one row per
-// (category, jobType) combo (the unique index below) carries a B2B price and a B2C
-// price, plus an OPTIONAL third rate - `billingChannelRate` - that applies when the job
-// is billed through a specific interdepartment Billing Channel (billingChannelId),
-// keeping the "B2B Sales Channel (interdepartment billing)" rate distinct from the
-// default B2B price. `billingChannelId` null means no channel-specific override is set
-// for this category/jobType combo yet (Finance falls back to priceB2B/priceB2C, or to
-// warrantyLaborCost for Debit Notes). Consumed by Phase 4 (billing logic + Billing
-// Channel routing, 2026-09-22): InvoicingService's Price-List-baseline fallback path
-// (OOW jobs with no approved Estimate) and DebitNotesService.resolveLaborCost both check
-// this column and switch to billingChannelRate when it's set.
+// Row identity (the unique index below): (category, jobType, customerType,
+// billingChannelId). `billingChannelId` null means "the generic rate for this
+// category/jobType/customerType, no specific channel" - a DIFFERENT row from any
+// channel-specific one for the same category/jobType/customerType. This is a deliberate
+// behavior change from the old design: previously a category/jobType row could carry an
+// "attached" Billing Channel that applied automatically even to an appointment that
+// picked no channel of its own. Under the matrix, "no channel picked" and "a specific
+// channel picked" are two independently-configurable rows - see
+// billing-channel-resolution.util.ts's resolvePriceListRow() for the lookup logic this
+// enables (query directly by the appointment's actual customerType + picked channel,
+// rather than fetching one row and then checking whether its channel happens to match).
+//
+// Postgres unique indexes treat NULL as distinct from every other NULL, so the DB index
+// below does NOT by itself stop two "generic" (billingChannelId IS NULL) rows for the
+// same (category, jobType, customerType) from being created - MasterDataService's
+// createServicePriceList() enforces that in application code (same pattern already used
+// elsewhere in this app for a de-facto-nullable uniqueness check).
+//
+// `warrantyLaborCost` is kept as its own column, orthogonal to `price` - it is the
+// interdepartment labor-recharge amount DebitNotesService bills for an IN_WARRANTY
+// B2B_SALES_CHANNEL job, a completely different scenario (nothing is being sold to a
+// customer) from `price`, which is what InvoicingService bills for an OUT_OF_WARRANTY
+// job in the same category/jobType/customerType/channel combination. Only ever read for
+// customerType = B2B_SALES_CHANNEL rows in practice (DebitNotesService's own guard
+// ensures its caller never reaches here for any other customerType) - present on every
+// row for schema simplicity, harmlessly unused (defaults to 0) on B2C/B2B rows.
 @Entity('service_price_lists')
-@Index(['category', 'jobType'], { unique: true })
+@Index(['category', 'jobType', 'customerType', 'billingChannelId'], { unique: true })
 export class ServicePriceList {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -68,14 +93,12 @@ export class ServicePriceList {
   @Column({ type: 'enum', enum: JobType })
   jobType: JobType;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-  priceB2B: number;
+  @Column({ type: 'enum', enum: CustomerType })
+  customerType: CustomerType;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-  priceB2C: number;
-
-  // Optional interdepartment-billing override - see the entity comment above. Nullable:
-  // most category/jobType rows won't have a channel-specific rate at all.
+  // Nullable: null = the generic rate for this category/jobType/customerType, with no
+  // specific Billing Channel involved. See the entity comment above for why this is a
+  // separate row from any channel-specific one, not a fallback baked into one row.
   @ManyToOne(() => BillingChannel, { nullable: true })
   @JoinColumn({ name: 'billingChannelId' })
   billingChannel: BillingChannel | null;
@@ -84,7 +107,7 @@ export class ServicePriceList {
   billingChannelId: string | null;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-  billingChannelRate: number;
+  price: number;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   warrantyLaborCost: number;

@@ -25,11 +25,12 @@ import { User } from '../../auth/entities/user.entity';
  * sparePartsCost is the sum of unitCost * quantityReserved across every CONSUMED
  * InventoryReservation for this Job Card (the same reservations Phase 6's QC-approval
  * step permanently moved Main Store -> Damage Location) - i.e. what this repair actually
- * cost the company in parts, not what a customer would have been charged
- * (unitPriceB2B/B2C). laborCost is looked up from ServicePriceList - warrantyLaborCost by
- * default, or billingChannelRate instead when the matched row has a Billing Channel
- * configured (see DebitNotesService.resolveLaborCost, Phase 4 - billingChannelId/Name
- * below record which channel applied, for Finance routing/reporting).
+ * cost the company in parts, not what a customer would have been charged. laborCost is
+ * the `warrantyLaborCost` of the matched ServicePriceList row for
+ * (category, jobType, B2B_SALES_CHANNEL, billingChannelId) - see
+ * DebitNotesService.resolveLaborCost and the super-admin pricing matrix rebuild
+ * (2026-09-25) - billingChannelId/Name below record which channel applied, for Finance
+ * routing/reporting.
  *
  * Lazily created on first read (mirrors Invoice's getOrCreateForJobCard exactly, same
  * race-safety via the unique index + 23505 retry) - never touches Phase 6's QC-approval

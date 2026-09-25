@@ -4,7 +4,8 @@ import { InvoiceStatus, PaymentMethod, InvoicePriceSource } from './entities/inv
 import { EstimateStatus } from '../estimates/entities/estimate.entity';
 import { JobCardStatus } from '../job-cards/entities/job-card.entity';
 import { WarrantyStatus } from '../technician/entities/technician-visit.entity';
-import { CustomerType } from '../appointments/entities/appointment.entity';
+import { CustomerType } from '../master-data/entities/service-price-list.entity';
+import { IsNull } from 'typeorm';
 
 describe('InvoicingService', () => {
   let service: InvoicingService;
@@ -70,17 +71,20 @@ describe('InvoicingService', () => {
       ...overrides,
     } as any);
 
-  // Phase 4 - the matched ServicePriceList row for the Price-List-baseline fallback path.
+  // Super-admin pricing matrix rebuild (2026-09-25) - the matched ServicePriceList row
+  // for the Price-List-baseline fallback path. customerType is now part of the row's own
+  // identity (baked into the lookup) rather than a client-side branch, and there is a
+  // single `price` column instead of priceB2B/priceB2C/billingChannelRate.
   const priceRow = (overrides: any = {}) =>
     ({
       id: 'price-1',
       category: 'REFRIGERATOR',
       jobType: 'REPAIR',
-      priceB2B: 300,
-      priceB2C: 200,
+      customerType: CustomerType.B2C,
+      price: 200,
       billingChannelId: null,
-      billingChannelRate: 0,
       billingChannel: null,
+      warrantyLaborCost: 0,
       isActive: true,
       ...overrides,
     } as any);
@@ -213,13 +217,16 @@ describe('InvoicingService', () => {
       await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
     });
 
-    // Phase 4 (billing logic + Billing Channel routing, 2026-09-22): the real gap this
-    // closes - an OOW Job Card can reach QC_PASSED via the FR-06 manual approve-customer
-    // stopgap with no Estimate ever created. Invoice generation now falls back to the
-    // Price List baseline instead of hard-blocking; an approved Estimate, when one
-    // exists, still always overrides it (covered by the existing tests above/below).
+    // Super-admin pricing matrix rebuild (2026-09-25): the real gap this closes - an OOW
+    // Job Card can reach QC_PASSED via the FR-06 manual approve-customer stopgap with no
+    // Estimate ever created. Invoice generation falls back to the Price List baseline
+    // instead of hard-blocking; an approved Estimate, when one exists, still always
+    // overrides it (covered by the existing tests above/below). customerType is now baked
+    // into the Price List lookup itself (resolvePriceListRow), so there's no more
+    // client-side B2B/B2C branch to test - only "which row comes back" and "no row / no
+    // channel row -> throw".
     describe('Price List baseline fallback (no approved Estimate exists)', () => {
-      it('falls back to the priceB2C baseline for a B2C job with no approved Estimate', async () => {
+      it('resolves the plain (no Billing Channel picked) row for a B2C job with no approved Estimate', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
           jobCard({
@@ -232,13 +239,13 @@ describe('InvoicingService', () => {
           }),
         );
         estimateRepository.find.mockResolvedValue([]);
-        priceListRepository.findOne.mockResolvedValue(priceRow({ priceB2C: 200 }));
+        priceListRepository.findOne.mockResolvedValue(priceRow({ customerType: CustomerType.B2C, price: 200 }));
         queryBuilder.getOne.mockResolvedValue(null);
 
         const result = await service.getOrCreateForJobCard('jc-1');
 
         expect(priceListRepository.findOne).toHaveBeenCalledWith({
-          where: { category: 'REFRIGERATOR', jobType: 'REPAIR', isActive: true },
+          where: { category: 'REFRIGERATOR', jobType: 'REPAIR', customerType: CustomerType.B2C, billingChannelId: IsNull(), isActive: true },
           relations: { billingChannel: true },
         });
         expect(result.subtotal).toBe(200);
@@ -249,7 +256,7 @@ describe('InvoicingService', () => {
         expect(result.billingChannelId).toBeNull();
       });
 
-      it('uses the plain priceB2B baseline for a B2B job with no approved Estimate', async () => {
+      it('resolves the plain row for a B2B job with no approved Estimate', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
           jobCard({
@@ -262,7 +269,7 @@ describe('InvoicingService', () => {
           }),
         );
         estimateRepository.find.mockResolvedValue([]);
-        priceListRepository.findOne.mockResolvedValue(priceRow({ priceB2B: 300 }));
+        priceListRepository.findOne.mockResolvedValue(priceRow({ customerType: CustomerType.B2B, price: 300 }));
         queryBuilder.getOne.mockResolvedValue(null);
 
         const result = await service.getOrCreateForJobCard('jc-1');
@@ -271,7 +278,7 @@ describe('InvoicingService', () => {
         expect(result.billingChannelId).toBeNull();
       });
 
-      it('uses billingChannelRate instead of priceB2B, and stamps the channel, for a B2B_SALES_CHANNEL job whose Price List row has a Billing Channel set', async () => {
+      it('resolves the channel-specific row, and stamps the channel, for a job whose appointment has a Billing Channel picked', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
           jobCard({
@@ -280,55 +287,29 @@ describe('InvoicingService', () => {
               jobType: 'REPAIR',
               serviceCentre: { vatRate: 5 },
               applianceModel: { category: 'REFRIGERATOR' },
+              billingChannelId: 'bc-1',
+              billingChannel: { id: 'bc-1', name: 'Acme Partner' },
             },
           }),
         );
         estimateRepository.find.mockResolvedValue([]);
         priceListRepository.findOne.mockResolvedValue(
-          priceRow({ priceB2B: 300, billingChannelId: 'bc-1', billingChannelRate: 500, billingChannel: { id: 'bc-1', name: 'Acme Partner' } }),
+          priceRow({ customerType: CustomerType.B2B_SALES_CHANNEL, price: 500, billingChannelId: 'bc-1', billingChannel: { id: 'bc-1', name: 'Acme Partner' } }),
         );
         queryBuilder.getOne.mockResolvedValue(null);
 
         const result = await service.getOrCreateForJobCard('jc-1');
 
+        expect(priceListRepository.findOne).toHaveBeenCalledWith({
+          where: { category: 'REFRIGERATOR', jobType: 'REPAIR', customerType: CustomerType.B2B_SALES_CHANNEL, billingChannelId: 'bc-1', isActive: true },
+          relations: { billingChannel: true },
+        });
         expect(result.subtotal).toBe(500);
         expect(result.billingChannelId).toBe('bc-1');
         expect(result.billingChannelName).toBe('Acme Partner');
       });
 
-      // 2026-09-25 revision (JER-C AED 0.00 dead-end fix) - BillingChannel.defaultRate is
-      // retired as a pricing input. An appointment's picked Billing Channel now only
-      // SELECTS the channel; the Price List row's own billingChannelRate is the only rate
-      // source, and the gate is no longer customerType === B2B_SALES_CHANNEL - a B2C or
-      // plain B2B job with a Billing Channel picked is priced through it too.
-      it("uses the Price List row's billingChannelRate when the appointment picks the SAME channel the row is configured for", async () => {
-        invoiceRepository.findOne.mockResolvedValue(null);
-        jobCardsService.findById.mockResolvedValue(
-          jobCard({
-            appointment: {
-              customerType: CustomerType.B2B,
-              jobType: 'REPAIR',
-              serviceCentre: { vatRate: 5 },
-              applianceModel: { category: 'REFRIGERATOR' },
-              billingChannelId: 'bc-jer-c',
-              billingChannel: { id: 'bc-jer-c', name: 'JER-C' },
-            },
-          }),
-        );
-        estimateRepository.find.mockResolvedValue([]);
-        priceListRepository.findOne.mockResolvedValue(
-          priceRow({ priceB2B: 300, billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } }),
-        );
-        queryBuilder.getOne.mockResolvedValue(null);
-
-        const result = await service.getOrCreateForJobCard('jc-1');
-
-        expect(result.subtotal).toBe(55);
-        expect(result.billingChannelId).toBe('bc-jer-c');
-        expect(result.billingChannelName).toBe('JER-C');
-      });
-
-      it('applies a picked Billing Channel for a plain B2C job too - no longer gated on customerType', async () => {
+      it('applies a picked Billing Channel for a plain B2C job too - channel routing is not gated on customerType', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
           jobCard({
@@ -344,7 +325,7 @@ describe('InvoicingService', () => {
         );
         estimateRepository.find.mockResolvedValue([]);
         priceListRepository.findOne.mockResolvedValue(
-          priceRow({ priceB2C: 200, billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } }),
+          priceRow({ customerType: CustomerType.B2C, price: 55, billingChannelId: 'bc-jer-c', billingChannel: { id: 'bc-jer-c', name: 'JER-C' } }),
         );
         queryBuilder.getOne.mockResolvedValue(null);
 
@@ -353,7 +334,7 @@ describe('InvoicingService', () => {
         expect(result.subtotal).toBe(55);
       });
 
-      it("throws when the appointment picks a Billing Channel the matched Price List row has no rate for, rather than silently billing the plain price (the JER-C AED 0.00 bug)", async () => {
+      it("throws when the appointment picks a Billing Channel with no matching Price List row, rather than silently billing the plain price (the JER-C AED 0.00 bug)", async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
           jobCard({
@@ -368,32 +349,10 @@ describe('InvoicingService', () => {
           }),
         );
         estimateRepository.find.mockResolvedValue([]);
-        priceListRepository.findOne.mockResolvedValue(priceRow({ priceB2B: 300, billingChannelId: null }));
+        priceListRepository.findOne.mockResolvedValue(null);
 
         await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
         await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(/JER-C/);
-      });
-
-      it('falls back to plain priceB2B for a B2B_SALES_CHANNEL job whose Price List row has no Billing Channel set', async () => {
-        invoiceRepository.findOne.mockResolvedValue(null);
-        jobCardsService.findById.mockResolvedValue(
-          jobCard({
-            appointment: {
-              customerType: CustomerType.B2B_SALES_CHANNEL,
-              jobType: 'REPAIR',
-              serviceCentre: { vatRate: 5 },
-              applianceModel: { category: 'REFRIGERATOR' },
-            },
-          }),
-        );
-        estimateRepository.find.mockResolvedValue([]);
-        priceListRepository.findOne.mockResolvedValue(priceRow({ priceB2B: 300, billingChannelId: null }));
-        queryBuilder.getOne.mockResolvedValue(null);
-
-        const result = await service.getOrCreateForJobCard('jc-1');
-
-        expect(result.subtotal).toBe(300);
-        expect(result.billingChannelId).toBeNull();
       });
 
       it('throws when the appointment has no Appliance Model / Category linked, rather than silently inventing a price', async () => {
@@ -407,7 +366,7 @@ describe('InvoicingService', () => {
         expect(priceListRepository.findOne).not.toHaveBeenCalled();
       });
 
-      it('throws when no active Price List row matches the category/jobType', async () => {
+      it('throws when no active Price List row matches the category/jobType/customerType', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
           jobCard({
@@ -454,7 +413,7 @@ describe('InvoicingService', () => {
       it('skips the QC/warranty gate entirely for a COMPLETED Job Card', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(activityJobCard());
-        priceListRepository.findOne.mockResolvedValue(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', priceB2C: 400 }));
+        priceListRepository.findOne.mockResolvedValue(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', customerType: CustomerType.B2C, price: 400 }));
         queryBuilder.getOne.mockResolvedValue(null);
 
         const result = await service.getOrCreateForJobCard('jc-1');
@@ -468,7 +427,7 @@ describe('InvoicingService', () => {
         jobCardsService.findById.mockResolvedValue(
           activityJobCard({ activityLineItems: [activityLineItem({ quantity: 2 })] }),
         );
-        priceListRepository.findOne.mockResolvedValue(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', priceB2C: 400 }));
+        priceListRepository.findOne.mockResolvedValue(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', customerType: CustomerType.B2C, price: 400 }));
         queryBuilder.getOne.mockResolvedValue(null);
 
         const result = await service.getOrCreateForJobCard('jc-1');
@@ -493,8 +452,8 @@ describe('InvoicingService', () => {
           }),
         );
         priceListRepository.findOne
-          .mockResolvedValueOnce(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', priceB2C: 400 }))
-          .mockResolvedValueOnce(priceRow({ category: 'WASHING_MACHINE', jobType: 'DELIVERY_INSTALLATION', priceB2C: 250 }));
+          .mockResolvedValueOnce(priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', customerType: CustomerType.B2C, price: 400 }))
+          .mockResolvedValueOnce(priceRow({ category: 'WASHING_MACHINE', jobType: 'DELIVERY_INSTALLATION', customerType: CustomerType.B2C, price: 250 }));
         queryBuilder.getOne.mockResolvedValue(null);
 
         const result = await service.getOrCreateForJobCard('jc-1');
@@ -504,13 +463,21 @@ describe('InvoicingService', () => {
         expect(result.lineItemsBreakdown).toHaveLength(2);
       });
 
-      it('applies billingChannelRate per line for a B2B_SALES_CHANNEL job whose Price List row has a channel configured', async () => {
+      it('resolves the channel-specific row per line for a B2B_SALES_CHANNEL job whose appointment has a Billing Channel picked', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(
-          activityJobCard({ appointment: { customerType: CustomerType.B2B_SALES_CHANNEL, jobType: 'INSTALLATION', serviceCentre: { vatRate: 5 } } }),
+          activityJobCard({
+            appointment: {
+              customerType: CustomerType.B2B_SALES_CHANNEL,
+              jobType: 'INSTALLATION',
+              serviceCentre: { vatRate: 5 },
+              billingChannelId: 'bc-1',
+              billingChannel: { id: 'bc-1', name: 'Acme Partner' },
+            },
+          }),
         );
         priceListRepository.findOne.mockResolvedValue(
-          priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', priceB2B: 300, billingChannelId: 'bc-1', billingChannelRate: 500, billingChannel: { id: 'bc-1', name: 'Acme Partner' } }),
+          priceRow({ category: 'REFRIGERATOR', jobType: 'INSTALLATION', customerType: CustomerType.B2B_SALES_CHANNEL, price: 500, billingChannelId: 'bc-1', billingChannel: { id: 'bc-1', name: 'Acme Partner' } }),
         );
         queryBuilder.getOne.mockResolvedValue(null);
 
@@ -538,12 +505,13 @@ describe('InvoicingService', () => {
         await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
       });
 
-      it('throws when no active Price List row matches a line\'s category/jobType', async () => {
+      it('throws, naming the job card, when no active Price List row matches a line\'s category/jobType/customerType', async () => {
         invoiceRepository.findOne.mockResolvedValue(null);
         jobCardsService.findById.mockResolvedValue(activityJobCard());
         priceListRepository.findOne.mockResolvedValue(null);
 
         await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(BadRequestException);
+        await expect(service.getOrCreateForJobCard('jc-1')).rejects.toThrow(/JC-0001/);
       });
     });
 
@@ -743,7 +711,7 @@ describe('InvoicingService', () => {
       );
       estimateRepository.find.mockResolvedValue([]);
       priceListRepository.findOne.mockResolvedValue(
-        priceRow({ jobType: 'INSTALLATION', billingChannelId: 'bc-jer-c', billingChannelRate: 55, billingChannel: { id: 'bc-jer-c', name: 'JER-C' } }),
+        priceRow({ jobType: 'INSTALLATION', customerType: CustomerType.B2B, price: 55, billingChannelId: 'bc-jer-c', billingChannel: { id: 'bc-jer-c', name: 'JER-C' } }),
       );
       queryBuilder.getOne.mockResolvedValue(invoice({ invoiceNumber: 'INV-0001' }));
 

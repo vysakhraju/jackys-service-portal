@@ -94,13 +94,16 @@ export const createSparePartModel = (data: CreateSparePartModelInput) =>
 export const listFieldTechnicians = () =>
   api.get<{ id: string; name: string }[]>(`${BASE}/service-centres/field-technicians`).then((r) => r.data);
 
-// === Service Price List (full CRUD, Price List rebuild 2026-09-22 Phase 3) — grid is
-// Appliance Category x Job Type, one row per pair, same CRUD shape as Billing Channel's
-// own block above. List takes optional category/jobType filters (both ungated, same
-// "every screen that needs the dropdown can read it" rule as City/BillingChannel). ===
-export const listPriceLists = (category?: string, jobType?: string) =>
+// === Service Price List (full CRUD, super-admin pricing matrix rebuild 2026-09-25) —
+// grid is Appliance Category x Job Type x Customer Type x Billing Channel, one row per
+// combination, same CRUD shape as Billing Channel's own block above. List takes optional
+// category/jobType/customerType filters (all ungated, same "every screen that needs the
+// dropdown can read it" rule as City/BillingChannel). ===
+export const listPriceLists = (category?: string, jobType?: string, customerType?: string) =>
   api
-    .get<ServicePriceList[]>(`${BASE}/price-lists`, { params: { category: category || undefined, jobType: jobType || undefined } })
+    .get<ServicePriceList[]>(`${BASE}/price-lists`, {
+      params: { category: category || undefined, jobType: jobType || undefined, customerType: customerType || undefined },
+    })
     .then((r) => r.data);
 export const createPriceList = (data: CreatePriceListInput) =>
   api.post<ServicePriceList>(`${BASE}/price-lists`, data).then((r) => r.data);

@@ -37,7 +37,7 @@ import { Audit } from '../common/decorators/audit.decorator';
 import { AuditAction } from '../auth/entities/audit-log.entity';
 import { Country } from './entities/service-centre.entity';
 import { ApplianceCategory } from './entities/fault-symptom.entity';
-import { JobType } from './entities/service-price-list.entity';
+import { JobType, CustomerType } from './entities/service-price-list.entity';
 import { NotificationTrigger, NotificationChannel } from './entities/notification-template.entity';
 import { RecoveryCategory } from './entities/component-yield-matrix.entity';
 import { ServiceCentre } from './entities/service-centre.entity';
@@ -297,7 +297,7 @@ export class MasterDataController {
   @Audit({
     action: AuditAction.CREATE,
     entityType: 'ServicePriceList',
-    getEntityId: (args) => `${args.body?.category}/${args.body?.jobType}`,
+    getEntityId: (args) => `${args.body?.category}/${args.body?.jobType}/${args.body?.customerType}`,
   })
   @ApiOperation({ summary: 'Create a service price list row' })
   @ApiBody({ type: CreatePriceListDto })
@@ -311,15 +311,17 @@ export class MasterDataController {
   // don't consume this yet (Phase 4, not built), so they're unaffected either way.
   @Get('price-lists')
   @RequiresCapability('MASTER_DATA_VIEW')
-  @ApiOperation({ summary: 'Get active price list rows, optionally filtered by category and/or job type' })
+  @ApiOperation({ summary: 'Get active price list rows, optionally filtered by category, job type and/or customer type' })
   @ApiQuery({ name: 'category', required: false, enum: ApplianceCategory })
   @ApiQuery({ name: 'jobType', required: false, enum: JobType })
+  @ApiQuery({ name: 'customerType', required: false, enum: CustomerType })
   @ApiResponse({ status: 200, type: [ServicePriceList] })
   findAllPriceLists(
     @Query('category') category?: ApplianceCategory,
     @Query('jobType') jobType?: JobType,
+    @Query('customerType') customerType?: CustomerType,
   ) {
-    return this.masterDataService.findAllPriceLists(category, jobType);
+    return this.masterDataService.findAllPriceLists(category, jobType, customerType);
   }
 
   @Put('price-lists/:id')

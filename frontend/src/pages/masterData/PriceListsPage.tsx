@@ -8,38 +8,44 @@ import { NamePicker } from '../../components/pickers/NamePicker';
 import { useAuth } from '../../lib/auth';
 import { useMyCapabilities } from '../../lib/useMyCapabilities';
 import { createPriceList, deletePriceList, importPriceLists, listPriceLists, updatePriceList } from '../../lib/masterDataApi';
-import { ACTIVE_JOB_TYPES, APPLIANCE_CATEGORIES, type ApplianceCategoryValue, type JobTypeValue } from '../../lib/masterDataTypes';
+import {
+  ACTIVE_JOB_TYPES,
+  APPLIANCE_CATEGORIES,
+  CUSTOMER_TYPES,
+  type ApplianceCategoryValue,
+  type CustomerTypeValue,
+  type JobTypeValue,
+} from '../../lib/masterDataTypes';
 import type { CreatePriceListInput, ServicePriceList } from '../../lib/masterDataTypes';
 import { useBillingChannelOptions } from '../../lib/useBillingChannelOptions';
 import { downloadCsv, parseCsv, toCsv } from '../../lib/csv';
 
-// CSV import/export (2026-09-24) - lets whoever has MASTER_DATA_PRICE_LIST_MANAGE fill in
-// real B2B/B2C rates for every Category x Job Type row from a spreadsheet instead of the
-// one-row-at-a-time modal above. "Download Template" exports every current row (all still
-// seeded at price 0 until filled in) under these exact headers; "Upload CSV" re-imports
-// the same headers and UPSERTS by Category + Job Type (see importPriceListRows's own doc
-// comment on the backend for why this can't just be a create). Header matching ignores
-// case/spacing/punctuation so a header surviving a round-trip through Excel still matches.
+// CSV import/export - super-admin pricing matrix rebuild (2026-09-25). "Download
+// Template" exports every current row under these exact headers; "Upload CSV" re-imports
+// the same headers and UPSERTS by Category + Job Type + Customer Type + Billing Channel
+// (see importPriceListRows's own doc comment on the backend for why this can't just be a
+// create). Header matching ignores case/spacing/punctuation so a header surviving a
+// round-trip through Excel still matches.
 const IMPORT_HEADERS = [
   'Category',
   'Job Type',
-  'B2B Price',
-  'B2C Price',
+  'Customer Type',
   'Billing Channel',
-  'Channel Rate',
+  'Price',
   'Warranty Labor Cost',
   'Currency',
+  'Active',
 ] as const;
 
 const HEADER_KEY_MAP: Record<string, string> = {
   category: 'category',
   jobtype: 'jobType',
-  b2bprice: 'priceB2B',
-  b2cprice: 'priceB2C',
+  customertype: 'customerType',
   billingchannel: 'billingChannel',
-  channelrate: 'billingChannelRate',
+  price: 'price',
   warrantylaborcost: 'warrantyLaborCost',
   currency: 'currency',
+  active: 'isActive',
 };
 
 function normalizeHeader(header: string): string {
@@ -51,10 +57,9 @@ type ImportResult = { created: number; updated: number; errors: string[] };
 type FormValues = {
   category: ApplianceCategoryValue;
   jobType: JobTypeValue;
-  priceB2B: number;
-  priceB2C: number;
+  customerType: CustomerTypeValue;
+  price: number;
   billingChannelId: string;
-  billingChannelRate: number;
   warrantyLaborCost: number;
   currency: string;
   isActive: boolean;
@@ -63,10 +68,9 @@ type FormValues = {
 const EMPTY_FORM: FormValues = {
   category: APPLIANCE_CATEGORIES[0],
   jobType: ACTIVE_JOB_TYPES[0],
-  priceB2B: 0,
-  priceB2C: 0,
+  customerType: CUSTOMER_TYPES[0],
+  price: 0,
   billingChannelId: '',
-  billingChannelRate: 0,
   warrantyLaborCost: 0,
   currency: '',
   isActive: true,
@@ -76,21 +80,20 @@ function toPayload(values: FormValues): CreatePriceListInput {
   return {
     category: values.category,
     jobType: values.jobType,
-    priceB2B: values.priceB2B,
-    priceB2C: values.priceB2C,
+    customerType: values.customerType,
+    price: values.price,
     billingChannelId: values.billingChannelId || undefined,
-    billingChannelRate: values.billingChannelRate,
     warrantyLaborCost: values.warrantyLaborCost,
     currency: values.currency.trim() || undefined,
     isActive: values.isActive,
   };
 }
 
-// Price List rebuild (requested 2026-09-22, Phase 3) - full replacement of the original
-// (2026-09-14) ServiceActivityType/modelId design. Grid is now Appliance Category x Job
-// Type (one row per pair, enforced unique server-side), with B2B price / B2C price / an
-// optional Billing Channel + its own interdepartment rate, same CRUD shape and
-// capability/role gating as BillingChannelsPage.tsx (its own exact template).
+// Super-admin pricing matrix rebuild (requested 2026-09-25) - full replacement of the
+// Phase 3 (category, jobType)-keyed design. Grid is now Appliance Category x Job Type x
+// Customer Type x Billing Channel (one row per combination, enforced unique server-side),
+// with a single Price column, same CRUD shape and capability/role gating as
+// BillingChannelsPage.tsx (its own exact template).
 export function PriceListsPage() {
   const queryClient = useQueryClient();
   const { has } = useMyCapabilities();
@@ -100,6 +103,7 @@ export function PriceListsPage() {
 
   const [categoryFilter, setCategoryFilter] = useState<ApplianceCategoryValue | ''>('');
   const [jobTypeFilter, setJobTypeFilter] = useState<JobTypeValue | ''>('');
+  const [customerTypeFilter, setCustomerTypeFilter] = useState<CustomerTypeValue | ''>('');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ServicePriceList | null>(null);
@@ -112,8 +116,8 @@ export function PriceListsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['price-lists', categoryFilter, jobTypeFilter],
-    queryFn: () => listPriceLists(categoryFilter || undefined, jobTypeFilter || undefined),
+    queryKey: ['price-lists', categoryFilter, jobTypeFilter, customerTypeFilter],
+    queryFn: () => listPriceLists(categoryFilter || undefined, jobTypeFilter || undefined, customerTypeFilter || undefined),
   });
 
   const billingChannelOptions = useBillingChannelOptions();
@@ -163,10 +167,9 @@ export function PriceListsPage() {
     reset({
       category: row.category,
       jobType: row.jobType,
-      priceB2B: row.priceB2B,
-      priceB2C: row.priceB2C,
+      customerType: row.customerType,
+      price: row.price,
       billingChannelId: row.billingChannelId ?? '',
-      billingChannelRate: row.billingChannelRate,
       warrantyLaborCost: row.warrantyLaborCost,
       currency: row.currency ?? '',
       isActive: row.isActive,
@@ -187,10 +190,10 @@ export function PriceListsPage() {
     }
   }
 
-  // Exports every current row (ignores the on-screen category/job-type filters — the
-  // template is meant to be the whole grid, not just what happens to be shown), under the
-  // exact headers importCsv reads back. Doubles as an editable export: re-downloading
-  // after prices are filled in gives an up-to-date backup, not just a blank starting form.
+  // Exports every current row (ignores the on-screen filters — the template is meant to
+  // be the whole grid, not just what happens to be shown), under the exact headers
+  // importCsv reads back. Doubles as an editable export: re-downloading after prices are
+  // filled in gives an up-to-date backup, not just a blank starting form.
   async function handleDownloadTemplate() {
     setIsDownloading(true);
     try {
@@ -200,12 +203,12 @@ export function PriceListsPage() {
         ...rows.map((r) => [
           r.category,
           r.jobType,
-          r.priceB2B,
-          r.priceB2C,
+          r.customerType,
           r.billingChannel?.name ?? '',
-          r.billingChannelRate,
+          r.price,
           r.warrantyLaborCost,
           r.currency ?? '',
+          r.isActive ? 'Y' : 'N',
         ]),
       ];
       downloadCsv('price-list-template.csv', toCsv(csvRows));
@@ -262,10 +265,9 @@ export function PriceListsPage() {
   const columns: Column<ServicePriceList>[] = [
     { key: 'category', label: 'Category', render: (r) => r.category.replace(/_/g, ' ') },
     { key: 'jobType', label: 'Job Type', render: (r) => r.jobType.replace(/_/g, ' ') },
-    { key: 'priceB2B', label: 'B2B Price', render: (r) => Number(r.priceB2B).toFixed(2) },
-    { key: 'priceB2C', label: 'B2C Price', render: (r) => Number(r.priceB2C).toFixed(2) },
+    { key: 'customerType', label: 'Customer Type', render: (r) => r.customerType.replace(/_/g, ' ') },
     { key: 'billingChannel', label: 'Billing Channel', render: (r) => r.billingChannel?.name ?? '—' },
-    { key: 'billingChannelRate', label: 'Channel Rate', render: (r) => Number(r.billingChannelRate).toFixed(2) },
+    { key: 'price', label: 'Price', render: (r) => Number(r.price).toFixed(2) },
     { key: 'warrantyLaborCost', label: 'Warranty Labor', render: (r) => Number(r.warrantyLaborCost).toFixed(2) },
     { key: 'currency', label: 'Currency', render: (r) => r.currency ?? '—' },
     { key: 'status', label: 'Status', render: (r) => <ActiveBadge active={r.isActive} /> },
@@ -276,8 +278,8 @@ export function PriceListsPage() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm text-slate-500">
-            Price List — one row per Appliance Category x Job Type, with B2B/B2C pricing and an optional Billing
-            Channel rate for interdepartment routing.
+            Price List — one row per Appliance Category x Job Type x Customer Type x Billing Channel, with a single
+            price for that exact combination.
           </p>
           <label className="text-xs font-medium text-slate-500">Category</label>
           <select
@@ -302,6 +304,19 @@ export function PriceListsPage() {
             {ACTIVE_JOB_TYPES.map((jt) => (
               <option key={jt} value={jt}>
                 {jt.replace(/_/g, ' ')}
+              </option>
+            ))}
+          </select>
+          <label className="text-xs font-medium text-slate-500">Customer Type</label>
+          <select
+            className={`${inputClass} w-auto`}
+            value={customerTypeFilter}
+            onChange={(e) => setCustomerTypeFilter(e.target.value as CustomerTypeValue | '')}
+          >
+            <option value="">All customer types</option>
+            {CUSTOMER_TYPES.map((ct) => (
+              <option key={ct} value={ct}>
+                {ct.replace(/_/g, ' ')}
               </option>
             ))}
           </select>
@@ -388,7 +403,11 @@ export function PriceListsPage() {
                   {canDelete && (
                     <button
                       onClick={() => {
-                        if (confirm(`Delete the price row for ${row.category.replace(/_/g, ' ')} / ${row.jobType.replace(/_/g, ' ')}? This is a soft delete.`)) {
+                        if (
+                          confirm(
+                            `Delete the price row for ${row.category.replace(/_/g, ' ')} / ${row.jobType.replace(/_/g, ' ')} / ${row.customerType.replace(/_/g, ' ')}? This is a soft delete.`,
+                          )
+                        ) {
                           deleteMutation.mutate(row.id);
                         }
                       }}
@@ -406,12 +425,16 @@ export function PriceListsPage() {
       <Modal
         open={modalOpen}
         onClose={closeModal}
-        title={editing ? `Edit ${editing.category.replace(/_/g, ' ')} / ${editing.jobType.replace(/_/g, ' ')}` : 'New Price Row'}
+        title={
+          editing
+            ? `Edit ${editing.category.replace(/_/g, ' ')} / ${editing.jobType.replace(/_/g, ' ')} / ${editing.customerType.replace(/_/g, ' ')}`
+            : 'New Price Row'
+        }
       >
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <ErrorNotice error={mutationError} />
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <Field label="Appliance Category">
               <select className={inputClass} disabled={!!editing} {...register('category', { required: true })}>
                 {APPLIANCE_CATEGORIES.map((c) => (
@@ -430,42 +453,33 @@ export function PriceListsPage() {
                 ))}
               </select>
             </Field>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="B2B Price" error={errors.priceB2B?.message}>
-              <input
-                type="number"
-                step="0.01"
-                className={inputClass}
-                {...register('priceB2B', { valueAsNumber: true, min: { value: 0, message: 'Must be 0 or more' } })}
-              />
-            </Field>
-            <Field label="B2C Price" error={errors.priceB2C?.message}>
-              <input
-                type="number"
-                step="0.01"
-                className={inputClass}
-                {...register('priceB2C', { valueAsNumber: true, min: { value: 0, message: 'Must be 0 or more' } })}
-              />
+            <Field label="Customer Type">
+              <select className={inputClass} disabled={!!editing} {...register('customerType', { required: true })}>
+                {CUSTOMER_TYPES.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {ct.replace(/_/g, ' ')}
+                  </option>
+                ))}
+              </select>
             </Field>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Billing Channel (optional)" hint="For B2B interdepartment routing — leave blank if not applicable">
+            <Field label="Billing Channel (optional)" hint="Leave blank for the plain, non-channel rate">
               <NamePicker
                 value={watch('billingChannelId') || null}
                 options={billingChannelOptions.options}
                 loading={billingChannelOptions.loading}
                 onChange={(id) => setValue('billingChannelId', id ?? '')}
+                disabled={!!editing}
               />
             </Field>
-            <Field label="Billing Channel Rate" error={errors.billingChannelRate?.message}>
+            <Field label="Price" error={errors.price?.message}>
               <input
                 type="number"
                 step="0.01"
                 className={inputClass}
-                {...register('billingChannelRate', { valueAsNumber: true, min: { value: 0, message: 'Must be 0 or more' } })}
+                {...register('price', { valueAsNumber: true, min: { value: 0, message: 'Must be 0 or more' } })}
               />
             </Field>
           </div>
